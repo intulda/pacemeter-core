@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.bohouse.pacemeter.PaceMeterApplicationTests" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-02-12T02:14:28.922Z" hostname="gimbogeun-ui-MacBookPro.local" time="0.715">
+  <properties/>
+  <testcase name="contextLoads()" classname="com.bohouse.pacemeter.PaceMeterApplicationTests" time="0.276"/>
+  <system-out><![CDATA[11:14:28.967 [Test worker] INFO org.springframework.test.context.support.AnnotationConfigContextLoaderUtils -- Could not detect default configuration classes for test class [com.bohouse.pacemeter.PaceMeterApplicationTests]: PaceMeterApplicationTests does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+11:14:28.997 [Test worker] INFO org.springframework.boot.test.context.SpringBootTestContextBootstrapper -- Found @SpringBootConfiguration com.bohouse.pacemeter.PaceMeterApplication for test class com.bohouse.pacemeter.PaceMeterApplicationTests
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::                (v4.0.2)
+
+2026-02-12T11:14:29.100+09:00  INFO 67525 --- [paceMeter] [    Test worker] c.b.pacemeter.PaceMeterApplicationTests  : Starting PaceMeterApplicationTests using Java 17.0.16 with PID 67525 (started by kimbogeun in /Users/kimbogeun/Documents/Project/paceMeter)
+2026-02-12T11:14:29.101+09:00  INFO 67525 --- [paceMeter] [    Test worker] c.b.pacemeter.PaceMeterApplicationTests  : No active profile set, falling back to 1 default profile: "default"
+2026-02-12T11:14:29.358+09:00  INFO 67525 --- [paceMeter] [    Test worker] c.b.pacemeter.PaceMeterApplicationTests  : Started PaceMeterApplicationTests in 0.318 seconds (process running for 0.686)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

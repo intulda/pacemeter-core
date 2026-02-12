@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.bohouse.pacemeter.core.engine.CombatEngineReplayTest" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-02-12T02:14:29.638Z" hostname="gimbogeun-ui-MacBookPro.local" time="0.047">
+  <properties/>
+  <testcase name="tickProducesSnapshot_damageDoesNot()" classname="com.bohouse.pacemeter.core.engine.CombatEngineReplayTest" time="0.003"/>
+  <testcase name="fightStart_resetsState()" classname="com.bohouse.pacemeter.core.engine.CombatEngineReplayTest" time="0.0"/>
+  <testcase name="noProfileLoaded_paceComparisonIsNull()" classname="com.bohouse.pacemeter.core.engine.CombatEngineReplayTest" time="0.001"/>
+  <testcase name="paceComparison_withProfile()" classname="com.bohouse.pacemeter.core.engine.CombatEngineReplayTest" time="0.0"/>
+  <testcase name="basicFightReplay_producesExpectedSnapshots()" classname="com.bohouse.pacemeter.core.engine.CombatEngineReplayTest" time="0.04"/>
+  <testcase name="determinism_sameInputSameOutput()" classname="com.bohouse.pacemeter.core.engine.CombatEngineReplayTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
