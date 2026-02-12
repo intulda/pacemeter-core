@@ -54,7 +54,6 @@ public sealed interface CombatEvent {
             long amount,
             DamageType damageType
     ) implements CombatEvent {}
-
     /**
      * 버프/상태효과가 대상에게 걸린 이벤트.
      *
@@ -109,4 +108,6 @@ public sealed interface CombatEvent {
      * @param kill        true면 보스 처치(클리어), false면 전멸(와이프)
      */
     record FightEnd(long timestampMs, boolean kill) implements CombatEvent {}
+
+
 }
