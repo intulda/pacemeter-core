@@ -66,22 +66,43 @@ public final class ActLineParser {
             return new CombatantAdded(ts, id, name, ownerId);
         }
 
+        // 26: StatusAdd (BuffApply)
+        if (typeCode == 26) {
+            if (p.length < 9) return null;
+            int statusId = (int) parseHexLong(p[2]);
+            String statusName = p[3];
+            double duration = parseDouble(p[4], 0.0);
+            long sourceId = parseHexLong(p[5]);
+            String sourceName = p[6];
+            long targetId = parseHexLong(p[7]);
+            String targetName = p[8];
+            return new BuffApplyRaw(ts, statusId, statusName, duration, sourceId, sourceName, targetId, targetName);
+        }
+
+        // 30: StatusRemove (BuffRemove)
+        if (typeCode == 30) {
+            if (p.length < 9) return null;
+            int statusId = (int) parseHexLong(p[2]);
+            String statusName = p[3];
+            long sourceId = parseHexLong(p[5]);
+            String sourceName = p[6];
+            long targetId = parseHexLong(p[7]);
+            String targetName = p[8];
+            return new BuffRemoveRaw(ts, statusId, statusName, sourceId, sourceName, targetId, targetName);
+        }
+
         // 21/22: NetworkAbility / NetworkAOEAbility
         if (typeCode == 21 || typeCode == 22) {
-            if (p.length < 8) return null;
+            if (p.length < 10) return null;
             long actorId = parseHexLong(p[2]);
             String actorName = p[3];
             int skillId = (int) parseHexLong(p[4]);
             String skillName = p[5];
             long targetId = parseHexLong(p[6]);
             String targetName = p[7];
+            long damage = decodeDamage(p[9]);
 
-            String key = null;
-            for (int i = 8; i < p.length; i++) {
-                if (KEY8HEX.matcher(p[i]).matches()) { key = p[i]; break; }
-            }
-
-            return new NetworkAbilityRaw(ts, typeCode, actorId, actorName, skillId, skillName, targetId, targetName, key, line);
+            return new NetworkAbilityRaw(ts, typeCode, actorId, actorName, skillId, skillName, targetId, targetName, damage, line);
         }
 
         return null;
@@ -98,7 +119,41 @@ public final class ActLineParser {
 
     private static long parseHexLong(String hex) {
         if (hex == null || hex.isBlank()) return 0;
-        return Long.parseUnsignedLong(hex, 16);
+        try { return Long.parseUnsignedLong(hex, 16); }
+        catch (NumberFormatException e) { return 0; }
+    }
+
+    /**
+     * FFXIV NetworkAbility 데미지 디코딩.
+     * p[9]의 8자리 hex 값: 0xAABBCCDD (AA=d3, BB=d2, CC=d1, DD=d0)
+     *
+     * d0(최하위 바이트)의 bit6(0x40)이 "shift" 플래그:
+     *   - 0x40 set → 데미지 > 65535, 실제값 = (d3 << 16) | (d1 << 8) | d2
+     *   - 0x40 unset → 일반 데미지, 실제값 = (d3 << 8) | d2
+     */
+    static long decodeDamage(String hex) {
+        if (hex == null || hex.isBlank()) return 0;
+        long raw;
+        try { raw = Long.parseUnsignedLong(hex, 16); }
+        catch (NumberFormatException e) { return 0; }
+
+        int d0 = (int) (raw & 0xFF);
+        int d1 = (int) ((raw >> 8) & 0xFF);
+        int d2 = (int) ((raw >> 16) & 0xFF);
+        int d3 = (int) ((raw >> 24) & 0xFF);
+
+        if ((d0 & 0x40) != 0) {
+            // big damage: 65536 이상
+            return ((long) d3 << 16) | ((long) d1 << 8) | d2;
+        }
+        // normal damage
+        return ((long) d3 << 8) | d2;
+    }
+
+    private static double parseDouble(String s, double def) {
+        if (s == null || s.isBlank()) return def;
+        try { return Double.parseDouble(s); }
+        catch (NumberFormatException e) { return def; }
     }
 
     private static long extractLong(Pattern pat, String msg, int group, long def) {

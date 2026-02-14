@@ -11,7 +11,7 @@ public record NetworkAbilityRaw(
         String skillName,
         long targetId,
         String targetName,
-        String actionKey, // optional like "0000B76E"
+        long damage,
         String rawLine
 ) implements ParsedLine {
 }
