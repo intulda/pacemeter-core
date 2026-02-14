@@ -135,5 +135,5 @@ replay_pid*
 build/*
 
 .gradle/*
-/build/
-/.gradle/
+/build/*
+/.gradle/*
