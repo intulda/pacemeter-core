@@ -62,8 +62,8 @@ public final class ActLineParser {
             if (p.length < 9) return null;
             long id = parseHexLong(p[2]);
             String name = p[3];
-            long ownerId = parseHexLong(p[8]);
-            return new CombatantAdded(ts, id, name, ownerId);
+            long ownerId = parseHexLong(p[6]);
+            return new CombatantAdded(ts, id, name, ownerId, line);
         }
 
         // 26: StatusAdd (BuffApply)

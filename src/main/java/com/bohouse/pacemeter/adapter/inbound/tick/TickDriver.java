@@ -20,7 +20,7 @@ public class TickDriver {
         this.actIngestionService = actIngestionService;
     }
 
-    @Scheduled(fixedRate = 250)
+    @Scheduled(fixedRate = 100)
     public void tick() {
         if (!actIngestionService.isFightStarted()) return;
 

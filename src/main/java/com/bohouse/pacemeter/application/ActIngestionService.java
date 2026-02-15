@@ -94,6 +94,8 @@ public final class ActIngestionService {
         }
 
         if (line instanceof CombatantAdded c) {
+            logger.info("[Ingestion] CombatantAdded: name={}(id={}) ownerId={} rawLine={}",
+                    c.name(), Long.toHexString(c.id()), Long.toHexString(c.ownerId()), c.rawLine());
             if (c.ownerId() != 0) ownerByCombatantId.put(c.id(), c.ownerId());
             return;
         }
