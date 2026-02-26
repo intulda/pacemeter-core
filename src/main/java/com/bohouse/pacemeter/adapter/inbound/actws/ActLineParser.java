@@ -26,6 +26,14 @@ public final class ActLineParser {
         Instant ts = parseInstant(p[1]);
         if (ts == null) return null;
 
+        // 1: ChangeZone
+        if (typeCode == 1) {
+            if (p.length < 4) return null;
+            int zoneId = (int) parseHexLong(p[2]);
+            String zoneName = p[3];
+            return new ZoneChanged(ts, zoneId, zoneName);
+        }
+
         // 0: LogLine text
         if (typeCode == 0) {
             if (p.length < 5) return null;

@@ -22,6 +22,7 @@ public final class ActIngestionService {
 
     private volatile long currentPlayerId = 0;
     private volatile String currentPlayerName = "YOU";
+    private volatile String currentZoneName = "";
 
     private final Map<Long, Long> ownerByCombatantId = new HashMap<>();
 
@@ -85,6 +86,12 @@ public final class ActIngestionService {
         // 모든 이벤트의 ACT 타임스탬프를 추적 (Tick 경과시간 계산용)
         if (line.ts() != null) {
             lastEventInstant = line.ts();
+        }
+
+        if (line instanceof ZoneChanged z) {
+            this.currentZoneName = z.zoneName();
+            logger.info("[Ingestion] ZoneChanged: id={} name={}", z.zoneId(), z.zoneName());
+            return;
         }
 
         if (line instanceof PrimaryPlayerChanged p) {
@@ -188,8 +195,8 @@ public final class ActIngestionService {
         if (fightStarted) return;
         fightStarted = true;
         fightStartInstant = firstEventTs;
-        logger.info("[Ingestion] fight started at {}", firstEventTs);
-        combatEventPort.onEvent(new CombatEvent.FightStart(0L, "act_fight"));
+        logger.info("[Ingestion] fight started at {} zone={}", firstEventTs, currentZoneName);
+        combatEventPort.onEvent(new CombatEvent.FightStart(0L, currentZoneName));
     }
 
     private boolean isYouActor(NetworkAbilityRaw a) {

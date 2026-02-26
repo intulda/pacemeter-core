@@ -1,0 +1,15 @@
+{
+  "_readme": "ACT 로그의 Zone name → FFLogs encounter ID 매핑",
+  "_how_to_find": "FFLogs 랭킹 페이지 URL: https://www.fflogs.com/zone/rankings/[zone_id] 에서 encounter 이름 클릭 후 URL에서 encounter= 파라미터 확인",
+  "_note": "0 이하는 비활성화. zone name은 ACT 로그 01 라인의 zone name과 정확히 일치해야 함",
+
+  "AAC Light-heavyweight M1 (Savage)": 0,
+  "AAC Light-heavyweight M2 (Savage)": 0,
+  "AAC Light-heavyweight M3 (Savage)": 0,
+  "AAC Light-heavyweight M4 (Savage)": 0,
+
+  "AAC Cruiserweight M5 (Savage)": 0,
+  "AAC Cruiserweight M6 (Savage)": 0,
+  "AAC Cruiserweight M7 (Savage)": 0,
+  "AAC Cruiserweight M8 (Savage)": 0
+}
