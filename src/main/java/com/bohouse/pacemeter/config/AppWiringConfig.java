@@ -4,11 +4,17 @@ import com.bohouse.pacemeter.application.CombatService;
 import com.bohouse.pacemeter.application.port.outbound.PaceProfileProvider;
 import com.bohouse.pacemeter.application.port.outbound.SnapshotPublisher;
 import com.bohouse.pacemeter.core.engine.CombatEngine;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class AppWiringConfig {
+
+    @Bean
+    public ObjectMapper objectMapper() {
+        return new ObjectMapper();
+    }
 
     @Bean
     public CombatEngine combatEngine() {
