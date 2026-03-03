@@ -45,7 +45,7 @@ public class CombatService implements CombatEventPort {
     public EngineResult onEvent(CombatEvent event) {
         // 전투가 시작되면, 해당 보스에 맞는 페이스 프로필을 찾아서 엔진에 세팅
         if (event instanceof CombatEvent.FightStart fightStart) {
-            PaceProfile profile = paceProfileProvider.findProfile(fightStart.fightName())
+            PaceProfile profile = paceProfileProvider.findProfile(fightStart.fightName(), fightStart.zoneId())
                     .orElse(PaceProfile.NONE);
             engine.setPaceProfile(profile);
         }

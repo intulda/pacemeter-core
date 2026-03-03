@@ -20,14 +20,15 @@ import java.util.concurrent.CompletableFuture;
 public class ActWsClient {
 
     private static final Logger logger = LoggerFactory.getLogger(ActWsClient.class);
-    private static final ObjectMapper objectMapper = new ObjectMapper();
 
+    private final ObjectMapper objectMapper;
     private final ActLineParser parser;
     private final ActIngestionService ingestion;
 
-    public ActWsClient(ActLineParser parser, ActIngestionService ingestion) {
+    public ActWsClient(ActLineParser parser, ActIngestionService ingestion, ObjectMapper objectMapper) {
         this.parser = parser;
         this.ingestion = ingestion;
+        this.objectMapper = objectMapper;
     }
 
     @EventListener(ApplicationReadyEvent.class)

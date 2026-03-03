@@ -234,5 +234,74 @@ public class FflogsApiClient {
         }
     }
 
+    /**
+     * FFLogs zone ID로 해당 존의 모든 encounter 목록을 가져온다.
+     * ACT의 zoneId와 FFLogs의 zone ID는 FFXIV 내부 ID로 동일하다.
+     *
+     * @param zoneId ACT ZoneChanged의 zone ID (decimal)
+     * @return encounter 목록. API 오류 시 빈 리스트
+     */
+    public List<EncounterInfo> fetchZoneEncounters(int zoneId) {
+        Optional<String> token = tokenStore.getToken();
+        if (token.isEmpty()) {
+            log.warn("[FFLogs] fetchZoneEncounters skipped - no token");
+            return List.of();
+        }
+
+        String query = """
+                query($zoneId: Int!) {
+                  worldData {
+                    zone(id: $zoneId) {
+                      encounters {
+                        id
+                        name
+                      }
+                    }
+                  }
+                }
+                """;
+
+        try {
+            byte[] body = objectMapper.writeValueAsBytes(Map.of(
+                    "query", query,
+                    "variables", Map.of("zoneId", zoneId)
+            ));
+
+            String response = restClient.post()
+                    .header("Authorization", "Bearer " + token.get())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode root = objectMapper.readTree(response);
+            checkErrors(root, "fetchZoneEncounters");
+
+            JsonNode encountersNode = root.path("data").path("worldData")
+                    .path("zone").path("encounters");
+
+            if (!encountersNode.isArray() || encountersNode.isEmpty()) {
+                log.warn("[FFLogs] no encounters for zoneId={}", zoneId);
+                return List.of();
+            }
+
+            List<EncounterInfo> result = new ArrayList<>();
+            for (JsonNode e : encountersNode) {
+                int id = e.path("id").asInt(0);
+                String name = e.path("name").asText("");
+                if (id > 0) result.add(new EncounterInfo(id, name));
+            }
+
+            log.info("[FFLogs] zone={} has {} encounters: {}", zoneId, result.size(), result);
+            return result;
+
+        } catch (Exception e) {
+            log.error("[FFLogs] fetchZoneEncounters failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
     public record TopRanking(String reportCode, long reportStartMs, long fightStartMs, long durationMs) {}
+
+    public record EncounterInfo(int id, String name) {}
 }

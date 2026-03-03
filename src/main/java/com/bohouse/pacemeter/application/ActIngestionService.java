@@ -23,6 +23,7 @@ public final class ActIngestionService {
     private volatile long currentPlayerId = 0;
     private volatile String currentPlayerName = "YOU";
     private volatile String currentZoneName = "";
+    private volatile int currentZoneId = 0;
 
     private final Map<Long, Long> ownerByCombatantId = new HashMap<>();
 
@@ -89,6 +90,7 @@ public final class ActIngestionService {
         }
 
         if (line instanceof ZoneChanged z) {
+            this.currentZoneId = z.zoneId();
             this.currentZoneName = z.zoneName();
             logger.info("[Ingestion] ZoneChanged: id={} name={}", z.zoneId(), z.zoneName());
             return;
@@ -195,8 +197,8 @@ public final class ActIngestionService {
         if (fightStarted) return;
         fightStarted = true;
         fightStartInstant = firstEventTs;
-        logger.info("[Ingestion] fight started at {} zone={}", firstEventTs, currentZoneName);
-        combatEventPort.onEvent(new CombatEvent.FightStart(0L, currentZoneName));
+        logger.info("[Ingestion] fight started at {} zone={} zoneId={}", firstEventTs, currentZoneName, currentZoneId);
+        combatEventPort.onEvent(new CombatEvent.FightStart(0L, currentZoneName, currentZoneId));
     }
 
     private boolean isYouActor(NetworkAbilityRaw a) {

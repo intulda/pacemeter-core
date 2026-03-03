@@ -19,8 +19,9 @@ public interface PaceProfileProvider {
     /**
      * 보스/콘텐츠 이름에 맞는 페이스 프로필을 찾는다.
      *
-     * @param fightName 보스 이름 (FightStart 이벤트에서 가져옴)
+     * @param fightName      ACT zone name (로그/레이블용)
+     * @param actTerritoryId ACT ZoneChanged의 territory ID (fflogs-zones.json 조회 키)
      * @return 해당 프로필. 없으면 Optional.empty()
      */
-    Optional<PaceProfile> findProfile(String fightName);
+    Optional<PaceProfile> findProfile(String fightName, int actTerritoryId);
 }

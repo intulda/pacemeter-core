@@ -1,0 +1,42 @@
+{
+  "_readme": "ACT territory ID(숫자) → FFLogs zone ID. Savage(영식)만 포함.",
+  "_encounter_index": "같은 zone ID 내에서 territory ID를 오름차순 정렬한 순서가 encounter index(0부터). 코드에서 자동 계산.",
+  "_how_to_add": "새 레이드 시즌: cactbot zone_id.ts에서 Savage territory ID 확인 후 추가.",
+  "_cactbot_source": "https://github.com/OverlayPlugin/cactbot/blob/main/resources/zone_id.ts",
+
+  "_comment_asphodelos": "Pandaemonium Asphodelos (6.05) P1S-P4S → FFLogs zone 44",
+  "1003": 44,
+  "1005": 44,
+  "1007": 44,
+  "1009": 44,
+
+  "_comment_abyssos": "Pandaemonium Abyssos (6.2) P5S-P8S → FFLogs zone 49",
+  "1082": 49,
+  "1084": 49,
+  "1086": 49,
+  "1088": 49,
+
+  "_comment_anabaseios": "Pandaemonium Anabaseios (6.4) P9S-P12S → FFLogs zone 54",
+  "1148": 54,
+  "1150": 54,
+  "1152": 54,
+  "1154": 54,
+
+  "_comment_arcadion_lh": "Arcadion Light-heavyweight (7.0) M1S-M4S → FFLogs zone 62",
+  "1226": 62,
+  "1228": 62,
+  "1230": 62,
+  "1232": 62,
+
+  "_comment_arcadion_cw": "Arcadion Cruiserweight (7.2) M5S-M8S → FFLogs zone 68",
+  "1257": 68,
+  "1259": 68,
+  "1261": 68,
+  "1263": 68,
+
+  "_comment_arcadion_hw": "Arcadion Heavyweight (7.4) M9S-M12S → FFLogs zone 73",
+  "1321": 73,
+  "1323": 73,
+  "1325": 73,
+  "1327": 73
+}

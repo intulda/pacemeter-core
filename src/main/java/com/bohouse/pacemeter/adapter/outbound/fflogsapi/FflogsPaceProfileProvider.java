@@ -10,44 +10,72 @@ import org.springframework.stereotype.Component;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * FFLogs API를 통해 해당 존의 rDPS 1위 타임라인을 PaceProfile로 제공.
  *
  * 동작 흐름:
- *   1. zoneName → FFLogs encounter ID (FflogsEncounterLookup)
- *   2. encounter ID → top ranking (report code, fight 시간) (FflogsApiClient)
- *   3. report + fight 시간 → DPS 타임라인 → TimelinePaceProfile
+ *   1. ACT territory ID → fflogs-zones.json → FFLogs zone ID + encounter index
+ *   2. FFLogs API로 zone encounters 조회 → index로 특정 encounter 선택
+ *   3. encounter ID → top ranking → DPS 타임라인 → TimelinePaceProfile
  *
- * encounter ID가 0(미설정)이거나 API 오류 시 PaceProfile.NONE 반환.
+ * 새 레이드 시즌: fflogs-zones.json에 territory ID → zone ID 한 줄 추가하면 끝.
+ * territory ID는 cactbot zone_id.ts에서 확인 가능.
  */
 @Component
 public class FflogsPaceProfileProvider implements PaceProfileProvider {
 
     private static final Logger log = LoggerFactory.getLogger(FflogsPaceProfileProvider.class);
 
-    private final FflogsEncounterLookup encounterLookup;
+    private final FflogsZoneLookup zoneLookup;
     private final FflogsApiClient apiClient;
 
-    public FflogsPaceProfileProvider(FflogsEncounterLookup encounterLookup, FflogsApiClient apiClient) {
-        this.encounterLookup = encounterLookup;
+    // ACT territory ID → PaceProfile 캐시
+    private final ConcurrentHashMap<Integer, PaceProfile> cache = new ConcurrentHashMap<>();
+
+    public FflogsPaceProfileProvider(FflogsZoneLookup zoneLookup, FflogsApiClient apiClient) {
+        this.zoneLookup = zoneLookup;
         this.apiClient = apiClient;
     }
 
     @Override
-    public Optional<PaceProfile> findProfile(String zoneName) {
-        Optional<Integer> encounterId = encounterLookup.findEncounterId(zoneName);
-        if (encounterId.isEmpty()) {
-            log.info("[FFLogs] no encounter mapping for zone='{}' → PaceProfile.NONE", zoneName);
+    public Optional<PaceProfile> findProfile(String fightName, int actTerritoryId) {
+        PaceProfile cached = cache.get(actTerritoryId);
+        if (cached != null) {
+            log.info("[FFLogs] cache hit for territory={} ({})", actTerritoryId, fightName);
+            return Optional.of(cached);
+        }
+
+        Optional<FflogsZoneLookup.ZoneLookupResult> resolved = zoneLookup.resolve(actTerritoryId);
+        if (resolved.isEmpty()) {
+            log.info("[FFLogs] no mapping for territory={} ({}) → PaceProfile.NONE", actTerritoryId, fightName);
+            cache.put(actTerritoryId, PaceProfile.NONE);
             return Optional.of(PaceProfile.NONE);
         }
 
-        int id = encounterId.get();
-        log.info("[FFLogs] fetching top ranking for zone='{}' encounterId={}", zoneName, id);
+        FflogsZoneLookup.ZoneLookupResult zone = resolved.get();
+        log.info("[FFLogs] territory={} → fflogsZone={} encounterIndex={} ({})",
+                actTerritoryId, zone.fflogsZoneId(), zone.encounterIndex(), fightName);
 
-        Optional<FflogsApiClient.TopRanking> ranking = apiClient.fetchTopRanking(id);
+        List<FflogsApiClient.EncounterInfo> encounters = apiClient.fetchZoneEncounters(zone.fflogsZoneId());
+        if (encounters.isEmpty()) {
+            log.warn("[FFLogs] no encounters for fflogsZone={} → PaceProfile.NONE", zone.fflogsZoneId());
+            cache.put(actTerritoryId, PaceProfile.NONE);
+            return Optional.of(PaceProfile.NONE);
+        }
+
+        int idx = Math.min(zone.encounterIndex(), encounters.size() - 1);
+        if (zone.encounterIndex() >= encounters.size()) {
+            log.warn("[FFLogs] encounterIndex={} >= size={}, using last", zone.encounterIndex(), encounters.size());
+        }
+        FflogsApiClient.EncounterInfo encounter = encounters.get(idx);
+        log.info("[FFLogs] encounter: id={} name='{}'", encounter.id(), encounter.name());
+
+        Optional<FflogsApiClient.TopRanking> ranking = apiClient.fetchTopRanking(encounter.id());
         if (ranking.isEmpty()) {
-            log.warn("[FFLogs] no ranking found → PaceProfile.NONE");
+            log.warn("[FFLogs] no ranking for encounterId={} → PaceProfile.NONE", encounter.id());
+            cache.put(actTerritoryId, PaceProfile.NONE);
             return Optional.of(PaceProfile.NONE);
         }
 
@@ -57,28 +85,30 @@ public class FflogsPaceProfileProvider implements PaceProfileProvider {
 
         if (timeline.size() < 2) {
             log.warn("[FFLogs] timeline too short ({} points) → PaceProfile.NONE", timeline.size());
+            cache.put(actTerritoryId, PaceProfile.NONE);
             return Optional.of(PaceProfile.NONE);
         }
 
-        TimelinePaceProfile profile = buildProfile(zoneName, r.durationMs(), timeline);
+        String label = "FFLogs #1 rDPS: " + encounter.name();
+        TimelinePaceProfile profile = buildProfile(label, r.durationMs(), timeline);
         log.info("[FFLogs] PaceProfile built: label='{}' points={} duration={}ms",
                 profile.label(), profile.pointCount(), r.durationMs());
+
+        cache.put(actTerritoryId, profile);
         return Optional.of(profile);
     }
 
-    private TimelinePaceProfile buildProfile(String zoneName, long durationMs, List<long[]> timeline) {
+    private TimelinePaceProfile buildProfile(String label, long durationMs, List<long[]> timeline) {
         long[] timePoints = new long[timeline.size()];
         long[] cumulativeDamage = new long[timeline.size()];
         for (int i = 0; i < timeline.size(); i++) {
             timePoints[i] = timeline.get(i)[0];
             cumulativeDamage[i] = timeline.get(i)[1];
         }
-        // 시간 순 정렬 보장
         if (!isSorted(timePoints)) {
             log.warn("[FFLogs] timeline not sorted, sorting now");
             sortByTime(timePoints, cumulativeDamage);
         }
-        String label = "FFLogs #1 rDPS: " + zoneName;
         return new TimelinePaceProfile(label, durationMs, timePoints, cumulativeDamage);
     }
 
@@ -90,7 +120,6 @@ public class FflogsPaceProfileProvider implements PaceProfileProvider {
     }
 
     private void sortByTime(long[] times, long[] damage) {
-        // 인덱스 정렬 후 적용
         Integer[] idx = new Integer[times.length];
         Arrays.setAll(idx, i -> i);
         Arrays.sort(idx, (a, b) -> Long.compare(times[a], times[b]));

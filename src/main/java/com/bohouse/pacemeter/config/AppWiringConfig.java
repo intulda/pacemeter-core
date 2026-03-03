@@ -4,6 +4,7 @@ import com.bohouse.pacemeter.application.CombatService;
 import com.bohouse.pacemeter.application.port.outbound.PaceProfileProvider;
 import com.bohouse.pacemeter.application.port.outbound.SnapshotPublisher;
 import com.bohouse.pacemeter.core.engine.CombatEngine;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -16,6 +17,9 @@ public class AppWiringConfig {
     }
 
     // PaceProfileProvider는 FflogsPaceProfileProvider(@Component)가 자동 등록됨
+
+    @Bean
+    public ObjectMapper objectMapper() { return new ObjectMapper(); }
 
     @Bean
     public CombatService combatService(

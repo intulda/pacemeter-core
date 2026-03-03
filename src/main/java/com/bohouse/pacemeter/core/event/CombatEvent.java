@@ -30,8 +30,9 @@ public sealed interface CombatEvent {
      *
      * @param timestampMs 항상 0 (전투가 시작되는 시점이 기준점)
      * @param fightName   보스/콘텐츠 이름 (예: "절 알렉산더", "절 미래지")
+     * @param zoneId      ACT ZoneChanged의 zone ID (FFLogs zone ID와 동일)
      */
-    record FightStart(long timestampMs, String fightName) implements CombatEvent {}
+    record FightStart(long timestampMs, String fightName, int zoneId) implements CombatEvent {}
 
     /**
      * 누군가가 데미지를 준 이벤트.
