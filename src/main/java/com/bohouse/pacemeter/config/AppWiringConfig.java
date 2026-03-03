@@ -12,6 +12,11 @@ import org.springframework.context.annotation.Configuration;
 public class AppWiringConfig {
 
     @Bean
+    public ObjectMapper objectMapper() {
+        return new ObjectMapper();
+    }
+
+    @Bean
     public CombatEngine combatEngine() {
         return new CombatEngine();
     }

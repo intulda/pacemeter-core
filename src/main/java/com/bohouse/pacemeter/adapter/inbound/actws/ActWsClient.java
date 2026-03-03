@@ -24,6 +24,7 @@ public class ActWsClient {
     private final ObjectMapper objectMapper;
     private final ActLineParser parser;
     private final ActIngestionService ingestion;
+    private final ObjectMapper objectMapper;
 
     public ActWsClient(ActLineParser parser, ActIngestionService ingestion, ObjectMapper objectMapper) {
         this.parser = parser;
