@@ -24,9 +24,6 @@ public class AppWiringConfig {
     // PaceProfileProvider는 FflogsPaceProfileProvider(@Component)가 자동 등록됨
 
     @Bean
-    public ObjectMapper objectMapper() { return new ObjectMapper(); }
-
-    @Bean
     public CombatService combatService(
             CombatEngine engine,
             SnapshotPublisher snapshotPublisher,
