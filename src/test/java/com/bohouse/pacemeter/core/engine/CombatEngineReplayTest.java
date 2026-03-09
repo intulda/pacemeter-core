@@ -102,7 +102,7 @@ class CombatEngineReplayTest {
         assertEquals(0, engine.currentState().totalPartyDamage());
 
         // 전투 시작 이벤트를 보내면 → ACTIVE 상태로 전환
-        engine.process(new CombatEvent.FightStart(0, "Test Fight"));
+        engine.process(new CombatEvent.FightStart(0, "Test Fight", 0));
         assertEquals(CombatState.Phase.ACTIVE, engine.currentState().phase());
         assertEquals("Test Fight", engine.currentState().fightName());
     }
@@ -110,7 +110,7 @@ class CombatEngineReplayTest {
     @Test
     void tickProducesSnapshot_damageDoesNot() {
         CombatEngine engine = new CombatEngine();
-        engine.process(new CombatEvent.FightStart(0, "Test"));
+        engine.process(new CombatEvent.FightStart(0, "Test", 0));
 
         // 데미지 이벤트는 스냅샷을 만들지 않는다
         EngineResult damageResult = engine.process(new CombatEvent.DamageEvent(
@@ -167,7 +167,7 @@ class CombatEngineReplayTest {
                 };
 
         CombatEngine engine = new CombatEngine(linearProfile);
-        engine.process(new CombatEvent.FightStart(0, "Test"));
+        engine.process(new CombatEvent.FightStart(0, "Test", 0));
 
         // 1초에 15000 데미지 (기준 10000보다 앞서고 있음)
         engine.process(new CombatEvent.DamageEvent(
@@ -189,7 +189,7 @@ class CombatEngineReplayTest {
     @Test
     void noProfileLoaded_paceComparisonIsNull() {
         CombatEngine engine = new CombatEngine(); // 프로필 없음
-        engine.process(new CombatEvent.FightStart(0, "Test"));
+        engine.process(new CombatEvent.FightStart(0, "Test", 0));
         engine.process(new CombatEvent.DamageEvent(
                 1000, new ActorId(1), "Player", new ActorId(100), 1, 10000,
                 com.bohouse.pacemeter.core.model.DamageType.DIRECT));
