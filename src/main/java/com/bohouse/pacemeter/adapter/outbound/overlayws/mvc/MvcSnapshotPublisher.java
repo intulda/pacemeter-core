@@ -28,7 +28,7 @@ public class MvcSnapshotPublisher implements SnapshotPublisher {
         }
 
         try {
-            var payload = new Envelope("overlay_tick", snapshot);
+            var payload = new Envelope("snapshot", snapshot);
             String json = om.writeValueAsString(payload);
             ws.broadcast(json);
             logger.info("[Overlay] published snapshot: elapsed={}ms actors={} partyDps={}",
