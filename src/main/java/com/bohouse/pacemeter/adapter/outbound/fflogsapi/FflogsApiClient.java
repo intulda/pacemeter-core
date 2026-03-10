@@ -8,7 +8,6 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -107,7 +106,9 @@ public class FflogsApiClient {
             long fightStartMs = r.path("startTime").asLong(0);
             long durationMs = r.path("duration").asLong(0);
             double amount = r.path("amount").asDouble(0);
-            int sourceId = r.path("actorID").asInt(0);  // 🆕 플레이어의 sourceID
+            String playerName = r.path("name").asText("");
+            // characterRankings 응답에는 actorID가 없으므로 0으로 초기화 → 호출자가 fetchPlayerSourceId로 조회
+            int sourceId = r.path("actorID").asInt(0);
 
             if (reportCode.isBlank() || durationMs <= 0) {
                 log.warn("[FFLogs] invalid ranking data: code='{}' duration={}", reportCode, durationMs);
@@ -115,9 +116,9 @@ public class FflogsApiClient {
             }
 
             log.info("[FFLogs] top ranking: name={} rdps={} duration={}ms code={} sourceId={}",
-                    r.path("name").asText(), (long) amount, durationMs, reportCode, sourceId);
+                    playerName, (long) amount, durationMs, reportCode, sourceId);
 
-            return Optional.of(new TopRanking(reportCode, reportStartMs, fightStartMs, durationMs, sourceId));
+            return Optional.of(new TopRanking(reportCode, reportStartMs, fightStartMs, durationMs, sourceId, playerName));
 
         } catch (Exception e) {
             log.error("[FFLogs] fetchTopRanking failed: {}", e.getMessage());
@@ -256,17 +257,43 @@ public class FflogsApiClient {
     }
 
     /**
-     * FFLogs graph JSON scalar을 파이트 기준 누적 데미지 타임라인으로 변환.
-     * graph.data.series 에서 "Total" 시리즈(또는 첫 번째 시리즈)를 사용.
+     * FFLogs graph scalar 응답을 파이트 기준 누적 데미지 타임라인으로 변환.
      *
-     * @param graphNode        graph 필드의 JsonNode
-     * @param fightStartOffset 리포트 기준 파이트 시작 오프셋(ms)
-     * @return [[fightElapsedMs, cumulativeDamage], ...]
+     * 실제 응답 구조:
+     * {
+     *   "startTime": ..., "endTime": ...,
+     *   "series": [{
+     *     "name": "Total",
+     *     "pointStart": <ms from report start>,
+     *     "pointInterval": <ms per bucket>,
+     *     "data": [dps0, dps1, dps2, ...]   ← scalar DPS 값 (NOT [x,y] 쌍)
+     *   }]
+     * }
      */
     private List<long[]> parseToCumulative(JsonNode graphNode, long fightStartOffset) {
-        JsonNode series = graphNode.path("data").path("series");
+        // FFLogs graph 필드는 JSON scalar (문자열) 타입 → 내부 JSON 재파싱 필요
+        if (graphNode.isTextual()) {
+            try {
+                graphNode = objectMapper.readTree(graphNode.asText());
+                log.info("[FFLogs] graph scalar parsed successfully");
+            } catch (Exception e) {
+                log.error("[FFLogs] failed to parse graph scalar: {}", e.getMessage());
+                return List.of();
+            }
+        }
+
+        // 실제 응답 구조 확인 (graph 루트 키 목록)
+        List<String> rootKeys = new ArrayList<>();
+        graphNode.fieldNames().forEachRemaining(rootKeys::add);
+        log.info("[FFLogs] graph root keys: {}", rootKeys);
+
+        // series 경로 탐색: 루트 직접 또는 data 아래
+        JsonNode series = graphNode.path("series");
         if (!series.isArray() || series.isEmpty()) {
-            log.warn("[FFLogs] no series in graph response");
+            series = graphNode.path("data").path("series");
+        }
+        if (!series.isArray() || series.isEmpty()) {
+            log.warn("[FFLogs] no series in graph response. graphNode={}", graphNode.toString().substring(0, Math.min(500, graphNode.toString().length())));
             return List.of();
         }
 
@@ -287,30 +314,33 @@ public class FflogsApiClient {
             return List.of();
         }
 
+        // pointStart/pointInterval로 각 버킷의 타임스탬프 계산
+        long pointStart = targetSeries.path("pointStart").asLong(fightStartOffset);
+        double pointInterval = targetSeries.path("pointInterval").asDouble(1000.0);
+        if (pointInterval <= 0) pointInterval = 1000.0;
+
+        log.info("[FFLogs] parsing timeline: points={} pointStart={} pointInterval={}ms",
+                dataArr.size(), pointStart, (long) pointInterval);
+
         List<long[]> result = new ArrayList<>();
         result.add(new long[]{0L, 0L}); // 파이트 시작: elapsed=0, damage=0
 
         long cumulativeDamage = 0;
-        long prevXMs = fightStartOffset;
 
-        for (JsonNode point : dataArr) {
-            if (!point.isArray() || point.size() < 2) continue;
-            long xMs = point.get(0).asLong();
-            double dps = point.get(1).asDouble();
+        for (int i = 0; i < dataArr.size(); i++) {
+            double dps = dataArr.get(i).asDouble();
 
-            long bucketDurationMs = xMs - prevXMs;
-            if (bucketDurationMs <= 0) { prevXMs = xMs; continue; }
-
-            // 구간 데미지 = DPS × 구간길이(초)
-            long bucketDamage = (long) (dps * bucketDurationMs / 1000.0);
+            // 버킷 타임스탬프 (리포트 기준 ms)
+            long xMs = pointStart + (long) (i * pointInterval);
+            // 구간 데미지 = DPS × pointInterval(초)
+            long bucketDamage = (long) (dps * pointInterval / 1000.0);
             cumulativeDamage += bucketDamage;
 
             long elapsedMs = xMs - fightStartOffset;
             result.add(new long[]{elapsedMs, cumulativeDamage});
-            prevXMs = xMs;
         }
 
-        log.info("[FFLogs] timeline: {} points, total={}", result.size(), cumulativeDamage);
+        log.info("[FFLogs] timeline built: {} points, totalDamage={}", result.size(), cumulativeDamage);
         return result;
     }
 
@@ -318,6 +348,77 @@ public class FflogsApiClient {
         JsonNode errors = root.path("errors");
         if (errors.isArray() && !errors.isEmpty()) {
             log.warn("[FFLogs] {} GraphQL errors: {}", context, errors);
+        }
+    }
+
+    /**
+     * masterData.actors에서 플레이어 이름으로 sourceId를 조회한다.
+     * characterRankings 응답에 actorID가 없을 때 사용.
+     *
+     * @param reportCode 리포트 코드
+     * @param playerName 플레이어 이름
+     * @return sourceId (못 찾으면 0)
+     */
+    public int fetchPlayerSourceId(String reportCode, String playerName) {
+        Optional<String> token = tokenStore.getToken();
+        if (token.isEmpty()) return 0;
+
+        String query = """
+                query($code: String!) {
+                  reportData {
+                    report(code: $code) {
+                      masterData {
+                        actors {
+                          id
+                          name
+                          type
+                        }
+                      }
+                    }
+                  }
+                }
+                """;
+
+        try {
+            byte[] body = objectMapper.writeValueAsBytes(Map.of(
+                    "query", query,
+                    "variables", Map.of("code", reportCode)
+            ));
+
+            String response = restClient.post()
+                    .header("Authorization", "Bearer " + token.get())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode root = objectMapper.readTree(response);
+            checkErrors(root, "fetchPlayerSourceId");
+
+            JsonNode actors = root.path("data").path("reportData").path("report")
+                    .path("masterData").path("actors");
+
+            if (!actors.isArray()) {
+                log.warn("[FFLogs] masterData.actors not found");
+                return 0;
+            }
+
+            for (JsonNode actor : actors) {
+                String type = actor.path("type").asText("");
+                String name = actor.path("name").asText("");
+                if ("Player".equalsIgnoreCase(type) && playerName.equalsIgnoreCase(name)) {
+                    int id = actor.path("id").asInt(0);
+                    log.info("[FFLogs] resolved sourceId={} for player '{}'", id, playerName);
+                    return id;
+                }
+            }
+
+            log.warn("[FFLogs] player '{}' not found in masterData.actors", playerName);
+            return 0;
+
+        } catch (Exception e) {
+            log.error("[FFLogs] fetchPlayerSourceId failed: {}", e.getMessage());
+            return 0;
         }
     }
 
@@ -388,7 +489,7 @@ public class FflogsApiClient {
         }
     }
 
-    public record TopRanking(String reportCode, long reportStartMs, long fightStartMs, long durationMs, int sourceId) {}
+    public record TopRanking(String reportCode, long reportStartMs, long fightStartMs, long durationMs, int sourceId, String playerName) {}
 
     public record EncounterInfo(int id, String name) {}
 }

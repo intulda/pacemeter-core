@@ -173,9 +173,20 @@ public class FflogsPaceProfileProvider implements PaceProfileProvider {
 
         FflogsApiClient.TopRanking r = ranking.get();
 
+        // characterRankings에 actorID가 없는 경우 masterData.actors에서 이름으로 역조회
+        int sourceId = r.sourceId();
+        if (sourceId == 0 && !r.playerName().isBlank()) {
+            sourceId = apiClient.fetchPlayerSourceId(r.reportCode(), r.playerName());
+            if (sourceId == 0) {
+                log.warn("[FFLogs] could not resolve sourceId for player '{}' → PaceProfile.NONE", r.playerName());
+                cache.put(cacheKey, PaceProfile.NONE);
+                return Optional.of(PaceProfile.NONE);
+            }
+        }
+
         // 개인 타임라인 (sourceID 필터)
         List<long[]> individualTimeline = apiClient.fetchIndividualDamageTimeline(
-                r.reportCode(), r.reportStartMs(), r.fightStartMs(), r.durationMs(), r.sourceId());
+                r.reportCode(), r.reportStartMs(), r.fightStartMs(), r.durationMs(), sourceId);
 
         if (individualTimeline.size() < 2) {
             log.warn("[FFLogs] individual timeline too short ({} points)", individualTimeline.size());

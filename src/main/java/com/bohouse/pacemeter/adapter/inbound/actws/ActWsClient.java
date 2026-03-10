@@ -68,10 +68,10 @@ public class ActWsClient {
                         retryCount.set(0);
                         logger.info("[ACT] connected successfully");
 
-                        // 구독: 현재 전투 상태 + 플레이어 정보 + 실시간 로그
+                        // 구독: 현재 전투 상태 + 플레이어 정보 + 실시간 로그 + 존 변경
                         session.sendMessage(new TextMessage(
-                                "{\"call\":\"subscribe\",\"events\":[\"CombatData\",\"ChangePrimaryPlayer\",\"LogLine\"]}"));
-                        logger.info("[ACT] subscribed(CombatData, ChangePrimaryPlayer, LogLine)");
+                                "{\"call\":\"subscribe\",\"events\":[\"CombatData\",\"ChangePrimaryPlayer\",\"LogLine\",\"ChangeZone\"]}"));
+                        logger.info("[ACT] subscribed(CombatData, ChangePrimaryPlayer, LogLine, ChangeZone)");
                     }
 
                     @Override
@@ -89,6 +89,17 @@ public class ActWsClient {
                                 if (charId != 0 && !charName.isEmpty()) {
                                     ingestion.onParsed(new PrimaryPlayerChanged(
                                             java.time.Instant.now(), charId, charName));
+                                }
+                                return;
+                            }
+
+                            // ChangeZone 이벤트: 구독 즉시 현재 존 + 이후 존 변경 시 발생
+                            if ("ChangeZone".equals(type)) {
+                                int zoneId = root.path("zoneID").asInt(0);
+                                String zoneName = root.path("zoneName").asText("");
+                                if (zoneId > 0) {
+                                    ingestion.onParsed(new ZoneChanged(Instant.now(), zoneId, zoneName));
+                                    logger.info("[ACT] ChangeZone: id={} name={}", zoneId, zoneName);
                                 }
                                 return;
                             }
@@ -220,6 +231,9 @@ public class ActWsClient {
 
             logger.info("[ACT] CombatData: restored {} combatants from ongoing combat",
                     combatantNode.size());
+
+            // 파티 데이터 초기화 완료 알림
+            ingestion.onCombatDataReady(combatantNode.size());
 
         } catch (Exception e) {
             logger.error("[ACT] CombatData parse error: {}", e.getMessage(), e);

@@ -35,6 +35,11 @@ public final class ActIngestionService {
     private final Set<Long> deadPlayers = new HashSet<>();     // 사망한 파티원 ID
     private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 캐릭터별 직업 ID
 
+    // ACT가 파티 정보를 명시적으로 전달했는지 여부
+    // false = 아직 미수신 (레이트 스타트 대응: 모든 PC 허용)
+    // true  = PartyList 또는 CombatData에서 파티원 목록 수신 완료
+    private volatile boolean partyDataInitialized = false;
+
     private static final long COMBAT_TIMEOUT_MS = 30_000; // 30초 무활동 시 전투 종료
 
     private volatile boolean fightStarted = false;
@@ -126,6 +131,9 @@ public final class ActIngestionService {
 
             this.currentZoneId = z.zoneId();
             this.currentZoneName = z.zoneName();
+            // 존 변경 시 파티 정보 초기화 → 다음 CombatData/PartyList에서 재수신
+            partyDataInitialized = false;
+            partyMemberIds.clear();
             logger.info("[Ingestion] ZoneChanged: id={} name={}", z.zoneId(), z.zoneName());
             return;
         }
@@ -145,6 +153,7 @@ public final class ActIngestionService {
             // ACT PartyList로부터 실제 파티원 목록 업데이트
             partyMemberIds.clear();
             partyMemberIds.addAll(party.partyMemberIds());
+            partyDataInitialized = true;  // 명시적 파티 정보 수신 완료
             logger.info("[Ingestion] PartyList received: {} members: {}",
                     partyMemberIds.size(),
                     partyMemberIds.stream()
@@ -169,6 +178,7 @@ public final class ActIngestionService {
             if (isPlayerCharacter(c.id())) {
                 jobIdByActorId.put(c.id(), c.jobId());  // 직업 저장
                 combatService.setJobId(new ActorId(c.id()), c.jobId());  // 엔진에 직업 정보 전달
+                partyMemberIds.add(c.id());  // CombatData 복원 시에도 파티원으로 등록
 
                 // 본인이면 currentPlayerJobId 저장
                 if (c.id() == currentPlayerId || c.name().equals(currentPlayerName)) {
@@ -236,7 +246,7 @@ public final class ActIngestionService {
 
             long tsMs = toElapsedMs(d.ts());
 
-            // 파티원 사망 추적
+            // 파티원 사망 추적 (단, 이미 사망 처리된 경우는 무시 — 부활 후 재사망은 정상 처리)
             if (partyMemberIds.contains(d.targetId())) {
                 deadPlayers.add(d.targetId());
                 logger.info("[Ingestion] Party member died: {}(id={}) | dead={}/{} party members",
@@ -270,6 +280,11 @@ public final class ActIngestionService {
 
         ensureFightStarted(a.ts());
         lastDamageAt = a.ts();
+
+        // 사망했다가 데미지를 주면 부활로 간주하여 deadPlayers에서 제거
+        if (deadPlayers.remove(a.actorId())) {
+            logger.info("[Ingestion] Actor {} revived (detected via damage)", a.actorName());
+        }
 
         long tsMs = Duration.between(fightStartInstant, a.ts()).toMillis();
         if (tsMs < 0) tsMs = 0;
@@ -339,8 +354,24 @@ public final class ActIngestionService {
     }
 
     /**
+     * ACT CombatData 처리 완료 알림.
+     * ActWsClient가 CombatData의 모든 Combatant 처리 후 호출한다.
+     * memberCount > 0이면 파티 정보 수신 완료로 간주한다.
+     */
+    public void onCombatDataReady(int memberCount) {
+        if (memberCount > 0) {
+            partyDataInitialized = true;
+            logger.info("[Ingestion] party data ready from CombatData ({} members)", memberCount);
+        } else {
+            // isActive=false였거나 파티원이 없음 → 아직 미초기화 상태 유지 (PC 전체 허용 계속)
+            logger.info("[Ingestion] CombatData received but no members (not in active combat)");
+        }
+    }
+
+    /**
      * 액터가 파티원(또는 파티원의 펫)인지 확인.
      * PartyList 로그로부터 받은 실제 파티원 목록 기반.
+     * partyDataInitialized=false이면 PC 전체 허용 (레이트 스타트 / 파티 정보 미수신 대응).
      */
     private boolean isPartyMember(NetworkAbilityRaw a) {
         // 파티원 직접 확인
@@ -351,6 +382,11 @@ public final class ActIngestionService {
         // 펫/소환수의 소유자가 파티원인지 확인
         Long owner = ownerByCombatantId.get(a.actorId());
         if (owner != null && partyMemberIds.contains(owner)) {
+            return true;
+        }
+
+        // 파티 정보 미수신 시: PC면 파티원으로 간주 (레이트 스타트 대응)
+        if (!partyDataInitialized && isPlayerCharacter(a.actorId())) {
             return true;
         }
 

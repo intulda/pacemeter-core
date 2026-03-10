@@ -113,6 +113,11 @@ public final class CombatState {
             stats.setName(e.sourceName());
         }
 
+        // 사망 중인 캐릭터가 데미지를 주면 부활로 간주
+        if (stats.isDead()) {
+            stats.markResurrected();
+        }
+
         stats.addDamage(e.amount(), e.timestampMs());
         this.totalPartyDamage += e.amount();
 
