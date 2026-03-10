@@ -5,6 +5,8 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Pattern;
 
 @Component
@@ -65,13 +67,30 @@ public final class ActLineParser {
             return new PrimaryPlayerChanged(ts, playerId, name);
         }
 
-        // 3: AddCombatant (owner_id at p[8] in your C#)
+        // 11: PartyList
+        // Format: 11|timestamp|partyCount|id0|id1|id2|id3|id4|id5|id6|id7
+        if (typeCode == 11) {
+            if (p.length < 3) return null;
+            int partyCount = Integer.parseInt(p[2]);
+            List<Long> memberIds = new ArrayList<>();
+            for (int i = 0; i < partyCount && i < 8 && (3 + i) < p.length; i++) {
+                long memberId = parseHexLong(p[3 + i]);
+                if (memberId != 0) {
+                    memberIds.add(memberId);
+                }
+            }
+            return new PartyList(ts, memberIds);
+        }
+
+        // 3: AddCombatant
+        // Format: 03|ts|id|name|jobId|level|ownerId|...
         if (typeCode == 3) {
             if (p.length < 9) return null;
             long id = parseHexLong(p[2]);
             String name = p[3];
+            int jobId = (int) parseHexLong(p[4]);
             long ownerId = parseHexLong(p[6]);
-            return new CombatantAdded(ts, id, name, ownerId, line);
+            return new CombatantAdded(ts, id, name, jobId, ownerId, line);
         }
 
         // 26: StatusAdd (BuffApply)
@@ -111,6 +130,14 @@ public final class ActLineParser {
             long damage = decodeDamage(p[9]);
 
             return new NetworkAbilityRaw(ts, typeCode, actorId, actorName, skillId, skillName, targetId, targetName, damage, line);
+        }
+
+        // 25: NetworkDeath
+        if (typeCode == 25) {
+            if (p.length < 4) return null;
+            long targetId = parseHexLong(p[2]);
+            String targetName = p[3];
+            return new NetworkDeath(ts, targetId, targetName);
         }
 
         return null;

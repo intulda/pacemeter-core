@@ -1,6 +1,8 @@
 package com.bohouse.pacemeter.application;
 
 import com.bohouse.pacemeter.adapter.inbound.actws.*;
+import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
+import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FfxivJobMapper;
 import com.bohouse.pacemeter.application.port.inbound.CombatEventPort;
 import com.bohouse.pacemeter.core.event.CombatEvent;
 import com.bohouse.pacemeter.core.model.ActorId;
@@ -19,15 +21,21 @@ public final class ActIngestionService {
     private static final Logger logger = LoggerFactory.getLogger(ActIngestionService.class);
 
     private final CombatEventPort combatEventPort;
+    private final CombatService combatService;
+    private final FflogsZoneLookup fflogsZoneLookup;
 
     private volatile long currentPlayerId = 0;
     private volatile String currentPlayerName = "YOU";
+    private volatile int currentPlayerJobId = 0;  // 본인 직업 ID
     private volatile String currentZoneName = "";
     private volatile int currentZoneId = 0;
 
     private final Map<Long, Long> ownerByCombatantId = new HashMap<>();
+    private final Set<Long> partyMemberIds = new HashSet<>();  // 파티원 ID 추적
+    private final Set<Long> deadPlayers = new HashSet<>();     // 사망한 파티원 ID
+    private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 캐릭터별 직업 ID
 
-    private static final long COMBAT_TIMEOUT_MS = 15_000; // 15초 무활동 시 전투 종료
+    private static final long COMBAT_TIMEOUT_MS = 30_000; // 30초 무활동 시 전투 종료
 
     private volatile boolean fightStarted = false;
     private volatile Instant fightStartInstant = null;
@@ -40,8 +48,11 @@ public final class ActIngestionService {
     private volatile long filteredByYouCount = 0;
     private volatile long zeroDamageCount = 0;
 
-    public ActIngestionService(CombatEventPort combatEventPort) {
+    public ActIngestionService(CombatEventPort combatEventPort, CombatService combatService,
+                               FflogsZoneLookup fflogsZoneLookup) {
         this.combatEventPort = combatEventPort;
+        this.combatService = combatService;
+        this.fflogsZoneLookup = fflogsZoneLookup;
     }
 
     public boolean isFightStarted() {
@@ -49,10 +60,15 @@ public final class ActIngestionService {
 
         // 마지막 데미지 이후 타임아웃이면 전투 자동 종료 (ACT 이벤트 타임스탬프 기준)
         if (lastDamageAt != null && lastEventInstant != null) {
-            long idleMs = Duration.between(lastDamageAt, lastEventInstant).toMillis();
-            if (idleMs > COMBAT_TIMEOUT_MS) {
-                endFight();
-                return false;
+            try {
+                long idleMs = Duration.between(lastDamageAt, lastEventInstant).toMillis();
+                if (idleMs > COMBAT_TIMEOUT_MS) {
+                    logger.info("[Ingestion] combat timeout ({}ms idle), ending fight", idleMs);
+                    endFight();
+                    return false;
+                }
+            } catch (Exception e) {
+                logger.error("[Ingestion] error checking combat timeout: {}", e.getMessage(), e);
             }
         }
 
@@ -60,16 +76,27 @@ public final class ActIngestionService {
     }
 
     private void endFight() {
+        if (!fightStarted) {
+            logger.debug("[Ingestion] endFight called but fight not started, ignoring");
+            return;
+        }
+
         long elapsedMs = nowElapsedMs();
-        logger.info("[Ingestion] fight auto-ended ({}ms idle timeout) elapsed={}ms",
-                COMBAT_TIMEOUT_MS, elapsedMs);
-        combatEventPort.onEvent(new CombatEvent.FightEnd(elapsedMs, false));
+        logger.info("[Ingestion] fight ended, elapsed={}ms", elapsedMs);
+
+        try {
+            combatEventPort.onEvent(new CombatEvent.FightEnd(elapsedMs, false));
+        } catch (Exception e) {
+            logger.error("[Ingestion] error sending FightEnd event: {}", e.getMessage(), e);
+        }
+
+        // 상태 초기화
         fightStarted = false;
         fightStartInstant = null;
         lastDamageAt = null;
         lastEventInstant = null;
-        currentPlayerId = 0;
-        currentPlayerName = "YOU";
+        deadPlayers.clear();
+        // currentPlayerId, currentPlayerName은 유지 (다음 전투에서도 사용)
     }
 
     /** TickDriver에서 쓸 수 있게 "지금 전투 기준 경과 ms" 제공.
@@ -90,6 +117,13 @@ public final class ActIngestionService {
         }
 
         if (line instanceof ZoneChanged z) {
+            // Zone 변경 시 전투 중이면 자동 종료
+            if (fightStarted) {
+                logger.info("[Ingestion] Zone changed during combat ({}→{}), ending fight",
+                        currentZoneName, z.zoneName());
+                endFight();
+            }
+
             this.currentZoneId = z.zoneId();
             this.currentZoneName = z.zoneName();
             logger.info("[Ingestion] ZoneChanged: id={} name={}", z.zoneId(), z.zoneName());
@@ -99,27 +133,67 @@ public final class ActIngestionService {
         if (line instanceof PrimaryPlayerChanged p) {
             this.currentPlayerId = p.playerId();
             this.currentPlayerName = p.playerName();
+            // jobId는 CombatantAdded에서 설정됨
+
+            // 엔진에 현재 플레이어 ID 전달 (개인 페이스 비교용)
+            combatEventPort.setCurrentPlayerId(new ActorId(p.playerId()));
+            logger.info("[Ingestion] current player set: id={} name={}", Long.toHexString(p.playerId()), p.playerName());
+            return;
+        }
+
+        if (line instanceof PartyList party) {
+            // ACT PartyList로부터 실제 파티원 목록 업데이트
+            partyMemberIds.clear();
+            partyMemberIds.addAll(party.partyMemberIds());
+            logger.info("[Ingestion] PartyList received: {} members: {}",
+                    partyMemberIds.size(),
+                    partyMemberIds.stream()
+                            .map(id -> Long.toHexString(id))
+                            .toList());
             return;
         }
 
         if (line instanceof CombatantAdded c) {
-            logger.info("[Ingestion] CombatantAdded: name={}(id={}) ownerId={} rawLine={}",
-                    c.name(), Long.toHexString(c.id()), Long.toHexString(c.ownerId()), c.rawLine());
-            if (c.ownerId() != 0) ownerByCombatantId.put(c.id(), c.ownerId());
+            logger.info("[Ingestion] CombatantAdded: name={}(id={}) jobId={} ownerId={} rawLine={}",
+                    c.name(), Long.toHexString(c.id()), Integer.toHexString(c.jobId()),
+                    Long.toHexString(c.ownerId()), c.rawLine());
+
+            // 펫/소환수 소유자 추적
+            if (c.ownerId() != 0) {
+                ownerByCombatantId.put(c.id(), c.ownerId());
+                // 엔진에도 owner 정보 전달
+                combatService.setOwner(new ActorId(c.id()), new ActorId(c.ownerId()));
+            }
+
+            // 파티원 정보 저장 (PC만, 실제 파티원 여부는 데미지 발생 시 확인)
+            if (isPlayerCharacter(c.id())) {
+                jobIdByActorId.put(c.id(), c.jobId());  // 직업 저장
+                combatService.setJobId(new ActorId(c.id()), c.jobId());  // 엔진에 직업 정보 전달
+
+                // 본인이면 currentPlayerJobId 저장
+                if (c.id() == currentPlayerId || c.name().equals(currentPlayerName)) {
+                    currentPlayerJobId = c.jobId();
+                    logger.info("[Ingestion] CURRENT PLAYER detected: {}(id={}) jobId={} ({})",
+                            c.name(), Long.toHexString(c.id()),
+                            Integer.toHexString(c.jobId()),
+                            FfxivJobMapper.toKoreanName(c.jobId()));
+                }
+
+            }
             return;
         }
 
         if (line instanceof NetworkAbilityRaw a) {
             receivedAbilityCount++;
-            boolean isYou = isYouActor(a);
+            boolean isParty = isPartyMember(a);
             if (a.damage() <= 0) zeroDamageCount++;
-            if (a.damage() > 0 && !isYou) filteredByYouCount++;
+            if (a.damage() > 0 && !isParty) filteredByYouCount++;
 
-            logger.info("[Ingestion] NetworkAbility #{}: actor={}(id={}) skill={}({}) damage={} isYou={} | stats: recv={} emit={} filtered={} zero={}",
+            logger.info("[Ingestion] NetworkAbility #{}: actor={}(id={}) skill={}({}) damage={} isParty={} | stats: recv={} emit={} filtered={} zero={}",
                     receivedAbilityCount,
                     a.actorName(), Long.toHexString(a.actorId()),
                     a.skillName(), Integer.toHexString(a.skillId()),
-                    a.damage(), isYou,
+                    a.damage(), isParty,
                     receivedAbilityCount, emittedDamageCount, filteredByYouCount, zeroDamageCount);
             if (a.damage() > 0) {
                 emitDamage(a);
@@ -154,18 +228,60 @@ public final class ActIngestionService {
                     new ActorId(b.targetId()),
                     new BuffId(b.statusId())
             ));
+            return;
+        }
+
+        if (line instanceof NetworkDeath d) {
+            if (!fightStarted) return;
+
+            long tsMs = toElapsedMs(d.ts());
+
+            // 파티원 사망 추적
+            if (partyMemberIds.contains(d.targetId())) {
+                deadPlayers.add(d.targetId());
+                logger.info("[Ingestion] Party member died: {}(id={}) | dead={}/{} party members",
+                        d.targetName(), Long.toHexString(d.targetId()),
+                        deadPlayers.size(), partyMemberIds.size());
+
+                // 엔진에 사망 이벤트 전달
+                combatEventPort.onEvent(new CombatEvent.ActorDeath(
+                        tsMs,
+                        new ActorId(d.targetId()),
+                        d.targetName()
+                ));
+
+                // 전멸 체크
+                if (deadPlayers.size() == partyMemberIds.size() && partyMemberIds.size() > 0) {
+                    logger.info("[Ingestion] PARTY WIPE! Ending fight.");
+                    endFight();
+                }
+            }
         }
     }
 
     private void emitDamage(NetworkAbilityRaw a) {
-        // v1: YOU만 우선 처리(원하면 이 조건 제거해서 파티 전체로 확장)
-        if (!isYouActor(a)) return;
+        // 파티원만 처리 (본인 + 파티원 전체)
+        if (!isPartyMember(a)) return;
+
+        // 던전/레이드 또는 나무인형 전투만 허용
+        if (!fightStarted && !isValidCombatZone(a)) {
+            return;
+        }
 
         ensureFightStarted(a.ts());
         lastDamageAt = a.ts();
 
         long tsMs = Duration.between(fightStartInstant, a.ts()).toMillis();
         if (tsMs < 0) tsMs = 0;
+
+        // 처음 보는 파티원이면 ActorJoined 이벤트 먼저 전송
+        boolean isNewPartyMember = partyMemberIds.add(a.actorId());
+        if (isNewPartyMember) {
+            combatEventPort.onEvent(new CombatEvent.ActorJoined(
+                    tsMs, new ActorId(a.actorId()), a.actorName()));
+            logger.info("[Ingestion] Party member joined: {}(id={}) | total party size={}",
+                    a.actorName(), Long.toHexString(a.actorId()), partyMemberIds.size());
+        }
 
         DamageType damageType = mapDamageTypeV1(a);
 
@@ -197,25 +313,47 @@ public final class ActIngestionService {
         if (fightStarted) return;
         fightStarted = true;
         fightStartInstant = firstEventTs;
-        logger.info("[Ingestion] fight started at {} zone={} zoneId={}", firstEventTs, currentZoneName, currentZoneId);
-        combatEventPort.onEvent(new CombatEvent.FightStart(0L, currentZoneName, currentZoneId));
+        deadPlayers.clear();  // 새 전투 시작 시 사망자 목록 초기화
+        logger.info("[Ingestion] fight started at {} zone={} zoneId={} playerJobId={} partySize={}",
+                firstEventTs, currentZoneName, currentZoneId,
+                Integer.toHexString(currentPlayerJobId), partyMemberIds.size());
+        combatEventPort.onEvent(new CombatEvent.FightStart(0L, currentZoneName, currentZoneId, currentPlayerJobId));
     }
 
-    private boolean isYouActor(NetworkAbilityRaw a) {
-        // PrimaryPlayerChanged를 아직 못 받았으면 첫 PC 액터를 자동 감지
-        if (currentPlayerId == 0 && isPlayerCharacter(a.actorId())) {
-            currentPlayerId = a.actorId();
-            currentPlayerName = a.actorName();
-            logger.info("[Ingestion] auto-detected player: {}(id={})",
-                    currentPlayerName, Long.toHexString(currentPlayerId));
+    /**
+     * 유효한 전투 zone인지 확인.
+     * 던전/레이드 zone이거나, 타겟이 나무인형(훈련용 더미)이면 true.
+     */
+    private boolean isValidCombatZone(NetworkAbilityRaw a) {
+        // 1. 던전/레이드 zone인지 확인 (FflogsZoneLookup에 등록된 zone)
+        if (fflogsZoneLookup.resolve(currentZoneId).isPresent()) {
+            return true;
         }
 
-        if (currentPlayerId != 0) {
-            if (a.actorId() == currentPlayerId) return true;
-            Long owner = ownerByCombatantId.get(a.actorId());
-            if (owner != null && owner == currentPlayerId) return true;
+        // 2. 타겟이 나무인형이면 허용 (훈련용 더미)
+        if (a.targetName() != null && a.targetName().contains("나무인형")) {
+            return true;
         }
-        if (a.actorName() != null && a.actorName().equals(currentPlayerName)) return true;
+
+        return false;
+    }
+
+    /**
+     * 액터가 파티원(또는 파티원의 펫)인지 확인.
+     * PartyList 로그로부터 받은 실제 파티원 목록 기반.
+     */
+    private boolean isPartyMember(NetworkAbilityRaw a) {
+        // 파티원 직접 확인
+        if (partyMemberIds.contains(a.actorId())) {
+            return true;
+        }
+
+        // 펫/소환수의 소유자가 파티원인지 확인
+        Long owner = ownerByCombatantId.get(a.actorId());
+        if (owner != null && partyMemberIds.contains(owner)) {
+            return true;
+        }
+
         return false;
     }
 
@@ -226,6 +364,7 @@ public final class ActIngestionService {
     private static boolean isPlayerCharacter(long actorId) {
         return actorId >= 0x10000000L && actorId < 0x20000000L;
     }
+
 
     private long toElapsedMs(Instant eventTs) {
         if (fightStartInstant == null) return 0;

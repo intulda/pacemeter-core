@@ -7,6 +7,7 @@ import com.bohouse.pacemeter.core.engine.CombatEngine;
 import com.bohouse.pacemeter.core.engine.EngineResult;
 import com.bohouse.pacemeter.core.estimator.PaceProfile;
 import com.bohouse.pacemeter.core.event.CombatEvent;
+import com.bohouse.pacemeter.core.model.ActorId;
 
 /**
  * 애플리케이션 서비스: 코어 엔진과 외부 어댑터를 연결하는 중간 다리 역할.
@@ -45,9 +46,21 @@ public class CombatService implements CombatEventPort {
     public EngineResult onEvent(CombatEvent event) {
         // 전투가 시작되면, 해당 보스에 맞는 페이스 프로필을 찾아서 엔진에 세팅
         if (event instanceof CombatEvent.FightStart fightStart) {
-            PaceProfile profile = paceProfileProvider.findProfile(fightStart.fightName(), fightStart.zoneId())
-                    .orElse(PaceProfile.NONE);
-            engine.setPaceProfile(profile);
+            // 파티 전체 페이스 프로필 (직업 무관, 파티 타임라인)
+            PaceProfile partyProfile = paceProfileProvider.findProfile(
+                    fightStart.fightName(),
+                    fightStart.zoneId(),
+                    0  // 전체 직업
+            ).orElse(PaceProfile.NONE);
+
+            // 개인 직업별 페이스 프로필 (개인 타임라인)
+            PaceProfile individualProfile = paceProfileProvider.findIndividualProfile(
+                    fightStart.fightName(),
+                    fightStart.zoneId(),
+                    fightStart.playerJobId()  // 현재 플레이어 직업
+            ).orElse(PaceProfile.NONE);
+
+            engine.setProfiles(partyProfile, individualProfile);
         }
 
         // 코어 엔진에 이벤트 전달 → 상태 업데이트 + (틱이면) 스냅샷 생성
@@ -57,5 +70,29 @@ public class CombatService implements CombatEventPort {
         result.snapshot().ifPresent(snapshotPublisher::publish);
 
         return result;
+    }
+
+    /**
+     * 현재 플레이어 ID를 설정한다.
+     * ActIngestionService가 ChangePrimaryPlayer를 받았을 때 호출한다.
+     */
+    public void setCurrentPlayerId(ActorId playerId) {
+        engine.setCurrentPlayerId(playerId);
+    }
+
+    /**
+     * 특정 액터의 직업 ID를 설정한다.
+     * ActIngestionService가 CombatantAdded를 받았을 때 호출한다.
+     */
+    public void setJobId(ActorId actorId, int jobId) {
+        engine.setJobId(actorId, jobId);
+    }
+
+    /**
+     * 펫/소환수의 주인을 설정한다.
+     * ActIngestionService가 CombatantAdded를 받았을 때 호출한다.
+     */
+    public void setOwner(ActorId petId, ActorId ownerId) {
+        engine.setOwner(petId, ownerId);
     }
 }

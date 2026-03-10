@@ -1,17 +1,19 @@
 package com.bohouse.pacemeter.application;
 
 import com.bohouse.pacemeter.adapter.inbound.actws.*;
+import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
 import com.bohouse.pacemeter.application.port.inbound.CombatEventPort;
 import com.bohouse.pacemeter.core.engine.EngineResult;
 import com.bohouse.pacemeter.core.event.CombatEvent;
 import com.bohouse.pacemeter.core.model.ActorId;
-import com.bohouse.pacemeter.core.model.DamageType;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -23,11 +25,30 @@ class ActIngestionServiceTest {
     @BeforeEach
     void setUp() {
         captured.clear();
-        CombatEventPort port = event -> {
-            captured.add(event);
-            return EngineResult.empty();
+        CombatEventPort port = new CombatEventPort() {
+            @Override
+            public EngineResult onEvent(CombatEvent event) {
+                captured.add(event);
+                return EngineResult.empty();
+            }
+
+            @Override
+            public void setCurrentPlayerId(ActorId playerId) {
+                // Mock: do nothing
+            }
+
+            @Override
+            public void setJobId(ActorId actorId, int jobId) {
+                // Mock: do nothing
+            }
         };
-        service = new ActIngestionService(port);
+        // Mock CombatService (jobId 설정은 무시)
+        CombatService mockCombatService = new CombatService(
+                new com.bohouse.pacemeter.core.engine.CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty()
+        );
+        service = new ActIngestionService(port, mockCombatService, new FflogsZoneLookup(new ObjectMapper()));
     }
 
     private Instant base() {
@@ -35,12 +56,18 @@ class ActIngestionServiceTest {
     }
 
     private void startFight() {
+        // ZoneChanged로 유효한 Zone 설정 (나무인형 Zone으로 설정)
+        service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
+
         // PrimaryPlayerChanged → NetworkAbilityRaw(damage>0) 로 전투 시작
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
 
+        // PartyList 추가 (본인을 파티원으로 등록)
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL)));
+
         Instant t1 = base().plusMillis(100);
         service.onParsed(new NetworkAbilityRaw(t1, 21, 0x1000000AL, "Warrior",
-                0xB4, "Fast Blade", 0x40000001L, "Boss", 5000,
+                0xB4, "Fast Blade", 0x40000001L, "나무인형", 5000,
                 "21|...|raw"));
 
         // 전투가 시작되었는지 확인

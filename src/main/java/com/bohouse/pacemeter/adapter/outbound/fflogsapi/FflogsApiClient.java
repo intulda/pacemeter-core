@@ -39,30 +39,48 @@ public class FflogsApiClient {
      * 해당 인카운터의 rDPS 1위 랭킹 정보를 가져온다.
      *
      * @param encounterId FFLogs 인카운터 ID
+     * @param className   직업 필터 (예: "Dancer"). null이면 전체 직업
      * @return 1위 파이트 정보 (reportCode, reportStartMs, fightStartMs, durationMs)
      */
-    public Optional<TopRanking> fetchTopRanking(int encounterId) {
+    public Optional<TopRanking> fetchTopRanking(int encounterId, String className) {
         Optional<String> token = tokenStore.getToken();
         if (token.isEmpty()) {
             log.warn("[FFLogs] fetchTopRanking skipped - no token");
             return Optional.empty();
         }
 
-        // characterRankings는 JSON scalar를 반환하므로 필드 목록 없이 호출
-        String query = """
-                query($encounterId: Int!) {
-                  worldData {
-                    encounter(id: $encounterId) {
-                      characterRankings(metric: rdps, page: 1)
+        // className이 있으면 직업 필터 추가
+        String query;
+        Map<String, Object> variables;
+
+        if (className != null && !className.isBlank()) {
+            query = """
+                    query($encounterId: Int!, $className: String!) {
+                      worldData {
+                        encounter(id: $encounterId) {
+                          characterRankings(metric: rdps, className: $className, page: 1)
+                        }
+                      }
                     }
-                  }
-                }
-                """;
+                    """;
+            variables = Map.of("encounterId", encounterId, "className", className);
+        } else {
+            query = """
+                    query($encounterId: Int!) {
+                      worldData {
+                        encounter(id: $encounterId) {
+                          characterRankings(metric: rdps, page: 1)
+                        }
+                      }
+                    }
+                    """;
+            variables = Map.of("encounterId", encounterId);
+        }
 
         try {
             byte[] body = objectMapper.writeValueAsBytes(Map.of(
                     "query", query,
-                    "variables", Map.of("encounterId", encounterId)
+                    "variables", variables
             ));
 
             String response = restClient.post()
@@ -89,20 +107,89 @@ public class FflogsApiClient {
             long fightStartMs = r.path("startTime").asLong(0);
             long durationMs = r.path("duration").asLong(0);
             double amount = r.path("amount").asDouble(0);
+            int sourceId = r.path("actorID").asInt(0);  // 🆕 플레이어의 sourceID
 
             if (reportCode.isBlank() || durationMs <= 0) {
                 log.warn("[FFLogs] invalid ranking data: code='{}' duration={}", reportCode, durationMs);
                 return Optional.empty();
             }
 
-            log.info("[FFLogs] top ranking: name={} rdps={} duration={}ms code={}",
-                    r.path("name").asText(), (long) amount, durationMs, reportCode);
+            log.info("[FFLogs] top ranking: name={} rdps={} duration={}ms code={} sourceId={}",
+                    r.path("name").asText(), (long) amount, durationMs, reportCode, sourceId);
 
-            return Optional.of(new TopRanking(reportCode, reportStartMs, fightStartMs, durationMs));
+            return Optional.of(new TopRanking(reportCode, reportStartMs, fightStartMs, durationMs, sourceId));
 
         } catch (Exception e) {
             log.error("[FFLogs] fetchTopRanking failed: {}", e.getMessage());
             return Optional.empty();
+        }
+    }
+
+    /**
+     * 특정 플레이어의 개인 DPS 타임라인을 가져온다.
+     *
+     * @param reportCode    FFLogs 리포트 코드
+     * @param reportStartMs 리포트 시작 epoch ms
+     * @param fightStartMs  파이트 시작 epoch ms
+     * @param durationMs    파이트 지속 시간 ms
+     * @param sourceId      플레이어 sourceID (rankings의 actorID)
+     * @return [[elapsedMs, cumulativeDamage], ...] 개인 누적 DPS 타임라인
+     */
+    public List<long[]> fetchIndividualDamageTimeline(
+            String reportCode, long reportStartMs, long fightStartMs, long durationMs, int sourceId) {
+
+        Optional<String> token = tokenStore.getToken();
+        if (token.isEmpty()) return List.of();
+
+        long queryStart = fightStartMs - reportStartMs;
+        long queryEnd = queryStart + durationMs;
+
+        // sourceID 필터 추가: 특정 플레이어만
+        String query = """
+                query($code: String!, $startTime: Float!, $endTime: Float!, $sourceId: Int!) {
+                  reportData {
+                    report(code: $code) {
+                      graph(
+                        startTime: $startTime
+                        endTime: $endTime
+                        dataType: DamageDone
+                        sourceID: $sourceId
+                      )
+                    }
+                  }
+                }
+                """;
+
+        try {
+            byte[] body = objectMapper.writeValueAsBytes(Map.of(
+                    "query", query,
+                    "variables", Map.of(
+                            "code", reportCode,
+                            "startTime", (double) queryStart,
+                            "endTime", (double) queryEnd,
+                            "sourceId", sourceId
+                    )
+            ));
+
+            String response = restClient.post()
+                    .header("Authorization", "Bearer " + token.get())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode root = objectMapper.readTree(response);
+            checkErrors(root, "fetchIndividualDamageTimeline");
+
+            JsonNode graphNode = root.path("data").path("reportData").path("report").path("graph");
+            List<long[]> timeline = parseToCumulative(graphNode, queryStart);
+
+            log.info("[FFLogs] individual timeline: {} points for sourceId={}", timeline.size(), sourceId);
+            return timeline;
+
+        } catch (Exception e) {
+            log.error("[FFLogs] fetchIndividualDamageTimeline failed: {}", e.getMessage());
+            return List.of();
         }
     }
 
@@ -301,7 +388,7 @@ public class FflogsApiClient {
         }
     }
 
-    public record TopRanking(String reportCode, long reportStartMs, long fightStartMs, long durationMs) {}
+    public record TopRanking(String reportCode, long reportStartMs, long fightStartMs, long durationMs, int sourceId) {}
 
     public record EncounterInfo(int id, String name) {}
 }

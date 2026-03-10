@@ -33,6 +33,9 @@ public final class CombatState {
     /** 캐릭터별 통계. 먼저 등장한 순서대로 저장된다. */
     private final Map<ActorId, ActorStats> actors;
 
+    /** 펫/소환수의 주인 매핑 (펫 ID → 주인 ID) */
+    private final Map<ActorId, ActorId> ownerMap;
+
     /** 최근 DPS 계산에 사용할 슬라이딩 윈도우 크기 (밀리초). 기본 15초. */
     public static final long RECENT_WINDOW_MS = 15_000;
 
@@ -43,6 +46,7 @@ public final class CombatState {
         this.elapsedMs = 0;
         this.totalPartyDamage = 0;
         this.actors = new LinkedHashMap<>();
+        this.ownerMap = new LinkedHashMap<>();
     }
 
     // ========================================================================
@@ -58,12 +62,16 @@ public final class CombatState {
     public boolean reduce(CombatEvent event) {
         if (event instanceof CombatEvent.FightStart e) {
             return reduceFightStart(e);
+        } else if (event instanceof CombatEvent.ActorJoined e) {
+            return reduceActorJoined(e);
         } else if (event instanceof CombatEvent.DamageEvent e) {
             return reduceDamage(e);
         } else if (event instanceof CombatEvent.BuffApply e) {
             return reduceBuffApply(e);
         } else if (event instanceof CombatEvent.BuffRemove e) {
             return reduceBuffRemove(e);
+        } else if (event instanceof CombatEvent.ActorDeath e) {
+            return reduceActorDeath(e);
         } else if (event instanceof CombatEvent.Tick e) {
             return reduceTick(e);
         } else if (event instanceof CombatEvent.FightEnd e) {
@@ -81,6 +89,13 @@ public final class CombatState {
         this.totalPartyDamage = 0;
         this.actors.clear();
         return false;
+    }
+
+    /** 파티원 참여: actors 맵에 등록 (아직 데미지를 주지 않았어도 스냅샷에 포함되도록) */
+    private boolean reduceActorJoined(CombatEvent.ActorJoined e) {
+        this.elapsedMs = e.timestampMs();
+        actors.computeIfAbsent(e.actorId(), id -> new ActorStats(id, e.actorName()));
+        return false;  // 스냅샷 생성 안 함 (Tick에서만 생성)
     }
 
     /** 데미지 이벤트: 해당 캐릭터의 데미지를 누적 */
@@ -134,6 +149,29 @@ public final class CombatState {
     }
 
     /**
+     * 캐릭터 사망: 해당 캐릭터를 사망 상태로 표시.
+     * EncDPS 방식이므로 사망 후에도 전투 시간은 계속 흐르며,
+     * 사망 중에는 데미지를 못 주어 자동으로 DPS가 하락한다.
+     */
+    private boolean reduceActorDeath(CombatEvent.ActorDeath e) {
+        if (phase != Phase.ACTIVE) return false;
+
+        this.elapsedMs = e.timestampMs();
+
+        ActorStats actor = actors.get(e.actorId());
+        if (actor != null) {
+            actor.markDead(e.timestampMs());
+        } else {
+            // 처음 보는 캐릭터면 등록 후 사망 상태로 설정
+            ActorStats newActor = new ActorStats(e.actorId(), e.actorName());
+            newActor.markDead(e.timestampMs());
+            actors.put(e.actorId(), newActor);
+        }
+
+        return false;  // 스냅샷 생성 안 함 (Tick에서만 생성)
+    }
+
+    /**
      * 틱 이벤트: 각 캐릭터의 오래된 데미지 기록을 정리하고, 스냅샷 생성을 요청한다.
      * 약 250ms마다 호출되어 오버레이 화면을 갱신하는 트리거 역할.
      */
@@ -178,5 +216,17 @@ public final class CombatState {
     /** 특정 캐릭터의 통계를 반환. 없으면 null. */
     public ActorStats getActor(ActorId id) {
         return actors.get(id);
+    }
+
+    /** 펫/소환수의 주인 매핑을 반환 (수정 불가) */
+    public Map<ActorId, ActorId> ownerMap() {
+        return Collections.unmodifiableMap(ownerMap);
+    }
+
+    /** 펫/소환수의 주인을 설정한다. ActIngestionService에서 호출. */
+    public void setOwner(ActorId petId, ActorId ownerId) {
+        if (ownerId != null && ownerId.value() != 0) {
+            ownerMap.put(petId, ownerId);
+        }
     }
 }

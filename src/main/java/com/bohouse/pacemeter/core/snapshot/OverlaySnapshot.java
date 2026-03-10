@@ -17,8 +17,8 @@ import java.util.List;
  * @param elapsedFormatted  사람이 읽기 좋은 경과 시간 (예: "2:35")
  * @param totalPartyDamage  파티 전체 누적 데미지 합계
  * @param partyDps          파티 전체 DPS (초당 데미지)
- * @param actors            캐릭터별 상세 데이터 목록 (데미지 높은 순으로 정렬됨)
- * @param paceComparison    레퍼런스 페이스와의 비교 결과 (프로필이 없으면 null)
+ * @param actors            캐릭터별 상세 데이터 목록 (데미지 높은 순, 각자 individualPace 포함)
+ * @param partyPace         파티 전체 vs TOP 파티 비교 (프로필이 없으면 null)
  * @param isFinal           true이면 이 전투의 마지막 스냅샷 (FightEnd 시 생성)
  */
 public record OverlaySnapshot(
@@ -29,7 +29,7 @@ public record OverlaySnapshot(
         long totalPartyDamage,
         double partyDps,
         List<ActorSnapshot> actors,
-        PaceComparison paceComparison,
+        PaceComparison partyPace,
         boolean isFinal
 ) {
 }

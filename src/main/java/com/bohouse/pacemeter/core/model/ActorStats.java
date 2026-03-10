@@ -26,6 +26,12 @@ public final class ActorStats {
     /** 최근 데미지 기록 목록. 슬라이딩 윈도우 DPS 계산에 사용된다. */
     private final List<DamageSample> recentSamples;
 
+    /** 사망 상태: true면 현재 사망 중 */
+    private boolean isDead;
+
+    /** 사망 시각 (전투 시작 기준 밀리초). -1이면 사망하지 않음. */
+    private long deathTimestamp;
+
     public ActorStats(ActorId actorId, String name) {
         this.actorId = actorId;
         this.name = name;
@@ -33,6 +39,8 @@ public final class ActorStats {
         this.hitCount = 0;
         this.activeBuffs = new ArrayList<>();
         this.recentSamples = new ArrayList<>();
+        this.isDead = false;
+        this.deathTimestamp = -1;
     }
 
     /** 스냅샷용 깊은 복사 생성자. 원본을 그대로 두고 사본을 만든다. */
@@ -43,6 +51,8 @@ public final class ActorStats {
         this.hitCount = other.hitCount;
         this.activeBuffs = new ArrayList<>(other.activeBuffs);        // record는 불변이라 얕은 복사로 충분
         this.recentSamples = new ArrayList<>(other.recentSamples);    // record는 불변이라 얕은 복사로 충분
+        this.isDead = other.isDead;
+        this.deathTimestamp = other.deathTimestamp;
     }
 
     /** 데미지를 누적한다. 총 데미지 증가 + 타격 횟수 증가 + 최근 기록에 추가. */
@@ -88,6 +98,18 @@ public final class ActorStats {
         return recentSamples.get(0).timestampMs();
     }
 
+    /** 캐릭터를 사망 상태로 표시한다. */
+    public void markDead(long timestampMs) {
+        this.isDead = true;
+        this.deathTimestamp = timestampMs;
+    }
+
+    /** 캐릭터를 부활 상태로 표시한다 (추후 부활 이벤트 처리용). */
+    public void markResurrected() {
+        this.isDead = false;
+        // deathTimestamp는 유지 (통계용)
+    }
+
     // --- Getter 메서드들 ---
 
     public ActorId actorId() { return actorId; }
@@ -97,6 +119,8 @@ public final class ActorStats {
     public int hitCount() { return hitCount; }
     public List<ActiveBuff> activeBuffs() { return Collections.unmodifiableList(activeBuffs); }
     public List<DamageSample> recentSamples() { return Collections.unmodifiableList(recentSamples); }
+    public boolean isDead() { return isDead; }
+    public long deathTimestamp() { return deathTimestamp; }
 
     /**
      * 슬라이딩 윈도우에 보관되는 데미지 기록 하나.

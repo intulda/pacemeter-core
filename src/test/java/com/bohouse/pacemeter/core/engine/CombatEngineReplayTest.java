@@ -3,6 +3,7 @@ package com.bohouse.pacemeter.core.engine;
 import com.bohouse.pacemeter.core.event.CombatEvent;
 import com.bohouse.pacemeter.core.model.ActorId;
 import com.bohouse.pacemeter.core.model.CombatState;
+import com.bohouse.pacemeter.core.model.DamageType;
 import com.bohouse.pacemeter.core.snapshot.ActorSnapshot;
 import com.bohouse.pacemeter.core.snapshot.OverlaySnapshot;
 import org.junit.jupiter.api.Test;
@@ -96,13 +97,13 @@ class CombatEngineReplayTest {
         // 전투 시작 전에 데미지 이벤트를 보내면 → 무시되어야 함 (IDLE 상태이므로)
         engine.process(new CombatEvent.DamageEvent(
                 100, new ActorId(1), "Test", new ActorId(100), 1, 5000,
-                com.bohouse.pacemeter.core.model.DamageType.DIRECT));
+                DamageType.DIRECT));
 
         assertEquals(CombatState.Phase.IDLE, engine.currentState().phase());
         assertEquals(0, engine.currentState().totalPartyDamage());
 
         // 전투 시작 이벤트를 보내면 → ACTIVE 상태로 전환
-        engine.process(new CombatEvent.FightStart(0, "Test Fight", 0));
+        engine.process(new CombatEvent.FightStart(0, "Test Fight", 0, 0));
         assertEquals(CombatState.Phase.ACTIVE, engine.currentState().phase());
         assertEquals("Test Fight", engine.currentState().fightName());
     }
@@ -110,12 +111,12 @@ class CombatEngineReplayTest {
     @Test
     void tickProducesSnapshot_damageDoesNot() {
         CombatEngine engine = new CombatEngine();
-        engine.process(new CombatEvent.FightStart(0, "Test", 0));
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
 
         // 데미지 이벤트는 스냅샷을 만들지 않는다
         EngineResult damageResult = engine.process(new CombatEvent.DamageEvent(
                 1000, new ActorId(1), "Player", new ActorId(100), 1, 10000,
-                com.bohouse.pacemeter.core.model.DamageType.DIRECT));
+                DamageType.DIRECT));
         assertFalse(damageResult.hasSnapshot());
 
         // 틱 이벤트는 스냅샷을 만든다
@@ -167,36 +168,36 @@ class CombatEngineReplayTest {
                 };
 
         CombatEngine engine = new CombatEngine(linearProfile);
-        engine.process(new CombatEvent.FightStart(0, "Test", 0));
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
 
         // 1초에 15000 데미지 (기준 10000보다 앞서고 있음)
         engine.process(new CombatEvent.DamageEvent(
                 1000, new ActorId(1), "Player", new ActorId(100), 1, 15000,
-                com.bohouse.pacemeter.core.model.DamageType.DIRECT));
+                DamageType.DIRECT));
 
         EngineResult result = engine.process(new CombatEvent.Tick(1000));
         assertTrue(result.hasSnapshot());
 
         OverlaySnapshot snapshot = result.snapshot().get();
-        assertNotNull(snapshot.paceComparison());
-        assertEquals("linear_10k", snapshot.paceComparison().profileLabel());
-        assertEquals(10000, snapshot.paceComparison().expectedCumulativeDamage());
-        assertEquals(15000, snapshot.paceComparison().actualCumulativeDamage());
-        assertEquals(5000, snapshot.paceComparison().deltaDamage());
-        assertTrue(snapshot.paceComparison().deltaPercent() > 0, "페이스보다 앞서야 함");
+        assertNotNull(snapshot.partyPace());
+        assertEquals("linear_10k", snapshot.partyPace().profileLabel());
+        assertEquals(10000, snapshot.partyPace().expectedCumulativeDamage());
+        assertEquals(15000, snapshot.partyPace().actualCumulativeDamage());
+        assertEquals(5000, snapshot.partyPace().deltaDamage());
+        assertTrue(snapshot.partyPace().deltaPercent() > 0, "페이스보다 앞서야 함");
     }
 
     @Test
     void noProfileLoaded_paceComparisonIsNull() {
         CombatEngine engine = new CombatEngine(); // 프로필 없음
-        engine.process(new CombatEvent.FightStart(0, "Test", 0));
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
         engine.process(new CombatEvent.DamageEvent(
                 1000, new ActorId(1), "Player", new ActorId(100), 1, 10000,
-                com.bohouse.pacemeter.core.model.DamageType.DIRECT));
+                DamageType.DIRECT));
 
         EngineResult result = engine.process(new CombatEvent.Tick(1000));
         assertTrue(result.hasSnapshot());
-        assertNull(result.snapshot().get().paceComparison());
+        assertNull(result.snapshot().get().partyPace());
     }
 
     /** 이벤트 리스트를 엔진에 넣고 나온 스냅샷들을 수집하는 헬퍼 메서드 */

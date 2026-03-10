@@ -85,7 +85,8 @@ public final class ReplayEventParser {
             case "FightStart" -> new CombatEvent.FightStart(
                     node.get("timestampMs").asLong(),
                     node.get("fightName").asText(),
-                    node.has("zoneId") ? node.get("zoneId").asInt() : 0
+                    node.has("zoneId") ? node.get("zoneId").asInt() : 0,
+                    node.has("playerJobId") ? node.get("playerJobId").asInt() : 0
             );
 
             case "DamageEvent" -> new CombatEvent.DamageEvent(

@@ -1,5 +1,7 @@
 package com.bohouse.pacemeter.adapter.outbound.overlayws.mvc;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -11,16 +13,19 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class OverlayWsHandler extends TextWebSocketHandler {
+    private static final Logger log = LoggerFactory.getLogger(OverlayWsHandler.class);
     private final Set<WebSocketSession> sessions = ConcurrentHashMap.newKeySet();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         sessions.add(session);
+        log.info("[OverlayWS] client connected: {} (total: {})", session.getId(), sessions.size());
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sessions.remove(session);
+        log.info("[OverlayWS] client disconnected: {} status={} (total: {})", session.getId(), status, sessions.size());
     }
 
     public int sessionCount() {

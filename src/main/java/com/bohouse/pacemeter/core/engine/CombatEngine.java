@@ -3,9 +3,13 @@ package com.bohouse.pacemeter.core.engine;
 import com.bohouse.pacemeter.core.estimator.OnlineEstimator;
 import com.bohouse.pacemeter.core.estimator.PaceProfile;
 import com.bohouse.pacemeter.core.event.CombatEvent;
+import com.bohouse.pacemeter.core.model.ActorId;
 import com.bohouse.pacemeter.core.model.CombatState;
 import com.bohouse.pacemeter.core.snapshot.OverlaySnapshot;
 import com.bohouse.pacemeter.core.snapshot.SnapshotAggregator;
+
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * 전투 엔진 - 이 프로젝트의 핵심 처리기.
@@ -34,18 +38,29 @@ public final class CombatEngine {
 
     private final CombatState state;
     private final SnapshotAggregator aggregator;
-    private PaceProfile paceProfile;
+    private PaceProfile partyProfile;        // 파티 전체 vs TOP 파티
+    private PaceProfile individualProfile;   // 개인 vs 개인 직업 TOP
+    private ActorId currentPlayerId;         // 현재 플레이어 ID
+    private final Map<ActorId, Integer> jobIdMap;  // ActorId → JobID 매핑
 
     /** 페이스 프로필 없이 엔진 생성 */
     public CombatEngine() {
-        this(PaceProfile.NONE);
+        this(PaceProfile.NONE, PaceProfile.NONE);
     }
 
-    /** 페이스 프로필을 지정하여 엔진 생성 */
-    public CombatEngine(PaceProfile paceProfile) {
+    /** 파티 페이스 프로필만 지정하여 엔진 생성 (하위 호환용) */
+    public CombatEngine(PaceProfile partyProfile) {
+        this(partyProfile, PaceProfile.NONE);
+    }
+
+    /** 파티 및 개인 페이스 프로필을 지정하여 엔진 생성 */
+    public CombatEngine(PaceProfile partyProfile, PaceProfile individualProfile) {
         this.state = new CombatState();
         this.aggregator = new SnapshotAggregator(new OnlineEstimator());
-        this.paceProfile = paceProfile;
+        this.partyProfile = partyProfile;
+        this.individualProfile = individualProfile;
+        this.jobIdMap = new HashMap<>();
+        this.currentPlayerId = null;
     }
 
     /**
@@ -59,7 +74,8 @@ public final class CombatEngine {
 
         if (shouldSnapshot) {
             boolean isFinal = event instanceof CombatEvent.FightEnd;
-            OverlaySnapshot snapshot = aggregator.aggregate(state, paceProfile, isFinal);
+            OverlaySnapshot snapshot = aggregator.aggregate(
+                    state, partyProfile, individualProfile, currentPlayerId, isFinal, jobIdMap);
             return EngineResult.withSnapshot(snapshot);
         }
 
@@ -68,11 +84,35 @@ public final class CombatEngine {
 
     /**
      * 페이스 프로필을 교체한다.
-     * 예: 사용자가 "상위 10% 페이스"에서 "상위 1% 페이스"로 변경했을 때.
      * 다음 스냅샷부터 새 프로필이 적용된다.
      */
-    public void setPaceProfile(PaceProfile profile) {
-        this.paceProfile = (profile != null) ? profile : PaceProfile.NONE;
+    public void setProfiles(PaceProfile partyProfile, PaceProfile individualProfile) {
+        this.partyProfile = (partyProfile != null) ? partyProfile : PaceProfile.NONE;
+        this.individualProfile = (individualProfile != null) ? individualProfile : PaceProfile.NONE;
+    }
+
+    /**
+     * 현재 플레이어 ID를 설정한다.
+     * ActIngestionService가 ChangePrimaryPlayer를 받았을 때 호출한다.
+     */
+    public void setCurrentPlayerId(ActorId playerId) {
+        this.currentPlayerId = playerId;
+    }
+
+    /**
+     * 특정 액터의 직업 ID를 설정한다.
+     * ActIngestionService가 CombatantAdded를 받았을 때 호출한다.
+     */
+    public void setJobId(ActorId actorId, int jobId) {
+        jobIdMap.put(actorId, jobId);
+    }
+
+    /**
+     * 펫/소환수의 주인을 설정한다.
+     * ActIngestionService가 CombatantAdded를 받았을 때 호출한다.
+     */
+    public void setOwner(ActorId petId, ActorId ownerId) {
+        state.setOwner(petId, ownerId);
     }
 
     /** 현재 전투 상태를 반환한다 (테스트/디버깅용). */

@@ -13,7 +13,7 @@ import com.bohouse.pacemeter.core.model.DamageType;
  * 모든 이벤트는 {@code timestampMs}(전투 시작 이후 경과 밀리초)를 가진다.
  * 예: 전투 시작 3초 후의 이벤트라면 timestampMs = 3000
  *
- * sealed 인터페이스이므로, 아래 6가지 타입만 존재할 수 있다.
+ * sealed 인터페이스이므로, 아래 7가지 타입만 존재할 수 있다.
  * 이렇게 하면 새 이벤트 타입을 빠뜨리지 않고 처리할 수 있다.
  *
  * 전제 조건:
@@ -31,8 +31,19 @@ public sealed interface CombatEvent {
      * @param timestampMs 항상 0 (전투가 시작되는 시점이 기준점)
      * @param fightName   보스/콘텐츠 이름 (예: "절 알렉산더", "절 미래지")
      * @param zoneId      ACT ZoneChanged의 zone ID (FFLogs zone ID와 동일)
+     * @param playerJobId 본인(현재 플레이어)의 직업 ID (0이면 미확정)
      */
-    record FightStart(long timestampMs, String fightName, int zoneId) implements CombatEvent {}
+    record FightStart(long timestampMs, String fightName, int zoneId, int playerJobId) implements CombatEvent {}
+
+    /**
+     * 파티원이 전투에 참여한 이벤트 (CombatantAdded로부터 변환).
+     * 전투 시작 전이나 직후에 발생하여, 아직 데미지를 주지 않은 파티원도 오버레이에 표시되게 한다.
+     *
+     * @param timestampMs 전투 시작 기준 경과 시간 (밀리초), 전투 시작 전이면 0
+     * @param actorId     참여한 캐릭터 ID
+     * @param actorName   참여한 캐릭터 이름
+     */
+    record ActorJoined(long timestampMs, ActorId actorId, String actorName) implements CombatEvent {}
 
     /**
      * 누군가가 데미지를 준 이벤트.
@@ -101,6 +112,18 @@ public sealed interface CombatEvent {
      * @param timestampMs 전투 시작 기준 경과 시간 (밀리초)
      */
     record Tick(long timestampMs) implements CombatEvent {}
+
+    /**
+     * 캐릭터 사망 이벤트.
+     *
+     * EncDPS 방식으로 동작: 사망 후에도 전투 시간은 계속 흐르므로,
+     * 사망 중에는 데미지를 못 주어 자동으로 DPS가 하락한다.
+     *
+     * @param timestampMs 전투 시작 기준 경과 시간 (밀리초)
+     * @param actorId     사망한 캐릭터 ID
+     * @param actorName   사망한 캐릭터 이름
+     */
+    record ActorDeath(long timestampMs, ActorId actorId, String actorName) implements CombatEvent {}
 
     /**
      * 전투 종료를 알리는 이벤트.

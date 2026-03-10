@@ -2,6 +2,7 @@ package com.bohouse.pacemeter.application.port.inbound;
 
 import com.bohouse.pacemeter.core.engine.EngineResult;
 import com.bohouse.pacemeter.core.event.CombatEvent;
+import com.bohouse.pacemeter.core.model.ActorId;
 
 /**
  * 인바운드 포트: 외부에서 전투 이벤트를 엔진에 전달하는 입구.
@@ -27,4 +28,16 @@ public interface CombatEventPort {
      * @return 엔진 처리 결과 (스냅샷이 포함되어 있을 수 있음)
      */
     EngineResult onEvent(CombatEvent event);
+
+    /**
+     * 현재 플레이어 ID를 설정한다.
+     * ActIngestionService가 ChangePrimaryPlayer를 받았을 때 호출한다.
+     */
+    void setCurrentPlayerId(ActorId playerId);
+
+    /**
+     * 특정 액터의 직업 ID를 설정한다.
+     * ActIngestionService가 CombatantAdded를 받았을 때 호출한다.
+     */
+    void setJobId(ActorId actorId, int jobId);
 }

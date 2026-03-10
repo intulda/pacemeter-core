@@ -41,6 +41,11 @@ public class FflogsPaceProfileProvider implements PaceProfileProvider {
 
     @Override
     public Optional<PaceProfile> findProfile(String fightName, int actTerritoryId) {
+        return findProfile(fightName, actTerritoryId, 0);  // jobId=0 (전체 직업)
+    }
+
+    @Override
+    public Optional<PaceProfile> findProfile(String fightName, int actTerritoryId, int playerJobId) {
         PaceProfile cached = cache.get(actTerritoryId);
         if (cached != null) {
             log.info("[FFLogs] cache hit for territory={} ({})", actTerritoryId, fightName);
@@ -72,7 +77,19 @@ public class FflogsPaceProfileProvider implements PaceProfileProvider {
         FflogsApiClient.EncounterInfo encounter = encounters.get(idx);
         log.info("[FFLogs] encounter: id={} name='{}'", encounter.id(), encounter.name());
 
-        Optional<FflogsApiClient.TopRanking> ranking = apiClient.fetchTopRanking(encounter.id());
+        // 직업 필터 적용
+        String className = (playerJobId > 0)
+                ? FfxivJobMapper.toClassName(playerJobId).orElse(null)
+                : null;
+
+        if (className != null) {
+            log.info("[FFLogs] fetching TOP ranking for job: {} ({})",
+                    className, FfxivJobMapper.toKoreanName(playerJobId));
+        } else {
+            log.info("[FFLogs] fetching TOP ranking for ALL jobs (playerJobId={})", playerJobId);
+        }
+
+        Optional<FflogsApiClient.TopRanking> ranking = apiClient.fetchTopRanking(encounter.id(), className);
         if (ranking.isEmpty()) {
             log.warn("[FFLogs] no ranking for encounterId={} → PaceProfile.NONE", encounter.id());
             cache.put(actTerritoryId, PaceProfile.NONE);
@@ -80,21 +97,97 @@ public class FflogsPaceProfileProvider implements PaceProfileProvider {
         }
 
         FflogsApiClient.TopRanking r = ranking.get();
-        List<long[]> timeline = apiClient.fetchCumulativeDamageTimeline(
+
+        // 파티 전체 타임라인 (파티 비교용)
+        List<long[]> partyTimeline = apiClient.fetchCumulativeDamageTimeline(
                 r.reportCode(), r.reportStartMs(), r.fightStartMs(), r.durationMs());
 
-        if (timeline.size() < 2) {
-            log.warn("[FFLogs] timeline too short ({} points) → PaceProfile.NONE", timeline.size());
+        if (partyTimeline.size() < 2) {
+            log.warn("[FFLogs] party timeline too short ({} points) → PaceProfile.NONE", partyTimeline.size());
             cache.put(actTerritoryId, PaceProfile.NONE);
             return Optional.of(PaceProfile.NONE);
         }
 
-        String label = "FFLogs #1 rDPS: " + encounter.name();
-        TimelinePaceProfile profile = buildProfile(label, r.durationMs(), timeline);
+        String label = className != null
+                ? "FFLogs #1 " + className + ": " + encounter.name()
+                : "FFLogs #1 rDPS: " + encounter.name();
+
+        TimelinePaceProfile profile = buildProfile(label, r.durationMs(), partyTimeline);
         log.info("[FFLogs] PaceProfile built: label='{}' points={} duration={}ms",
                 profile.label(), profile.pointCount(), r.durationMs());
 
         cache.put(actTerritoryId, profile);
+        return Optional.of(profile);
+    }
+
+    /**
+     * 개인 직업별 TOP의 개인 DPS 타임라인 프로필을 찾는다.
+     *
+     * @param fightName      보스 이름
+     * @param actTerritoryId 존 ID
+     * @param playerJobId    플레이어 직업 ID
+     * @return 개인 타임라인 프로필 (없으면 NONE)
+     */
+    public Optional<PaceProfile> findIndividualProfile(String fightName, int actTerritoryId, int playerJobId) {
+        if (playerJobId == 0) {
+            return Optional.of(PaceProfile.NONE);
+        }
+
+        // 캐시 키: territoryId + jobId
+        int cacheKey = actTerritoryId * 1000 + playerJobId;
+        PaceProfile cached = cache.get(cacheKey);
+        if (cached != null) {
+            log.info("[FFLogs] individual cache hit for territory={} jobId={}", actTerritoryId, playerJobId);
+            return Optional.of(cached);
+        }
+
+        Optional<FflogsZoneLookup.ZoneLookupResult> resolved = zoneLookup.resolve(actTerritoryId);
+        if (resolved.isEmpty()) {
+            cache.put(cacheKey, PaceProfile.NONE);
+            return Optional.of(PaceProfile.NONE);
+        }
+
+        FflogsZoneLookup.ZoneLookupResult zone = resolved.get();
+        List<FflogsApiClient.EncounterInfo> encounters = apiClient.fetchZoneEncounters(zone.fflogsZoneId());
+        if (encounters.isEmpty()) {
+            cache.put(cacheKey, PaceProfile.NONE);
+            return Optional.of(PaceProfile.NONE);
+        }
+
+        int idx = Math.min(zone.encounterIndex(), encounters.size() - 1);
+        FflogsApiClient.EncounterInfo encounter = encounters.get(idx);
+
+        String className = FfxivJobMapper.toClassName(playerJobId).orElse(null);
+        if (className == null) {
+            cache.put(cacheKey, PaceProfile.NONE);
+            return Optional.of(PaceProfile.NONE);
+        }
+
+        log.info("[FFLogs] fetching individual profile for {} ({})", className, FfxivJobMapper.toKoreanName(playerJobId));
+
+        Optional<FflogsApiClient.TopRanking> ranking = apiClient.fetchTopRanking(encounter.id(), className);
+        if (ranking.isEmpty()) {
+            cache.put(cacheKey, PaceProfile.NONE);
+            return Optional.of(PaceProfile.NONE);
+        }
+
+        FflogsApiClient.TopRanking r = ranking.get();
+
+        // 개인 타임라인 (sourceID 필터)
+        List<long[]> individualTimeline = apiClient.fetchIndividualDamageTimeline(
+                r.reportCode(), r.reportStartMs(), r.fightStartMs(), r.durationMs(), r.sourceId());
+
+        if (individualTimeline.size() < 2) {
+            log.warn("[FFLogs] individual timeline too short ({} points)", individualTimeline.size());
+            cache.put(cacheKey, PaceProfile.NONE);
+            return Optional.of(PaceProfile.NONE);
+        }
+
+        String label = "Individual " + className + " TOP";
+        TimelinePaceProfile profile = buildProfile(label, r.durationMs(), individualTimeline);
+        log.info("[FFLogs] Individual PaceProfile built: {} points", profile.pointCount());
+
+        cache.put(cacheKey, profile);
         return Optional.of(profile);
     }
 
