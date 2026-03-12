@@ -19,7 +19,7 @@ import java.util.*;
 public final class ActIngestionService {
 
     private static final Logger logger = LoggerFactory.getLogger(ActIngestionService.class);
-    private static final long BOSS_MIN_MAX_HP = 50_000_000L;
+    private static final long BOSS_MIN_MAX_HP = 10_000_000L;
 
     private final CombatEventPort combatEventPort;
     private final CombatService combatService;
@@ -198,7 +198,9 @@ public final class ActIngestionService {
 
                 // 본인이면 currentPlayerJobId 저장
                 if (c.id() == currentPlayerId || c.name().equals(currentPlayerName)) {
+                    currentPlayerId = c.id();
                     currentPlayerJobId = c.jobId();
+                    combatEventPort.setCurrentPlayerId(new ActorId(c.id()));
                     logger.info("[Ingestion] CURRENT PLAYER detected: {}(id={}) jobId={} ({})",
                             c.name(), Long.toHexString(c.id()),
                             Integer.toHexString(c.jobId()),

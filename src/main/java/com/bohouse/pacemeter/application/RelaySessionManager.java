@@ -123,7 +123,7 @@ public class RelaySessionManager {
                     }
                 }
                 case "changePrimaryPlayer" -> {
-                    if (event.ts() == null || event.playerName() == null) return;
+                    if (event.ts() == null || event.playerName() == null || event.playerId() == null) return;
                     ingestion.onParsed(new PrimaryPlayerChanged(
                             Instant.parse(event.ts()),
                             event.playerId(),
@@ -131,7 +131,7 @@ public class RelaySessionManager {
                     ));
                 }
                 case "changeZone" -> {
-                    if (event.ts() == null || event.zoneName() == null) return;
+                    if (event.ts() == null || event.zoneName() == null || event.zoneId() == null) return;
                     ingestion.onParsed(new ZoneChanged(
                             Instant.parse(event.ts()),
                             event.zoneId(),
@@ -139,19 +139,22 @@ public class RelaySessionManager {
                     ));
                 }
                 case "combatantAdded" -> {
-                    if (event.ts() == null || event.name() == null) return;
+                    if (event.ts() == null || event.actorId() == null || event.name() == null) return;
                     ingestion.onParsed(new CombatantAdded(
                             Instant.parse(event.ts()),
                             event.actorId(),
                             event.name(),
-                            event.jobId(),
+                            valueOrDefault(event.jobId(), 0),
                             0L,
-                            event.currentHp(),
-                            event.maxHp(),
+                            valueOrDefault(event.currentHp(), 0L),
+                            valueOrDefault(event.maxHp(), 0L),
                             ""
                     ));
                 }
-                case "combatDataReady" -> ingestion.onCombatDataReady(event.memberCount());
+                case "combatDataReady" -> {
+                    if (event.memberCount() == null) return;
+                    ingestion.onCombatDataReady(event.memberCount());
+                }
                 default -> {
                 }
             }
@@ -162,19 +165,27 @@ public class RelaySessionManager {
             String type,
             String ts,
             String rawLine,
-            long playerId,
+            Long playerId,
             String playerName,
-            int zoneId,
+            Integer zoneId,
             String zoneName,
-            long actorId,
+            Long actorId,
             String name,
-            int jobId,
-            long currentHp,
-            long maxHp,
-            int memberCount
+            Integer jobId,
+            Long currentHp,
+            Long maxHp,
+            Integer memberCount
     ) {
     }
 
     private record Envelope(String type, Object snapshot) {
+    }
+
+    private static int valueOrDefault(Integer value, int defaultValue) {
+        return value != null ? value : defaultValue;
+    }
+
+    private static long valueOrDefault(Long value, long defaultValue) {
+        return value != null ? value : defaultValue;
     }
 }

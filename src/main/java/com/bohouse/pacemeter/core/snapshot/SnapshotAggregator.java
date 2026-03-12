@@ -129,6 +129,9 @@ public final class SnapshotAggregator {
 
         // 데미지 높은 순으로 정렬 (1등이 맨 위에 오도록)
         actorSnapshots.sort(Comparator.comparingLong(ActorSnapshot::totalDamage).reversed());
+        double partyRdps = actorSnapshots.stream()
+                .mapToDouble(ActorSnapshot::onlineRdps)
+                .sum();
 
         // 파티 페이스 비교 결과 생성
         PaceComparison partyPace = buildPaceComparison(partyProfile, elapsedMs, totalPartyDamage, partyDps);
@@ -141,6 +144,7 @@ public final class SnapshotAggregator {
                 formatElapsed(elapsedMs),
                 totalPartyDamage,
                 partyDps,
+                partyRdps,
                 List.copyOf(actorSnapshots),
                 partyPace,
                 clearability,

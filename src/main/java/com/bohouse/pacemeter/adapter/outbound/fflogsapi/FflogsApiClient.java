@@ -29,7 +29,7 @@ public class FflogsApiClient {
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
 
-    @Value("${pacemeter.fflogs.partition:KR}")
+    @Value("${pacemeter.fflogs.partition:}")
     private String defaultPartition;
 
     public FflogsApiClient(FflogsTokenStore tokenStore, ObjectMapper objectMapper) {
@@ -56,7 +56,9 @@ public class FflogsApiClient {
         String query;
         Map<String, Object> variables;
 
-        if (className != null && !className.isBlank()) {
+        String partition = effectivePartition();
+
+        if (className != null && !className.isBlank() && partition != null) {
             query = """
                     query($encounterId: Int!, $className: String!, $partition: String!) {
                       worldData {
@@ -69,9 +71,23 @@ public class FflogsApiClient {
             variables = Map.of(
                     "encounterId", encounterId,
                     "className", className,
-                    "partition", effectivePartition()
+                    "partition", partition
             );
-        } else {
+        } else if (className != null && !className.isBlank()) {
+            query = """
+                    query($encounterId: Int!, $className: String!) {
+                      worldData {
+                        encounter(id: $encounterId) {
+                          characterRankings(metric: rdps, className: $className, page: 1)
+                        }
+                      }
+                    }
+                    """;
+            variables = Map.of(
+                    "encounterId", encounterId,
+                    "className", className
+            );
+        } else if (partition != null) {
             query = """
                     query($encounterId: Int!, $partition: String!) {
                       worldData {
@@ -83,7 +99,20 @@ public class FflogsApiClient {
                     """;
             variables = Map.of(
                     "encounterId", encounterId,
-                    "partition", effectivePartition()
+                    "partition", partition
+            );
+        } else {
+            query = """
+                    query($encounterId: Int!) {
+                      worldData {
+                        encounter(id: $encounterId) {
+                          characterRankings(metric: rdps, page: 1)
+                        }
+                      }
+                    }
+                    """;
+            variables = Map.of(
+                    "encounterId", encounterId
             );
         }
 
@@ -127,7 +156,7 @@ public class FflogsApiClient {
             }
 
             log.info("[FFLogs] top ranking: name={} rdps={} duration={}ms code={} sourceId={} partition={}",
-                    playerName, (long) amount, durationMs, reportCode, sourceId, effectivePartition());
+                    playerName, (long) amount, durationMs, reportCode, sourceId, partition != null ? partition : "GLOBAL");
 
             return Optional.of(new TopRanking(reportCode, reportStartMs, fightStartMs, durationMs, sourceId, playerName));
 
@@ -500,9 +529,131 @@ public class FflogsApiClient {
         }
     }
 
+    public List<TopRanking> fetchTopRankings(int encounterId, String className, int limit) {
+        Optional<TopRanking> first = fetchTopRanking(encounterId, className);
+        if (first.isEmpty()) {
+            return List.of();
+        }
+
+        Optional<String> token = tokenStore.getToken();
+        if (token.isEmpty()) {
+            return List.of(first.get());
+        }
+
+        String query;
+        Map<String, Object> variables;
+        String partition = effectivePartition();
+
+        if (className != null && !className.isBlank() && partition != null) {
+            query = """
+                    query($encounterId: Int!, $className: String!, $partition: String!) {
+                      worldData {
+                        encounter(id: $encounterId) {
+                          characterRankings(metric: rdps, className: $className, partition: $partition, page: 1)
+                        }
+                      }
+                    }
+                    """;
+            variables = Map.of(
+                    "encounterId", encounterId,
+                    "className", className,
+                    "partition", partition
+            );
+        } else if (className != null && !className.isBlank()) {
+            query = """
+                    query($encounterId: Int!, $className: String!) {
+                      worldData {
+                        encounter(id: $encounterId) {
+                          characterRankings(metric: rdps, className: $className, page: 1)
+                        }
+                      }
+                    }
+                    """;
+            variables = Map.of(
+                    "encounterId", encounterId,
+                    "className", className
+            );
+        } else if (partition != null) {
+            query = """
+                    query($encounterId: Int!, $partition: String!) {
+                      worldData {
+                        encounter(id: $encounterId) {
+                          characterRankings(metric: rdps, partition: $partition, page: 1)
+                        }
+                      }
+                    }
+                    """;
+            variables = Map.of(
+                    "encounterId", encounterId,
+                    "partition", partition
+            );
+        } else {
+            query = """
+                    query($encounterId: Int!) {
+                      worldData {
+                        encounter(id: $encounterId) {
+                          characterRankings(metric: rdps, page: 1)
+                        }
+                      }
+                    }
+                    """;
+            variables = Map.of("encounterId", encounterId);
+        }
+
+        try {
+            byte[] body = objectMapper.writeValueAsBytes(Map.of(
+                    "query", query,
+                    "variables", variables
+            ));
+
+            String response = restClient.post()
+                    .header("Authorization", "Bearer " + token.get())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode root = objectMapper.readTree(response);
+            checkErrors(root, "fetchTopRankings");
+
+            JsonNode rankings = root.path("data").path("worldData")
+                    .path("encounter").path("characterRankings").path("rankings");
+
+            if (!rankings.isArray() || rankings.isEmpty()) {
+                return List.of(first.get());
+            }
+
+            List<TopRanking> result = new ArrayList<>();
+            int count = Math.min(Math.max(limit, 1), rankings.size());
+            for (int i = 0; i < count; i++) {
+                JsonNode r = rankings.get(i);
+                String reportCode = r.path("report").path("code").asText("");
+                long reportStartMs = r.path("report").path("startTime").asLong(0);
+                long fightStartMs = r.path("startTime").asLong(0);
+                long durationMs = r.path("duration").asLong(0);
+                double amount = r.path("amount").asDouble(0);
+                String playerName = r.path("name").asText("");
+                int sourceId = r.path("actorID").asInt(0);
+
+                if (reportCode.isBlank() || durationMs <= 0) {
+                    continue;
+                }
+
+                log.info("[FFLogs] top ranking[{}]: name={} rdps={} duration={}ms code={} sourceId={} partition={}",
+                        i, playerName, (long) amount, durationMs, reportCode, sourceId, partition != null ? partition : "GLOBAL");
+                result.add(new TopRanking(reportCode, reportStartMs, fightStartMs, durationMs, sourceId, playerName));
+            }
+
+            return result.isEmpty() ? List.of(first.get()) : result;
+        } catch (Exception e) {
+            log.error("[FFLogs] fetchTopRankings failed: {}", e.getMessage());
+            return List.of(first.get());
+        }
+    }
+
     private String effectivePartition() {
         if (defaultPartition == null || defaultPartition.isBlank()) {
-            return "KR";
+            return null;
         }
         return defaultPartition;
     }

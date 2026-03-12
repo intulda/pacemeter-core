@@ -9,9 +9,12 @@ public record CombatDebugSnapshot(
         String fightName,
         CombatState.Phase phase,
         long elapsedMs,
+        int territoryId,
         ActorId currentPlayerId,
         ActorDebugEntry currentPlayer,
-        List<ActorDebugEntry> actors
+        List<ActorDebugEntry> actors,
+        BossDebugInfo boss,
+        EnrageDebugInfo enrage
 ) {
     public record ActorDebugEntry(
             ActorId actorId,
@@ -37,6 +40,20 @@ public record CombatDebugSnapshot(
             ActorId sourceId,
             long appliedAtMs,
             long durationMs
+    ) {
+    }
+
+    public record BossDebugInfo(
+            ActorId actorId,
+            String name,
+            long maxHp
+    ) {
+    }
+
+    public record EnrageDebugInfo(
+            double seconds,
+            String confidence,
+            String source
     ) {
     }
 }

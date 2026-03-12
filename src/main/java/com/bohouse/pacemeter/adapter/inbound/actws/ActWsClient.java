@@ -3,6 +3,7 @@ package com.bohouse.pacemeter.adapter.inbound.actws;
 import com.bohouse.pacemeter.application.ActIngestionService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Value;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -33,18 +34,30 @@ public class ActWsClient {
     private final ObjectMapper objectMapper;
     private final ActLineParser parser;
     private final ActIngestionService ingestion;
+    private final boolean directEnabled;
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     private final AtomicInteger retryCount = new AtomicInteger(0);
     private volatile boolean shouldReconnect = true;
 
-    public ActWsClient(ActLineParser parser, ActIngestionService ingestion, ObjectMapper objectMapper) {
+    public ActWsClient(
+            ActLineParser parser,
+            ActIngestionService ingestion,
+            ObjectMapper objectMapper,
+            @Value("${pacemeter.act.direct-enabled:false}") boolean directEnabled
+    ) {
         this.parser = parser;
         this.ingestion = ingestion;
         this.objectMapper = objectMapper;
+        this.directEnabled = directEnabled;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void startConnecting() {
+        if (!directEnabled) {
+            logger.info("[ACT] direct ACT websocket disabled by configuration");
+            shouldReconnect = false;
+            return;
+        }
         logger.info("[ACT] starting connection manager");
         shouldReconnect = true;
         connect();

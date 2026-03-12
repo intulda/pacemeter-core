@@ -29,6 +29,7 @@ public record OverlaySnapshot(
         String elapsedFormatted,
         long totalPartyDamage,
         double partyDps,
+        double partyRdps,
         List<ActorSnapshot> actors,
         PaceComparison partyPace,
         ClearabilityCheck clearability,

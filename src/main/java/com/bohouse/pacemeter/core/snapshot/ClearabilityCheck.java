@@ -14,6 +14,8 @@ public record ClearabilityCheck(
         EnrageTimeProvider.ConfidenceLevel confidence
 ) {
 
+    private static final double NO_KILL_ESTIMATE_PADDING_SECONDS = 1_000_000.0;
+
     public static ClearabilityCheck calculate(
             long bossMaxHp,
             long totalPartyDamage,
@@ -22,10 +24,10 @@ public record ClearabilityCheck(
     ) {
         double elapsedSeconds = elapsedMs / 1000.0;
         double currentDps = elapsedSeconds > 0 ? totalPartyDamage / elapsedSeconds : 0.0;
+        double enrageTimeSeconds = enrageInfo.seconds();
         double estimatedKillTimeSeconds = currentDps > 0
                 ? bossMaxHp / currentDps
-                : Double.POSITIVE_INFINITY;
-        double enrageTimeSeconds = enrageInfo.seconds();
+                : enrageTimeSeconds + NO_KILL_ESTIMATE_PADDING_SECONDS;
         double marginSeconds = enrageTimeSeconds - estimatedKillTimeSeconds;
         double requiredDps = enrageTimeSeconds > 0 ? bossMaxHp / enrageTimeSeconds : 0.0;
 
