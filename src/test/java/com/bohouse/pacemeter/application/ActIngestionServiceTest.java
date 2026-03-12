@@ -3,9 +3,11 @@ package com.bohouse.pacemeter.application;
 import com.bohouse.pacemeter.adapter.inbound.actws.*;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
 import com.bohouse.pacemeter.application.port.inbound.CombatEventPort;
+import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider;
 import com.bohouse.pacemeter.core.engine.EngineResult;
 import com.bohouse.pacemeter.core.event.CombatEvent;
 import com.bohouse.pacemeter.core.model.ActorId;
+import com.bohouse.pacemeter.core.model.DamageType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,7 +48,8 @@ class ActIngestionServiceTest {
         CombatService mockCombatService = new CombatService(
                 new com.bohouse.pacemeter.core.engine.CombatEngine(),
                 snapshot -> {},
-                (name, zone) -> Optional.empty()
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
         );
         service = new ActIngestionService(port, mockCombatService, new FflogsZoneLookup(new ObjectMapper()));
     }
@@ -162,5 +165,156 @@ class ActIngestionServiceTest {
         // fightStartInstant = base+100ms(첫 NetworkAbilityRaw 시점), buffTime = base+5100ms
         // elapsed = 5000ms
         assertEquals(5000, event.timestampMs(), 100); // 약간의 오차 허용
+    }
+
+    @Test
+    void damageText_isMatchedToNetworkAbilityForCritAndDirectFlags() {
+        startFight();
+        captured.clear();
+
+        Instant damageTime = base().plusMillis(1500);
+        service.onParsed(new DamageText(
+                damageTime,
+                "Warrior",
+                "나무인형",
+                5000,
+                true,
+                true,
+                "00|...|12A9",
+                "극대화 직격!"
+        ));
+        service.onParsed(new NetworkAbilityRaw(
+                damageTime.plusMillis(50),
+                21,
+                0x1000000AL,
+                "Warrior",
+                0xB4,
+                "Fast Blade",
+                0x40000001L,
+                "나무인형",
+                5000,
+                "21|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+
+        assertTrue(event.criticalHit());
+        assertTrue(event.directHit());
+    }
+
+    @Test
+    void dotTick_emitsDotDamageEvent() {
+        service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x101C2E9EL)));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(200),
+                0x40000001L,
+                "나무인형",
+                0x2ED,
+                0x101C2E9EL,
+                "Scholar",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(DamageType.DOT, event.damageType());
+        assertEquals(new ActorId(0x101C2E9EL), event.sourceId());
+        assertEquals(new ActorId(0x40000001L), event.targetId());
+        assertEquals(0x2ED, event.actionId());
+        assertEquals(0xEBACL, event.amount());
+        assertFalse(event.criticalHit());
+        assertFalse(event.directHit());
+    }
+
+    @Test
+    void combatantAdded_bossDuringFight_emitsBossIdentified() {
+        startFight();
+        captured.clear();
+
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(300),
+                0x40000001L,
+                "Boss",
+                0,
+                0,
+                120_000_000L,
+                120_000_000L,
+                "03|..."
+        ));
+
+        assertEquals(1, captured.size());
+        assertInstanceOf(CombatEvent.BossIdentified.class, captured.get(0));
+
+        CombatEvent.BossIdentified event = (CombatEvent.BossIdentified) captured.get(0);
+        assertEquals(new ActorId(0x40000001L), event.actorId());
+        assertEquals("Boss", event.actorName());
+        assertEquals(120_000_000L, event.maxHp());
+    }
+
+    @Test
+    void combatantAdded_bossBeforeFightStart_emitsAfterFightStart() {
+        service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
+
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x40000001L,
+                "Boss",
+                0,
+                0,
+                120_000_000L,
+                120_000_000L,
+                "03|..."
+        ));
+
+        assertTrue(captured.isEmpty());
+
+        service.onParsed(new PrimaryPlayerChanged(base().plusMillis(100), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base().plusMillis(100), List.of(0x1000000AL)));
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(200),
+                21,
+                0x1000000AL,
+                "Warrior",
+                0xB4,
+                "Fast Blade",
+                0x40000001L,
+                "나무인형",
+                5000,
+                "21|...|raw"
+        ));
+
+        assertTrue(captured.stream().anyMatch(e -> e instanceof CombatEvent.BossIdentified));
+    }
+
+    @Test
+    void combatantAdded_playerCharacter_isNotBoss() {
+        startFight();
+        captured.clear();
+
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(300),
+                0x1000000AL,
+                "Warrior",
+                0x15,
+                0,
+                80_000_000L,
+                80_000_000L,
+                "03|..."
+        ));
+
+        assertTrue(captured.isEmpty());
     }
 }

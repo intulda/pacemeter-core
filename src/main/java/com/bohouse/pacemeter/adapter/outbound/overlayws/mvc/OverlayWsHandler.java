@@ -8,24 +8,42 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import java.net.URI;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class OverlayWsHandler extends TextWebSocketHandler {
     private static final Logger log = LoggerFactory.getLogger(OverlayWsHandler.class);
+    private static final String DEFAULT_SESSION_ID = "global";
+
     private final Set<WebSocketSession> sessions = ConcurrentHashMap.newKeySet();
+    private final Map<String, Set<WebSocketSession>> sessionsByRelayId = new ConcurrentHashMap<>();
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         sessions.add(session);
-        log.info("[OverlayWS] client connected: {} (total: {})", session.getId(), sessions.size());
+        String relaySessionId = resolveRelaySessionId(session);
+        session.getAttributes().put("relaySessionId", relaySessionId);
+        sessionsByRelayId.computeIfAbsent(relaySessionId, key -> ConcurrentHashMap.newKeySet()).add(session);
+        log.info("[OverlayWS] client connected: {} relaySessionId={} (total: {})",
+                session.getId(), relaySessionId, sessions.size());
     }
 
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sessions.remove(session);
-        log.info("[OverlayWS] client disconnected: {} status={} (total: {})", session.getId(), status, sessions.size());
+        String relaySessionId = (String) session.getAttributes().getOrDefault("relaySessionId", DEFAULT_SESSION_ID);
+        Set<WebSocketSession> scopedSessions = sessionsByRelayId.get(relaySessionId);
+        if (scopedSessions != null) {
+            scopedSessions.remove(session);
+            if (scopedSessions.isEmpty()) {
+                sessionsByRelayId.remove(relaySessionId);
+            }
+        }
+        log.info("[OverlayWS] client disconnected: {} relaySessionId={} status={} (total: {})",
+                session.getId(), relaySessionId, status, sessions.size());
     }
 
     public int sessionCount() {
@@ -33,14 +51,35 @@ public class OverlayWsHandler extends TextWebSocketHandler {
     }
 
     public void broadcast(String json) {
+        broadcastToSession(DEFAULT_SESSION_ID, json);
+    }
+
+    public void broadcastToSession(String relaySessionId, String json) {
         TextMessage msg = new TextMessage(json);
-        for (WebSocketSession s : sessions) {
+        Set<WebSocketSession> scopedSessions = sessionsByRelayId.getOrDefault(relaySessionId, Set.of());
+        for (WebSocketSession s : scopedSessions) {
             try {
                 if (s.isOpen()) s.sendMessage(msg);
             } catch (Exception e) {
                 sessions.remove(s);
+                scopedSessions.remove(s);
                 try { s.close(); } catch (Exception ignore) {}
             }
         }
+    }
+
+    private String resolveRelaySessionId(WebSocketSession session) {
+        URI uri = session.getUri();
+        if (uri == null || uri.getQuery() == null || uri.getQuery().isBlank()) {
+            return DEFAULT_SESSION_ID;
+        }
+
+        for (String pair : uri.getQuery().split("&")) {
+            String[] parts = pair.split("=", 2);
+            if (parts.length == 2 && "sessionId".equals(parts[0]) && !parts[1].isBlank()) {
+                return parts[1];
+            }
+        }
+        return DEFAULT_SESSION_ID;
     }
 }

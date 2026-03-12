@@ -43,6 +43,21 @@ class ActLineParserTest {
         assertTrue(raw.damage() > 0, "데미지가 0보다 커야 함: " + raw.damage());
     }
 
+    @Test
+    void parse_dotTick_typeCode24() {
+        String line = "24|" + TS + "|40005E82|더 타이런트|DoT|0|EBAC|142805740|154287371|10000|10000|||99.96|100.39|0.00|3.12|101C2E9E|돌체라떼|FFFFFFFF|121751|185402|7220|10000|||101.49|108.00|0.00|-2.53|8c8069c0758193c7";
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(DotTickRaw.class, result);
+        DotTickRaw raw = (DotTickRaw) result;
+        assertEquals(0x40005E82L, raw.targetId());
+        assertEquals("더 타이런트", raw.targetName());
+        assertEquals(0, raw.statusId());
+        assertEquals(0x101C2E9EL, raw.sourceId());
+        assertEquals("돌체라떼", raw.sourceName());
+        assertEquals(0xEBACL, raw.damage());
+    }
+
     // ── 데미지 디코딩 ──
 
     @Test
@@ -174,5 +189,18 @@ class ActLineParserTest {
         PrimaryPlayerChanged p = (PrimaryPlayerChanged) result;
         assertEquals(0x1000000AL, p.playerId());
         assertEquals("Warrior Main", p.playerName());
+    }
+
+    @Test
+    void parse_combatantAdded_withHpFields() {
+        String line = "3|" + TS + "|400006CB|나무인형|0|0|0|0|0|0|123456789|234567890";
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(CombatantAdded.class, result);
+        CombatantAdded combatant = (CombatantAdded) result;
+        assertEquals(0x400006CBL, combatant.id());
+        assertEquals("나무인형", combatant.name());
+        assertEquals(123456789L, combatant.currentHp());
+        assertEquals(234567890L, combatant.maxHp());
     }
 }

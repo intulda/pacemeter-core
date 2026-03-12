@@ -2,15 +2,21 @@ package com.bohouse.pacemeter.core.engine;
 
 import com.bohouse.pacemeter.core.event.CombatEvent;
 import com.bohouse.pacemeter.core.model.ActorId;
+import com.bohouse.pacemeter.core.model.BuffId;
 import com.bohouse.pacemeter.core.model.CombatState;
 import com.bohouse.pacemeter.core.model.DamageType;
+import com.bohouse.pacemeter.core.estimator.PaceProfile;
 import com.bohouse.pacemeter.core.snapshot.ActorSnapshot;
+import com.bohouse.pacemeter.core.snapshot.ClearabilityCheck;
 import com.bohouse.pacemeter.core.snapshot.OverlaySnapshot;
+import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider.ConfidenceLevel;
+import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider.EnrageInfo;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -88,6 +94,7 @@ class CombatEngineReplayTest {
 
         // 최종 파티 DPS: 240000 / 20초 = 12000
         assertEquals(12000.0, last.partyDps(), 0.1);
+        assertNull(last.clearability());
     }
 
     @Test
@@ -97,7 +104,7 @@ class CombatEngineReplayTest {
         // 전투 시작 전에 데미지 이벤트를 보내면 → 무시되어야 함 (IDLE 상태이므로)
         engine.process(new CombatEvent.DamageEvent(
                 100, new ActorId(1), "Test", new ActorId(100), 1, 5000,
-                DamageType.DIRECT));
+                DamageType.DIRECT, false, false));
 
         assertEquals(CombatState.Phase.IDLE, engine.currentState().phase());
         assertEquals(0, engine.currentState().totalPartyDamage());
@@ -116,7 +123,7 @@ class CombatEngineReplayTest {
         // 데미지 이벤트는 스냅샷을 만들지 않는다
         EngineResult damageResult = engine.process(new CombatEvent.DamageEvent(
                 1000, new ActorId(1), "Player", new ActorId(100), 1, 10000,
-                DamageType.DIRECT));
+                DamageType.DIRECT, false, false));
         assertFalse(damageResult.hasSnapshot());
 
         // 틱 이벤트는 스냅샷을 만든다
@@ -158,8 +165,8 @@ class CombatEngineReplayTest {
     @Test
     void paceComparison_withProfile() {
         // 간단한 선형 페이스 프로필: 초당 10000 데미지 기준
-        com.bohouse.pacemeter.core.estimator.PaceProfile linearProfile =
-                new com.bohouse.pacemeter.core.estimator.PaceProfile() {
+        PaceProfile linearProfile =
+                new PaceProfile() {
                     @Override public long expectedCumulativeDamage(long elapsedMs) {
                         return elapsedMs * 10; // 10000 DPS = 1ms당 10 데미지
                     }
@@ -173,7 +180,7 @@ class CombatEngineReplayTest {
         // 1초에 15000 데미지 (기준 10000보다 앞서고 있음)
         engine.process(new CombatEvent.DamageEvent(
                 1000, new ActorId(1), "Player", new ActorId(100), 1, 15000,
-                DamageType.DIRECT));
+                DamageType.DIRECT, false, false));
 
         EngineResult result = engine.process(new CombatEvent.Tick(1000));
         assertTrue(result.hasSnapshot());
@@ -193,11 +200,436 @@ class CombatEngineReplayTest {
         engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
         engine.process(new CombatEvent.DamageEvent(
                 1000, new ActorId(1), "Player", new ActorId(100), 1, 10000,
-                DamageType.DIRECT));
+                DamageType.DIRECT, false, false));
 
         EngineResult result = engine.process(new CombatEvent.Tick(1000));
         assertTrue(result.hasSnapshot());
         assertNull(result.snapshot().get().partyPace());
+        assertNull(result.snapshot().get().clearability());
+    }
+
+    @Test
+    void noIndividualProfile_currentPlayerStillExposedWithoutMarker() {
+        CombatEngine engine = new CombatEngine();
+        engine.setCurrentPlayerId(new ActorId(1));
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.DamageEvent(
+                1000, new ActorId(1), "Player", new ActorId(100), 1, 10000,
+                DamageType.DIRECT, false, false));
+
+        EngineResult result = engine.process(new CombatEvent.Tick(1000));
+        assertTrue(result.hasSnapshot());
+
+        ActorSnapshot actor = result.snapshot().orElseThrow().actors().get(0);
+        assertTrue(actor.isCurrentPlayer());
+        assertNull(actor.individualPace());
+    }
+
+    @Test
+    void bossIdentified_updatesCombatState() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+
+        engine.process(new CombatEvent.BossIdentified(
+                100,
+                new ActorId(0x40000001L),
+                "Test Boss",
+                123_456_789L
+        ));
+
+        assertTrue(engine.currentState().bossInfo().isPresent());
+        CombatState.BossInfo bossInfo = engine.currentState().bossInfo().orElseThrow();
+        assertEquals(new ActorId(0x40000001L), bossInfo.actorId());
+        assertEquals("Test Boss", bossInfo.name());
+        assertEquals(123_456_789L, bossInfo.maxHp());
+    }
+
+    @Test
+    void clearability_isCalculatedWhenBossAndEnrageExist() {
+        CombatEngine engine = new CombatEngine();
+        engine.setEnrageInfo(Optional.of(new EnrageInfo(
+                20.0,
+                ConfidenceLevel.MEDIUM,
+                "test"
+        )));
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.BossIdentified(0, new ActorId(100), "Boss", 100_000));
+        engine.process(new CombatEvent.DamageEvent(
+                5000, new ActorId(1), "Player", new ActorId(100), 1, 50_000,
+                DamageType.DIRECT, false, false));
+
+        EngineResult result = engine.process(new CombatEvent.Tick(10000));
+        assertTrue(result.hasSnapshot());
+
+        ClearabilityCheck clearability = result.snapshot().orElseThrow().clearability();
+        assertNotNull(clearability);
+        assertTrue(clearability.canClear());
+        assertEquals(20.0, clearability.estimatedKillTimeSeconds(), 0.001);
+        assertEquals(20.0, clearability.enrageTimeSeconds(), 0.001);
+        assertEquals(0.0, clearability.marginSeconds(), 0.001);
+        assertEquals(5000.0, clearability.requiredDps(), 0.001);
+    }
+
+    @Test
+    void externalDamageBuff_redistributesBonusToProvider() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Dancer"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Astrologian"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Dancer",
+                new ActorId(100),
+                1,
+                10_600,
+                DamageType.DIRECT,
+                false,
+                false
+        ));
+
+        EngineResult result = engine.process(new CombatEvent.Tick(1000));
+        assertTrue(result.hasSnapshot());
+
+        OverlaySnapshot snapshot = result.snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream()
+                .filter(actor -> actor.name().equals("Dancer"))
+                .findFirst()
+                .orElseThrow();
+        ActorSnapshot provider = snapshot.actors().stream()
+                .filter(actor -> actor.name().equals("Astrologian"))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(10_000.0, dealer.onlineRdps(), 1.0);
+        assertEquals(600.0, provider.onlineRdps(), 1.0);
+    }
+
+    @Test
+    void stackedExternalDamageBuffs_shareContributionAcrossProviders() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Dancer"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Astrologian A"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(3), "Astrologian B"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance",
+                15_000
+        ));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(3),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Dancer",
+                new ActorId(100),
+                1,
+                11_236,
+                DamageType.DIRECT,
+                false,
+                false
+        ));
+
+        EngineResult result = engine.process(new CombatEvent.Tick(1000));
+        OverlaySnapshot snapshot = result.snapshot().orElseThrow();
+
+        ActorSnapshot dealer = snapshot.actors().stream()
+                .filter(actor -> actor.name().equals("Dancer"))
+                .findFirst()
+                .orElseThrow();
+        ActorSnapshot providerA = snapshot.actors().stream()
+                .filter(actor -> actor.name().equals("Astrologian A"))
+                .findFirst()
+                .orElseThrow();
+        ActorSnapshot providerB = snapshot.actors().stream()
+                .filter(actor -> actor.name().equals("Astrologian B"))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(10_000.0, dealer.onlineRdps(), 2.0);
+        assertEquals(618.0, providerA.onlineRdps(), 2.0);
+        assertEquals(618.0, providerB.onlineRdps(), 2.0);
+    }
+
+    @Test
+    void critRateBuff_redistributesExpectedContributionToProvider() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Dragoon"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Bard"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0xFFFF),
+                "Battle Litany",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Dragoon",
+                new ActorId(100),
+                1,
+                14_000,
+                DamageType.DIRECT,
+                true,
+                false
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Dragoon")).findFirst().orElseThrow();
+        ActorSnapshot provider = snapshot.actors().stream().filter(a -> a.name().equals("Bard")).findFirst().orElseThrow();
+
+        assertEquals(12_500.0, dealer.onlineRdps(), 2.0);
+        assertEquals(1_500.0, provider.onlineRdps(), 2.0);
+    }
+
+    @Test
+    void directHitRateBuff_redistributesExpectedContributionToProvider() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Monk"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Bard"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0xFFFF),
+                "Battle Voice",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Monk",
+                new ActorId(100),
+                1,
+                12_500,
+                DamageType.DIRECT,
+                false,
+                true
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Monk")).findFirst().orElseThrow();
+        ActorSnapshot provider = snapshot.actors().stream().filter(a -> a.name().equals("Bard")).findFirst().orElseThrow();
+
+        assertEquals(11_071.4, dealer.onlineRdps(), 2.0);
+        assertEquals(1_428.6, provider.onlineRdps(), 2.0);
+    }
+
+    @Test
+    void targetDamageDebuff_redistributesContributionToProvider() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Samurai"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Ninja"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(100),
+                new BuffId(0xFFFF),
+                "Mug",
+                20_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Samurai",
+                new ActorId(100),
+                1,
+                10_500,
+                DamageType.DIRECT,
+                false,
+                false
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Samurai")).findFirst().orElseThrow();
+        ActorSnapshot provider = snapshot.actors().stream().filter(a -> a.name().equals("Ninja")).findFirst().orElseThrow();
+
+        assertEquals(10_000.0, dealer.onlineRdps(), 2.0);
+        assertEquals(500.0, provider.onlineRdps(), 2.0);
+    }
+
+    @Test
+    void targetCritDebuff_redistributesContributionToProvider() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Black Mage"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Scholar"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(100),
+                new BuffId(0xFFFF),
+                "Chain Stratagem",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Black Mage",
+                new ActorId(100),
+                1,
+                14_000,
+                DamageType.DIRECT,
+                true,
+                false
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Black Mage")).findFirst().orElseThrow();
+        ActorSnapshot provider = snapshot.actors().stream().filter(a -> a.name().equals("Scholar")).findFirst().orElseThrow();
+
+        assertEquals(12_500.0, dealer.onlineRdps(), 2.0);
+        assertEquals(1_500.0, provider.onlineRdps(), 2.0);
+    }
+
+    @Test
+    void dotSnapshot_preservesBuffAttributionAfterBuffFallsOff() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Black Mage"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Astrologian"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance",
+                15_000
+        ));
+        engine.process(new CombatEvent.BuffApply(
+                100,
+                new ActorId(1),
+                new ActorId(0x40000001L),
+                new BuffId(0xFFFE),
+                "Combust III",
+                30_000
+        ));
+        engine.process(new CombatEvent.BuffRemove(
+                500,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance"
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Black Mage",
+                new ActorId(0x40000001L),
+                0xFFFE,
+                10_600,
+                DamageType.DOT,
+                false,
+                false
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Black Mage")).findFirst().orElseThrow();
+        ActorSnapshot provider = snapshot.actors().stream().filter(a -> a.name().equals("Astrologian")).findFirst().orElseThrow();
+
+        assertEquals(10_000.0, dealer.onlineRdps(), 1.0);
+        assertEquals(600.0, provider.onlineRdps(), 1.0);
+    }
+
+    @Test
+    void dotSnapshot_usesStatusIdToSeparateMultipleDots() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Summoner"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Astrologian A"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(3), "Astrologian B"));
+
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance",
+                15_000
+        ));
+        engine.process(new CombatEvent.BuffApply(
+                100,
+                new ActorId(1),
+                new ActorId(0x40000001L),
+                new BuffId(0x2ED),
+                "Dot A",
+                30_000
+        ));
+        engine.process(new CombatEvent.BuffRemove(
+                200,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance"
+        ));
+
+        engine.process(new CombatEvent.BuffApply(
+                300,
+                new ActorId(3),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance",
+                15_000
+        ));
+        engine.process(new CombatEvent.BuffApply(
+                400,
+                new ActorId(1),
+                new ActorId(0x40000001L),
+                new BuffId(0x35D),
+                "Dot B",
+                30_000
+        ));
+        engine.process(new CombatEvent.BuffRemove(
+                500,
+                new ActorId(3),
+                new ActorId(1),
+                new BuffId(0x74F),
+                "The Balance"
+        ));
+
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Summoner",
+                new ActorId(0x40000001L),
+                0x35D,
+                10_600,
+                DamageType.DOT,
+                false,
+                false
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Summoner")).findFirst().orElseThrow();
+        ActorSnapshot providerA = snapshot.actors().stream().filter(a -> a.name().equals("Astrologian A")).findFirst().orElseThrow();
+        ActorSnapshot providerB = snapshot.actors().stream().filter(a -> a.name().equals("Astrologian B")).findFirst().orElseThrow();
+
+        assertEquals(10_000.0, dealer.onlineRdps(), 1.0);
+        assertEquals(0.0, providerA.onlineRdps(), 1.0);
+        assertEquals(600.0, providerB.onlineRdps(), 1.0);
     }
 
     /** 이벤트 리스트를 엔진에 넣고 나온 스냅샷들을 수집하는 헬퍼 메서드 */

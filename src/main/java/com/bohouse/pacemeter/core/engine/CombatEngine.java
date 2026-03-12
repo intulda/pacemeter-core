@@ -1,5 +1,6 @@
 package com.bohouse.pacemeter.core.engine;
 
+import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider;
 import com.bohouse.pacemeter.core.estimator.OnlineEstimator;
 import com.bohouse.pacemeter.core.estimator.PaceProfile;
 import com.bohouse.pacemeter.core.event.CombatEvent;
@@ -10,6 +11,7 @@ import com.bohouse.pacemeter.core.snapshot.SnapshotAggregator;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 전투 엔진 - 이 프로젝트의 핵심 처리기.
@@ -42,6 +44,7 @@ public final class CombatEngine {
     private PaceProfile individualProfile;   // 개인 vs 개인 직업 TOP
     private ActorId currentPlayerId;         // 현재 플레이어 ID
     private final Map<ActorId, Integer> jobIdMap;  // ActorId → JobID 매핑
+    private Optional<EnrageTimeProvider.EnrageInfo> enrageInfo;
 
     /** 페이스 프로필 없이 엔진 생성 */
     public CombatEngine() {
@@ -61,6 +64,7 @@ public final class CombatEngine {
         this.individualProfile = individualProfile;
         this.jobIdMap = new HashMap<>();
         this.currentPlayerId = null;
+        this.enrageInfo = Optional.empty();
     }
 
     /**
@@ -75,7 +79,7 @@ public final class CombatEngine {
         if (shouldSnapshot) {
             boolean isFinal = event instanceof CombatEvent.FightEnd;
             OverlaySnapshot snapshot = aggregator.aggregate(
-                    state, partyProfile, individualProfile, currentPlayerId, isFinal, jobIdMap);
+                    state, partyProfile, individualProfile, currentPlayerId, isFinal, jobIdMap, enrageInfo);
             return EngineResult.withSnapshot(snapshot);
         }
 
@@ -115,8 +119,27 @@ public final class CombatEngine {
         state.setOwner(petId, ownerId);
     }
 
+    /** 전투 간에 남아선 안 되는 액터 메타데이터를 초기화한다. */
+    public void clearCombatantContext() {
+        state.clearOwners();
+        jobIdMap.clear();
+        enrageInfo = Optional.empty();
+    }
+
+    public void setEnrageInfo(Optional<EnrageTimeProvider.EnrageInfo> enrageInfo) {
+        this.enrageInfo = enrageInfo != null ? enrageInfo : Optional.empty();
+    }
+
     /** 현재 전투 상태를 반환한다 (테스트/디버깅용). */
     public CombatState currentState() {
         return state;
+    }
+
+    public ActorId currentPlayerId() {
+        return currentPlayerId;
+    }
+
+    public Map<ActorId, Integer> jobIdMap() {
+        return Map.copyOf(jobIdMap);
     }
 }

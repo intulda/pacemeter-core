@@ -4,6 +4,7 @@ public enum ActMessageType {
     LogLine(0),
     ChangePrimaryPlayer(2),
     AddCombatant(3),
+    DotTick(24),
     NetworkAbility(21),
     NetworkAOEAbility(22);
 

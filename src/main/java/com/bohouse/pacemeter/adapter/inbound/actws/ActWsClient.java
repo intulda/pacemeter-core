@@ -219,13 +219,15 @@ public class ActWsClient {
 
                 // Job ID 파싱
                 int jobId = combatant.path("Job").asInt(0);
+                long currentHp = parseDecimalLong(combatant.path("CurrentHP").asText(""));
+                long maxHp = parseDecimalLong(combatant.path("MaxHP").asText(""));
 
                 // CombatantAdded 이벤트 생성 (전투 중인 파티원 등록)
-                logger.info("[ACT] CombatData: restoring combatant {}(id={} job={})",
-                        name, Long.toHexString(id), Integer.toHexString(jobId));
+                logger.info("[ACT] CombatData: restoring combatant {}(id={} job={} hp={}/{})",
+                        name, Long.toHexString(id), Integer.toHexString(jobId), currentHp, maxHp);
 
                 ingestion.onParsed(new CombatantAdded(
-                        now, id, name, jobId, 0L, "" // ownerId는 0 (펫은 별도 처리)
+                        now, id, name, jobId, 0L, currentHp, maxHp, ""
                 ));
             });
 
@@ -237,6 +239,15 @@ public class ActWsClient {
 
         } catch (Exception e) {
             logger.error("[ACT] CombatData parse error: {}", e.getMessage(), e);
+        }
+    }
+
+    private static long parseDecimalLong(String value) {
+        if (value == null || value.isBlank()) return 0;
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 }

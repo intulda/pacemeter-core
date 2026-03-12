@@ -19,6 +19,7 @@ import java.util.List;
  * @param partyDps          파티 전체 DPS (초당 데미지)
  * @param actors            캐릭터별 상세 데이터 목록 (데미지 높은 순, 각자 individualPace 포함)
  * @param partyPace         파티 전체 vs TOP 파티 비교 (프로필이 없으면 null)
+ * @param clearability      현재 딜 기준 엔레이지 전 처치 가능 여부 (계산 불가 시 null)
  * @param isFinal           true이면 이 전투의 마지막 스냅샷 (FightEnd 시 생성)
  */
 public record OverlaySnapshot(
@@ -30,6 +31,7 @@ public record OverlaySnapshot(
         double partyDps,
         List<ActorSnapshot> actors,
         PaceComparison partyPace,
+        ClearabilityCheck clearability,
         boolean isFinal
 ) {
 }

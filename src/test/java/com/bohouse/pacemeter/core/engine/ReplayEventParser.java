@@ -96,7 +96,9 @@ public final class ReplayEventParser {
                     new ActorId(node.get("targetId").asLong()),
                     node.get("actionId").asInt(),
                     node.get("amount").asLong(),
-                    DamageType.valueOf(node.get("damageType").asText())
+                    DamageType.valueOf(node.get("damageType").asText()),
+                    node.has("criticalHit") && node.get("criticalHit").asBoolean(),
+                    node.has("directHit") && node.get("directHit").asBoolean()
             );
 
             case "BuffApply" -> new CombatEvent.BuffApply(
@@ -104,6 +106,7 @@ public final class ReplayEventParser {
                     new ActorId(node.get("sourceId").asLong()),
                     new ActorId(node.get("targetId").asLong()),
                     new BuffId(node.get("buffId").asInt()),
+                    node.has("buffName") ? node.get("buffName").asText("") : "",
                     node.get("durationMs").asLong()
             );
 
@@ -111,7 +114,8 @@ public final class ReplayEventParser {
                     node.get("timestampMs").asLong(),
                     new ActorId(node.get("sourceId").asLong()),
                     new ActorId(node.get("targetId").asLong()),
-                    new BuffId(node.get("buffId").asInt())
+                    new BuffId(node.get("buffId").asInt()),
+                    node.has("buffName") ? node.get("buffName").asText("") : ""
             );
 
             case "Tick" -> new CombatEvent.Tick(

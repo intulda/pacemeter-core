@@ -1,5 +1,6 @@
 package com.bohouse.pacemeter.core.snapshot;
 
+import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider;
 import com.bohouse.pacemeter.core.estimator.Confidence;
 import com.bohouse.pacemeter.core.estimator.OnlineEstimator;
 import com.bohouse.pacemeter.core.estimator.PaceProfile;
@@ -40,10 +41,12 @@ public final class SnapshotAggregator {
      * @param currentPlayerId    현재 플레이어 ID (개인 페이스 비교 대상)
      * @param isFinal            이 스냅샷이 FightEnd에 의한 마지막 스냅샷인지 여부
      * @param jobIdMap           ActorId → JobID 매핑 (직업 정보)
+     * @param enrageInfo         엔레이지 정보 (없으면 clearability 계산 안 함)
      * @return 오버레이에서 바로 렌더링 가능한 스냅샷
      */
     public OverlaySnapshot aggregate(CombatState state, PaceProfile partyProfile, PaceProfile individualProfile,
-                                     ActorId currentPlayerId, boolean isFinal, Map<ActorId, Integer> jobIdMap) {
+                                     ActorId currentPlayerId, boolean isFinal, Map<ActorId, Integer> jobIdMap,
+                                     Optional<EnrageTimeProvider.EnrageInfo> enrageInfo) {
         long elapsedMs = state.elapsedMs();
         double elapsedSec = elapsedMs / 1000.0;
         long totalPartyDamage = state.totalPartyDamage();
@@ -101,10 +104,10 @@ public final class SnapshotAggregator {
             int jobId = jobIdMap.getOrDefault(actorId, 0);  // 직업 정보 (없으면 0)
 
             // 개인 페이스 비교: 현재 플레이어인 경우에만 계산
+            boolean isCurrentPlayer = actorId.equals(currentPlayerId);
             PaceComparison individualPace = null;
-            if (actorId.equals(currentPlayerId) && individualProfile != PaceProfile.NONE) {
-                individualPace = buildIndividualPaceComparison(
-                        individualProfile, elapsedMs, totalDamageWithPet, dps);
+            if (isCurrentPlayer && individualProfile != PaceProfile.NONE) {
+                individualPace = buildIndividualPaceComparison(individualProfile, elapsedMs, totalDamageWithPet, dps);
             }
 
             actorSnapshots.add(new ActorSnapshot(
@@ -118,6 +121,7 @@ public final class SnapshotAggregator {
                     damagePercent,
                     stats.hitCount(),
                     recentDps,
+                    isCurrentPlayer,
                     individualPace,
                     stats.isDead()
             ));
@@ -128,6 +132,7 @@ public final class SnapshotAggregator {
 
         // 파티 페이스 비교 결과 생성
         PaceComparison partyPace = buildPaceComparison(partyProfile, elapsedMs, totalPartyDamage, partyDps);
+        ClearabilityCheck clearability = buildClearability(state, totalPartyDamage, elapsedMs, enrageInfo);
 
         return new OverlaySnapshot(
                 state.fightName(),
@@ -138,7 +143,27 @@ public final class SnapshotAggregator {
                 partyDps,
                 List.copyOf(actorSnapshots),
                 partyPace,
+                clearability,
                 isFinal
+        );
+    }
+
+    private ClearabilityCheck buildClearability(
+            CombatState state,
+            long totalPartyDamage,
+            long elapsedMs,
+            Optional<EnrageTimeProvider.EnrageInfo> enrageInfo
+    ) {
+        if (enrageInfo.isEmpty() || state.bossInfo().isEmpty()) {
+            return null;
+        }
+
+        CombatState.BossInfo bossInfo = state.bossInfo().orElseThrow();
+        return ClearabilityCheck.calculate(
+                bossInfo.maxHp(),
+                totalPartyDamage,
+                elapsedMs,
+                enrageInfo.orElseThrow()
         );
     }
 

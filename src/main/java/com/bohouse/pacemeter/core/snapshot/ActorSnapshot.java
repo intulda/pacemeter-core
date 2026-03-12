@@ -30,6 +30,7 @@ import com.bohouse.pacemeter.core.model.ActorId;
  * @param damagePercent     파티 전체 데미지 중 이 캐릭터의 비율 [0.0 ~ 1.0]
  * @param hitCount          총 공격 횟수
  * @param recentDps         최근 슬라이딩 윈도우(15초) 기간의 DPS
+ * @param isCurrentPlayer   현재 플레이어 여부
  * @param individualPace    개인 vs 직업 TOP 비교 (확장성: 각 파티원마다 가능)
  * @param isDead            사망 상태 (true면 현재 사망 중)
  */
@@ -44,6 +45,7 @@ public record ActorSnapshot(
         double damagePercent,
         int hitCount,
         double recentDps,
+        boolean isCurrentPlayer,
         PaceComparison individualPace,
         boolean isDead
 ) {

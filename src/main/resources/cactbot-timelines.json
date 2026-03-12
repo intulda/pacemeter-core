@@ -1,0 +1,41 @@
+{
+  "_readme": "ACT territory ID(숫자) -> cactbot timeline file path.",
+  "_source": "https://github.com/OverlayPlugin/cactbot",
+  "_note": "Dawntrail Arcadion은 cactbot 07-dt/raid 네이밍 기준(r1s~r12s)으로 정리.",
+
+  "_comment_asphodelos": "Pandaemonium Asphodelos (6.05) P1S-P4S",
+  "1003": "ui/raidboss/data/06-ew/raid/p1s.txt",
+  "1005": "ui/raidboss/data/06-ew/raid/p2s.txt",
+  "1007": "ui/raidboss/data/06-ew/raid/p3s.txt",
+  "1009": "ui/raidboss/data/06-ew/raid/p4s.txt",
+
+  "_comment_abyssos": "Pandaemonium Abyssos (6.2) P5S-P8S",
+  "1082": "ui/raidboss/data/06-ew/raid/p5s.txt",
+  "1084": "ui/raidboss/data/06-ew/raid/p6s.txt",
+  "1086": "ui/raidboss/data/06-ew/raid/p7s.txt",
+  "1088": "ui/raidboss/data/06-ew/raid/p8s.txt",
+
+  "_comment_anabaseios": "Pandaemonium Anabaseios (6.4) P9S-P12S",
+  "1148": "ui/raidboss/data/06-ew/raid/p9s.txt",
+  "1150": "ui/raidboss/data/06-ew/raid/p10s.txt",
+  "1152": "ui/raidboss/data/06-ew/raid/p11s.txt",
+  "1154": "ui/raidboss/data/06-ew/raid/p12s.txt",
+
+  "_comment_arcadion_lh": "Arcadion Light-heavyweight (7.0) R1S-R4S / M1S-M4S",
+  "1226": "ui/raidboss/data/07-dt/raid/r1s.txt",
+  "1228": "ui/raidboss/data/07-dt/raid/r2s.txt",
+  "1230": "ui/raidboss/data/07-dt/raid/r3s.txt",
+  "1232": "ui/raidboss/data/07-dt/raid/r4s.txt",
+
+  "_comment_arcadion_cw": "Arcadion Cruiserweight (7.2) R5S-R8S / M5S-M8S",
+  "1257": "ui/raidboss/data/07-dt/raid/r5s.txt",
+  "1259": "ui/raidboss/data/07-dt/raid/r6s.txt",
+  "1261": "ui/raidboss/data/07-dt/raid/r7s.txt",
+  "1263": "ui/raidboss/data/07-dt/raid/r8s.txt",
+
+  "_comment_arcadion_hw": "Arcadion Heavyweight (7.4) R9S-R12S / M9S-M12S",
+  "1321": "ui/raidboss/data/07-dt/raid/r9s.txt",
+  "1323": "ui/raidboss/data/07-dt/raid/r10s.txt",
+  "1325": "ui/raidboss/data/07-dt/raid/r11s.txt",
+  "1327": "ui/raidboss/data/07-dt/raid/r12s.txt"
+}

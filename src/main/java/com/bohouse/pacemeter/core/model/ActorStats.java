@@ -25,6 +25,13 @@ public final class ActorStats {
 
     /** 최근 데미지 기록 목록. 슬라이딩 윈도우 DPS 계산에 사용된다. */
     private final List<DamageSample> recentSamples;
+    private final List<ContributionSample> recentGrantedContributionSamples;
+    private final List<ContributionSample> recentReceivedContributionSamples;
+    private double totalGrantedBuffContribution;
+    private double totalReceivedBuffContribution;
+    private int observedHitSampleCount;
+    private int observedCritHitCount;
+    private int observedDirectHitCount;
 
     /** 사망 상태: true면 현재 사망 중 */
     private boolean isDead;
@@ -39,6 +46,13 @@ public final class ActorStats {
         this.hitCount = 0;
         this.activeBuffs = new ArrayList<>();
         this.recentSamples = new ArrayList<>();
+        this.recentGrantedContributionSamples = new ArrayList<>();
+        this.recentReceivedContributionSamples = new ArrayList<>();
+        this.totalGrantedBuffContribution = 0.0;
+        this.totalReceivedBuffContribution = 0.0;
+        this.observedHitSampleCount = 0;
+        this.observedCritHitCount = 0;
+        this.observedDirectHitCount = 0;
         this.isDead = false;
         this.deathTimestamp = -1;
     }
@@ -51,6 +65,13 @@ public final class ActorStats {
         this.hitCount = other.hitCount;
         this.activeBuffs = new ArrayList<>(other.activeBuffs);        // record는 불변이라 얕은 복사로 충분
         this.recentSamples = new ArrayList<>(other.recentSamples);    // record는 불변이라 얕은 복사로 충분
+        this.recentGrantedContributionSamples = new ArrayList<>(other.recentGrantedContributionSamples);
+        this.recentReceivedContributionSamples = new ArrayList<>(other.recentReceivedContributionSamples);
+        this.totalGrantedBuffContribution = other.totalGrantedBuffContribution;
+        this.totalReceivedBuffContribution = other.totalReceivedBuffContribution;
+        this.observedHitSampleCount = other.observedHitSampleCount;
+        this.observedCritHitCount = other.observedCritHitCount;
+        this.observedDirectHitCount = other.observedDirectHitCount;
         this.isDead = other.isDead;
         this.deathTimestamp = other.deathTimestamp;
     }
@@ -67,6 +88,30 @@ public final class ActorStats {
         activeBuffs.add(buff);
     }
 
+    /** 다른 사람에게 준 버프 기여도를 누적한다. */
+    public void addGrantedBuffContribution(double amount, long timestampMs) {
+        if (amount <= 0) return;
+        this.totalGrantedBuffContribution += amount;
+        this.recentGrantedContributionSamples.add(new ContributionSample(timestampMs, amount));
+    }
+
+    /** 다른 사람에게서 받은 외부 버프 기여도를 누적한다. */
+    public void addReceivedBuffContribution(double amount, long timestampMs) {
+        if (amount <= 0) return;
+        this.totalReceivedBuffContribution += amount;
+        this.recentReceivedContributionSamples.add(new ContributionSample(timestampMs, amount));
+    }
+
+    public void observeHitOutcome(boolean criticalHit, boolean directHit) {
+        this.observedHitSampleCount++;
+        if (criticalHit) {
+            this.observedCritHitCount++;
+        }
+        if (directHit) {
+            this.observedDirectHitCount++;
+        }
+    }
+
     /** 특정 버프를 제거한다. 제거 성공하면 true, 없으면 false. */
     public boolean removeBuff(BuffId buffId, ActorId sourceId) {
         return activeBuffs.removeIf(b ->
@@ -81,12 +126,30 @@ public final class ActorStats {
      */
     public void pruneOldSamples(long cutoffMs) {
         recentSamples.removeIf(s -> s.timestampMs() < cutoffMs);
+        recentGrantedContributionSamples.removeIf(s -> s.timestampMs() < cutoffMs);
+        recentReceivedContributionSamples.removeIf(s -> s.timestampMs() < cutoffMs);
     }
 
     /** 최근 윈도우에 남아있는 데미지의 합계를 반환한다. */
     public long recentDamage() {
         long sum = 0;
         for (DamageSample s : recentSamples) {
+            sum += s.amount();
+        }
+        return sum;
+    }
+
+    public double recentGrantedBuffContribution() {
+        double sum = 0.0;
+        for (ContributionSample s : recentGrantedContributionSamples) {
+            sum += s.amount();
+        }
+        return sum;
+    }
+
+    public double recentReceivedBuffContribution() {
+        double sum = 0.0;
+        for (ContributionSample s : recentReceivedContributionSamples) {
             sum += s.amount();
         }
         return sum;
@@ -119,13 +182,21 @@ public final class ActorStats {
     public int hitCount() { return hitCount; }
     public List<ActiveBuff> activeBuffs() { return Collections.unmodifiableList(activeBuffs); }
     public List<DamageSample> recentSamples() { return Collections.unmodifiableList(recentSamples); }
+    public double totalGrantedBuffContribution() { return totalGrantedBuffContribution; }
+    public double totalReceivedBuffContribution() { return totalReceivedBuffContribution; }
     public boolean isDead() { return isDead; }
     public long deathTimestamp() { return deathTimestamp; }
+    public int observedHitSampleCount() { return observedHitSampleCount; }
+    public int observedCritHitCount() { return observedCritHitCount; }
+    public int observedDirectHitCount() { return observedDirectHitCount; }
 
     /**
      * 슬라이딩 윈도우에 보관되는 데미지 기록 하나.
      * "언제(timestampMs) 얼마나(amount) 데미지를 줬는지"를 저장한다.
      */
     public record DamageSample(long timestampMs, long amount) {
+    }
+
+    public record ContributionSample(long timestampMs, double amount) {
     }
 }

@@ -1,0 +1,43 @@
+{
+  "source": "src/main/resources/Network_30007_20260211.2026.02.11.log",
+  "pullIndex": 1,
+  "windowStart": "2026-02-11T20:01:42.259000+09:00",
+  "windowEnd": "2026-02-11T20:04:49.473000+09:00",
+  "setupStart": "2026-02-11T20:01:22.259000+09:00",
+  "durationSeconds": 187.214,
+  "damageEvents": 859,
+  "players": 8,
+  "pets": 10,
+  "bosses": 1,
+  "partyMembers": 8,
+  "full": {
+    "path": "src/test/resources/replay/raw/heavy3_pull1_full.log",
+    "lines": 2290,
+    "chars": 448431,
+    "types": {
+      "01": 2,
+      "02": 2,
+      "03": 125,
+      "11": 1,
+      "21": 797,
+      "22": 263,
+      "25": 5,
+      "26": 652,
+      "30": 443
+    }
+  },
+  "minimal": {
+    "path": "src/test/resources/replay/raw/heavy3_pull1_minimal.log",
+    "lines": 965,
+    "chars": 272064,
+    "types": {
+      "01": 2,
+      "02": 2,
+      "03": 29,
+      "11": 1,
+      "21": 712,
+      "22": 214,
+      "25": 5
+    }
+  }
+}

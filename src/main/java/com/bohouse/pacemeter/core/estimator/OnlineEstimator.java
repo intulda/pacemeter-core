@@ -82,16 +82,24 @@ public final class OnlineEstimator {
             ActorId actorId = entry.getKey();
             ActorStats stats = entry.getValue();
 
-            if (stats.totalDamage() <= 0) {
+            double cumulativeAttributedDamage = stats.totalDamage()
+                    - stats.totalReceivedBuffContribution()
+                    + stats.totalGrantedBuffContribution();
+            if (cumulativeAttributedDamage <= 0) {
                 results.put(actorId, new RdpsEstimate(0.0, Confidence.none()));
                 continue;
             }
 
             // --- DPS 계산 ---
-            double cumulativeDps = stats.totalDamage() / elapsedSec;
+            double cumulativeDps = cumulativeAttributedDamage / elapsedSec;
 
             // 최근 윈도우 DPS: 윈도우 상수가 아니라 실제 데이터 범위를 사용
-            long recentDamage = stats.recentDamage();
+            double recentDamage = stats.recentDamage()
+                    - stats.recentReceivedBuffContribution()
+                    + stats.recentGrantedBuffContribution();
+            if (recentDamage < 0) {
+                recentDamage = 0;
+            }
             long oldestSample = stats.oldestSampleTimestamp();
             long windowSpanMs = (oldestSample >= 0) ? (elapsedMs - oldestSample) : 0;
             double recentDps;

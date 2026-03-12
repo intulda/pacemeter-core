@@ -46,6 +46,16 @@ public sealed interface CombatEvent {
     record ActorJoined(long timestampMs, ActorId actorId, String actorName) implements CombatEvent {}
 
     /**
+     * 현재 전투의 보스를 식별한 이벤트.
+     *
+     * @param timestampMs 전투 시작 기준 경과 시간 (밀리초)
+     * @param actorId     보스 actor ID
+     * @param actorName   보스 이름
+     * @param maxHp       보스 최대 HP
+     */
+    record BossIdentified(long timestampMs, ActorId actorId, String actorName, long maxHp) implements CombatEvent {}
+
+    /**
      * 누군가가 데미지를 준 이벤트.
      * ACT의 NetworkAbility / NetworkAOEAbility 로그 라인에서 변환된다.
      *
@@ -56,6 +66,8 @@ public sealed interface CombatEvent {
      * @param actionId    사용한 스킬/기술 ID
      * @param amount      데미지 양 (게임 내부 계산이 끝난 후의 값)
      * @param damageType  데미지 분류 (직접공격, 도트, 소환수)
+     * @param criticalHit 크리티컬 여부(추정 포함)
+     * @param directHit   직격 여부(추정 포함)
      */
     record DamageEvent(
             long timestampMs,
@@ -64,7 +76,9 @@ public sealed interface CombatEvent {
             ActorId targetId,
             int actionId,
             long amount,
-            DamageType damageType
+            DamageType damageType,
+            boolean criticalHit,
+            boolean directHit
     ) implements CombatEvent {}
     /**
      * 버프/상태효과가 대상에게 걸린 이벤트.
@@ -75,6 +89,7 @@ public sealed interface CombatEvent {
      * @param sourceId    버프를 건 캐릭터 ID
      * @param targetId    버프를 받은 캐릭터 ID
      * @param buffId      버프 고유 ID
+     * @param buffName    버프 이름
      * @param durationMs  버프 지속시간 (밀리초). 0이면 무한 또는 알 수 없음
      */
     record BuffApply(
@@ -82,6 +97,7 @@ public sealed interface CombatEvent {
             ActorId sourceId,
             ActorId targetId,
             BuffId buffId,
+            String buffName,
             long durationMs
     ) implements CombatEvent {}
 
@@ -94,12 +110,14 @@ public sealed interface CombatEvent {
      * @param sourceId    원래 버프를 건 캐릭터 ID
      * @param targetId    버프가 사라진 캐릭터 ID
      * @param buffId      버프 고유 ID
+     * @param buffName    버프 이름
      */
     record BuffRemove(
             long timestampMs,
             ActorId sourceId,
             ActorId targetId,
-            BuffId buffId
+            BuffId buffId,
+            String buffName
     ) implements CombatEvent {}
 
     /**

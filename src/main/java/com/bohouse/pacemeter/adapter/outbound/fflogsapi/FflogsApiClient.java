@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -27,6 +28,9 @@ public class FflogsApiClient {
     private final FflogsTokenStore tokenStore;
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
+
+    @Value("${pacemeter.fflogs.partition:KR}")
+    private String defaultPartition;
 
     public FflogsApiClient(FflogsTokenStore tokenStore, ObjectMapper objectMapper) {
         this.tokenStore = tokenStore;
@@ -54,26 +58,33 @@ public class FflogsApiClient {
 
         if (className != null && !className.isBlank()) {
             query = """
-                    query($encounterId: Int!, $className: String!) {
+                    query($encounterId: Int!, $className: String!, $partition: String!) {
                       worldData {
                         encounter(id: $encounterId) {
-                          characterRankings(metric: rdps, className: $className, page: 1)
+                          characterRankings(metric: rdps, className: $className, partition: $partition, page: 1)
                         }
                       }
                     }
                     """;
-            variables = Map.of("encounterId", encounterId, "className", className);
+            variables = Map.of(
+                    "encounterId", encounterId,
+                    "className", className,
+                    "partition", effectivePartition()
+            );
         } else {
             query = """
-                    query($encounterId: Int!) {
+                    query($encounterId: Int!, $partition: String!) {
                       worldData {
                         encounter(id: $encounterId) {
-                          characterRankings(metric: rdps, page: 1)
+                          characterRankings(metric: rdps, partition: $partition, page: 1)
                         }
                       }
                     }
                     """;
-            variables = Map.of("encounterId", encounterId);
+            variables = Map.of(
+                    "encounterId", encounterId,
+                    "partition", effectivePartition()
+            );
         }
 
         try {
@@ -115,8 +126,8 @@ public class FflogsApiClient {
                 return Optional.empty();
             }
 
-            log.info("[FFLogs] top ranking: name={} rdps={} duration={}ms code={} sourceId={}",
-                    playerName, (long) amount, durationMs, reportCode, sourceId);
+            log.info("[FFLogs] top ranking: name={} rdps={} duration={}ms code={} sourceId={} partition={}",
+                    playerName, (long) amount, durationMs, reportCode, sourceId, effectivePartition());
 
             return Optional.of(new TopRanking(reportCode, reportStartMs, fightStartMs, durationMs, sourceId, playerName));
 
@@ -487,6 +498,13 @@ public class FflogsApiClient {
             log.error("[FFLogs] fetchZoneEncounters failed: {}", e.getMessage());
             return List.of();
         }
+    }
+
+    private String effectivePartition() {
+        if (defaultPartition == null || defaultPartition.isBlank()) {
+            return "KR";
+        }
+        return defaultPartition;
     }
 
     public record TopRanking(String reportCode, long reportStartMs, long fightStartMs, long durationMs, int sourceId, String playerName) {}

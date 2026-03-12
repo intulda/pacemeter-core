@@ -11,45 +11,62 @@
 ## Phase 1: 보스 HP 파싱 (백엔드)
 
 ### ✅ 완료
-- 없음
+- `CombatantAdded`에 `currentHp`, `maxHp` 필드 추가
+- `ActLineParser`에서 AddCombatant HP 파싱 추가
+- `CombatEvent`에 `BossIdentified` 이벤트 추가
+- `CombatState`에 `BossInfo` 상태 추가
+- `ActIngestionService`에 보스 후보 감지 및 전투 시작 후 `BossIdentified` 발행 로직 추가
+- 관련 단위 테스트 추가
+- 헤비급 3층 1풀 raw replay fixture 추출 스크립트 및 결과 파일 생성
+- `heavy3_pull1_minimal.log` 기반 raw replay 통합 테스트 추가
+- `EnrageTimeProvider -> CombatService -> SnapshotAggregator` clearability 계산 경로 연결
 
 ### 🔲 진행 중
-- 없음
+- Phase 2 초반부: 엔레이지 제공자 인터페이스 및 cactbot 매핑/파서 구조화ㅊ
+- rDPS 정밀도 개선: source/target 버프 재분배 최소 모델 완료, DoT snapshot 모델 보강 중
 
 ### 📋 할 일
 
-- [ ] **CombatantAdded record 수정**
+- [x] **CombatantAdded record 수정**
   - `currentHp`, `maxHp` 필드 추가
   - 파일: `src/main/java/com/bohouse/pacemeter/adapter/inbound/actws/CombatantAdded.java`
 
-- [ ] **ActLineParser 수정**
+- [x] **ActLineParser 수정**
   - AddCombatant (03 라인) 파싱 시 `p[10]` (currentHp), `p[11]` (maxHp) 읽기
   - `parseDecimalLong()` 메서드 추가
   - 파일: `src/main/java/com/bohouse/pacemeter/adapter/inbound/actws/ActLineParser.java:87-93`
 
-- [ ] **CombatEvent에 BossIdentified 이벤트 추가**
-  - `record BossIdentified(ActorId, String name, long maxHp, Instant)`
+- [x] **CombatEvent에 BossIdentified 이벤트 추가**
+  - `record BossIdentified(long timestampMs, ActorId actorId, String actorName, long maxHp)`
   - 파일: `src/main/java/com/bohouse/pacemeter/core/event/CombatEvent.java`
 
-- [ ] **CombatState에 보스 정보 필드 추가**
+- [x] **CombatState에 보스 정보 필드 추가**
   - `Optional<BossInfo>` 필드
   - `record BossInfo(ActorId, String name, long maxHp)`
-  - `withBoss()` 메서드
+  - `bossInfo()` 접근자 추가
   - 파일: `src/main/java/com/bohouse/pacemeter/core/model/CombatState.java`
 
-- [ ] **CombatEngine에서 BossIdentified 이벤트 처리**
-  - `handleBossIdentified()` 메서드 추가
+- [x] **CombatEngine에서 BossIdentified 이벤트 처리**
+  - `CombatState.reduce()` 경로로 BossIdentified 처리 추가
   - 파일: `src/main/java/com/bohouse/pacemeter/core/engine/CombatEngine.java`
 
-- [ ] **ActIngestionService에서 보스 식별 로직**
+- [x] **ActIngestionService에서 보스 식별 로직**
   - `onCombatantAdded()` 메서드에 보스 판단 로직 추가
   - `isBoss()` 메서드: NPC이고, HP 50M 이상, 펫 아님
   - 파일: `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
 
-- [ ] **테스트 작성**
+- [x] **테스트 작성**
   - ActLineParser 단위 테스트 (HP 파싱)
   - 보스 식별 로직 테스트
-  - JSONL 리플레이 테스트
+  - CombatState 반영 테스트
+
+### 다음 작업
+- [ ] Phase 1 마무리 검토: JSONL 리플레이 테스트 보강
+- [x] `heavy3_pull1_minimal.log`를 사용하는 replay 기반 검증 추가
+- [ ] `CactbotTimelineProvider` 실다운로드 통합 테스트 추가
+- [x] `CombatService`에 `EnrageTimeProvider` 연결
+- [x] `SnapshotAggregator` clearability 계산 추가
+- [ ] `OverlaySnapshot.clearability`를 프론트엔드 타입/UI에 연결
 
 **예상 시간**: 2~3시간
 
@@ -64,13 +81,13 @@
   - `record EnrageInfo(double seconds, Confidence, String source)`
   - 파일: `src/main/java/com/bohouse/pacemeter/application/port/outbound/EnrageTimeProvider.java`
 
-- [ ] **CactbotFileMapping 구현**
+- [x] **CactbotFileMapping 구현**
   - Territory ID → Cactbot 파일 경로 매핑 테이블
   - Light-Heavyweight (M1S~M4S), Cruiserweight (M5S~M8S), Heavyweight (M9S~M12S)
   - Endwalker P1S~P12S, Ultimate 추가
   - 파일: `src/main/java/com/bohouse/pacemeter/adapter/outbound/cactbot/CactbotFileMapping.java`
 
-- [ ] **CactbotTimelineProvider 구현**
+- [x] **CactbotTimelineProvider 구현**
   - GitHub Raw URL로 타임라인 다운로드
   - 정규식으로 "Enrage" 라인 파싱: `(\d+\.\d+)\s+".*\(enrage\)"`
   - 메모리 캐싱 (ConcurrentHashMap)
@@ -81,14 +98,14 @@
   - 오프라인 대응
   - 파일: `src/main/java/com/bohouse/pacemeter/adapter/outbound/cactbot/LocalCactbotCache.java`
 
-- [ ] **Spring 빈 설정**
+- [x] **Spring 빈 설정**
   - RestTemplate 빈 추가 (없으면)
   - EnrageTimeProvider 빈 등록
   - 파일: `src/main/java/com/bohouse/pacemeter/config/AppWiringConfig.java`
 
-- [ ] **테스트 작성**
+- [x] **테스트 작성**
   - CactbotFileMapping 테스트 (모든 Territory ID 매핑 확인)
-  - CactbotTimelineProvider 통합 테스트 (실제 GitHub 다운로드)
+  - CactbotTimelineProvider 파싱 단위 테스트
   - Enrage 파싱 단위 테스트
 
 **예상 시간**: 3~4시간
@@ -175,6 +192,15 @@
 ## 🔮 향후 추가 기능 (우선순위 낮음)
 
 ### 백엔드 개선
+- [x] DoT 틱 입력 경로 확인 및 `DamageType.DOT` 실제 생성 연결
+  - ACT `24` 라인을 `DotTickRaw`로 파싱해 `DamageType.DOT` 이벤트로 연결
+  - source: `p[17]/p[18]`, target: `p[2]/p[3]`, amount: `p[6]` hex
+- [x] DoT snapshot 모델 설계 및 1차 적용
+  - DoT 적용 시점 버프/디버프 attribution context 저장
+  - DoT 틱 발생 시 현재 버프 대신 snapshot 기준으로 시전자 rDPS와 버프 제공자 기여도에 반영
+  - `24.p[5]` non-zero 값은 status ID로 파싱해 `sourceId + targetId + statusId` 기준 exact 매칭
+  - `statusId == 0`인 DoT만 fallback 경로 사용
+- [ ] 레이드 버프/디버프 ID 카탈로그 실제 값 검증 확대
 - [ ] 서버(리전) 선택 기능 (한국/글로벌/일본)
 - [ ] 설정 API 엔드포인트 추가 (런타임 설정 변경)
 - [ ] Encounter 자동 매칭 개선 (targetName → encounter 매핑)
@@ -194,6 +220,15 @@
 - [ ] 히스토리 뷰 (과거 전투 기록)
 - [ ] 추가 정보 표시 (신뢰도 점수, 예상 킬타임 그래프)
 
+### 디버그/운영성
+- [x] 현재 전투 rDPS 분해 디버그 API 추가
+  - `GET /api/debug/combat`
+  - 현재 플레이어와 전체 액터의 `totalDamage`, `received/granted buff contribution`, `onlineRdps`, `activeBuffs` 확인 가능
+- [x] 원격 테스트용 ACT relay 경로 추가
+  - Electron 프론트가 로컬 ACT WebSocket을 읽고 중앙 서버로 raw line / 전투 메타데이터를 relay
+  - 서버는 `sessionId`별로 전투 상태를 분리해 계산
+  - 오버레이 WS와 디버그 API도 `sessionId` 기준으로 조회 가능
+
 ---
 
 ## 📌 참고 문서
@@ -202,8 +237,7 @@
 - **Cactbot 타임라인 파일**: `ui/raidboss/data/`
 - **FFLogs API**: https://www.fflogs.com/v2-api-docs/ff/
 - **ACT OverlayPlugin**: https://github.com/OverlayPlugin/OverlayPlugin
-- **프로젝트 MEMORY**: `.claude/projects/.../memory/MEMORY.md`
-- **개발 가이드**: `CLAUDE.md`
+- **개발 가이드**: `AGENTS.md`
 
 ---
 
@@ -214,7 +248,7 @@
    - JSONL 리플레이 테스트
    - 실제 ACT 연결 테스트
 
-2. **CLAUDE.md 개발 규칙 준수**
+2. **AGENTS.md 개발 규칙 준수**
    - Hexagonal Architecture 유지
    - core는 Spring 의존성 금지
    - 불변성 (record 사용)
@@ -248,4 +282,6 @@
 
 ---
 
-**최종 목표**: FFLogs 데이터 없어도 "이 딜로 가면 전멸기 안 보고 잡을 수 있나?"를 알 수 있게 하기!
+**최종 목표**
+1. FFLogs 데이터 없어도 "이 딜로 가면 전멸기 안 보고 잡을 수 있나?"를 알 수 있게 하기!
+2. FFlog 라이브 rDPS랑 내 rDPS 측정이랑 한 없이 가까워지기 

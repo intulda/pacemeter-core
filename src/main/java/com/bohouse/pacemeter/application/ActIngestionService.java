@@ -19,6 +19,7 @@ import java.util.*;
 public final class ActIngestionService {
 
     private static final Logger logger = LoggerFactory.getLogger(ActIngestionService.class);
+    private static final long BOSS_MIN_MAX_HP = 50_000_000L;
 
     private final CombatEventPort combatEventPort;
     private final CombatService combatService;
@@ -34,6 +35,9 @@ public final class ActIngestionService {
     private final Set<Long> partyMemberIds = new HashSet<>();  // 파티원 ID 추적
     private final Set<Long> deadPlayers = new HashSet<>();     // 사망한 파티원 ID
     private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 캐릭터별 직업 ID
+    private final Deque<DamageText> pendingDamageTexts = new ArrayDeque<>();
+    private BossCandidate pendingBoss;
+    private Long announcedBossId;
 
     // ACT가 파티 정보를 명시적으로 전달했는지 여부
     // false = 아직 미수신 (레이트 스타트 대응: 모든 PC 허용)
@@ -101,6 +105,12 @@ public final class ActIngestionService {
         lastDamageAt = null;
         lastEventInstant = null;
         deadPlayers.clear();
+        ownerByCombatantId.clear();
+        jobIdByActorId.clear();
+        pendingDamageTexts.clear();
+        combatService.clearCombatantContext();
+        pendingBoss = null;
+        announcedBossId = null;
         // currentPlayerId, currentPlayerName은 유지 (다음 전투에서도 사용)
     }
 
@@ -134,6 +144,12 @@ public final class ActIngestionService {
             // 존 변경 시 파티 정보 초기화 → 다음 CombatData/PartyList에서 재수신
             partyDataInitialized = false;
             partyMemberIds.clear();
+            ownerByCombatantId.clear();
+            jobIdByActorId.clear();
+            pendingDamageTexts.clear();
+            combatService.clearCombatantContext();
+            pendingBoss = null;
+            announcedBossId = null;
             logger.info("[Ingestion] ZoneChanged: id={} name={}", z.zoneId(), z.zoneName());
             return;
         }
@@ -190,6 +206,8 @@ public final class ActIngestionService {
                 }
 
             }
+
+            onCombatantAdded(c);
             return;
         }
 
@@ -211,8 +229,16 @@ public final class ActIngestionService {
             return;
         }
 
+        if (line instanceof DotTickRaw d) {
+            if (d.damage() > 0) {
+                emitDotDamage(d);
+            }
+            return;
+        }
+
         if (line instanceof DamageText d) {
-            // v1: typeCode 21에서 직접 데미지 추출하므로 DamageText 매칭은 미사용
+            pendingDamageTexts.addLast(d);
+            pruneOldDamageTexts(d.ts());
             return;
         }
 
@@ -224,6 +250,7 @@ public final class ActIngestionService {
                     new ActorId(b.sourceId()),
                     new ActorId(b.targetId()),
                     new BuffId(b.statusId()),
+                    b.statusName(),
                     (long) (b.durationSec() * 1000)
             ));
             return;
@@ -236,7 +263,8 @@ public final class ActIngestionService {
                     tsMs,
                     new ActorId(b.sourceId()),
                     new ActorId(b.targetId()),
-                    new BuffId(b.statusId())
+                    new BuffId(b.statusId()),
+                    b.statusName()
             ));
             return;
         }
@@ -299,10 +327,12 @@ public final class ActIngestionService {
         }
 
         DamageType damageType = mapDamageTypeV1(a);
+        DamageFlags damageFlags = matchDamageFlags(a);
 
         emittedDamageCount++;
-        logger.info("[Ingestion] DamageEvent #{}: actor={} skill={} amount={} tsMs={}",
-                emittedDamageCount, a.actorName(), a.skillName(), a.damage(), tsMs);
+        logger.info("[Ingestion] DamageEvent #{}: actor={} skill={} amount={} tsMs={} crit={} direct={}",
+                emittedDamageCount, a.actorName(), a.skillName(), a.damage(), tsMs,
+                damageFlags.criticalHit(), damageFlags.directHit());
         combatEventPort.onEvent(new CombatEvent.DamageEvent(
                 tsMs,
                 new ActorId(a.actorId()),
@@ -310,18 +340,98 @@ public final class ActIngestionService {
                 new ActorId(a.targetId()),
                 a.skillId(),
                 a.damage(),
-                damageType
+                damageType,
+                damageFlags.criticalHit(),
+                damageFlags.directHit()
         ));
+    }
+
+    private DamageFlags matchDamageFlags(NetworkAbilityRaw ability) {
+        pruneOldDamageTexts(ability.ts());
+
+        Iterator<DamageText> iterator = pendingDamageTexts.iterator();
+        while (iterator.hasNext()) {
+            DamageText text = iterator.next();
+            if (Math.abs(Duration.between(text.ts(), ability.ts()).toMillis()) > 2_000) {
+                continue;
+            }
+            if (text.amount() != ability.damage()) {
+                continue;
+            }
+            if (text.targetTextName() != null && !text.targetTextName().isBlank()
+                    && !text.targetTextName().equals(ability.targetName())) {
+                continue;
+            }
+            if (text.sourceTextName() != null && !text.sourceTextName().isBlank()
+                    && !text.sourceTextName().equals(ability.actorName())) {
+                continue;
+            }
+
+            iterator.remove();
+            return new DamageFlags(text.criticalLike(), text.directHitLike());
+        }
+
+        return DamageFlags.NONE;
+    }
+
+    private void pruneOldDamageTexts(Instant now) {
+        while (!pendingDamageTexts.isEmpty()) {
+            DamageText first = pendingDamageTexts.peekFirst();
+            if (first == null) {
+                return;
+            }
+            long ageMs = Math.abs(Duration.between(first.ts(), now).toMillis());
+            if (ageMs <= 3_000) {
+                return;
+            }
+            pendingDamageTexts.removeFirst();
+        }
     }
 
     private DamageType mapDamageTypeV1(NetworkAbilityRaw a) {
         // v1 규칙:
         // - 기본: DIRECT
         // - (ownerId==currentPlayerId) 이면 PET
-        // - (DOT는 24 메시지 붙일 때 처리)
         Long owner = ownerByCombatantId.get(a.actorId());
         if (owner != null && owner != 0 && owner == currentPlayerId) return DamageType.PET;
         return DamageType.DIRECT;
+    }
+
+    private void emitDotDamage(DotTickRaw dot) {
+        if (!isPartyMember(dot.sourceId())) return;
+        if (!fightStarted && !isValidCombatZone(dot.targetName())) {
+            return;
+        }
+
+        ensureFightStarted(dot.ts());
+        lastDamageAt = dot.ts();
+
+        if (deadPlayers.remove(dot.sourceId())) {
+            logger.info("[Ingestion] Actor {} revived (detected via DoT)", dot.sourceName());
+        }
+
+        long tsMs = Duration.between(fightStartInstant, dot.ts()).toMillis();
+        if (tsMs < 0) tsMs = 0;
+
+        boolean isNewPartyMember = partyMemberIds.add(dot.sourceId());
+        if (isNewPartyMember) {
+            combatEventPort.onEvent(new CombatEvent.ActorJoined(
+                    tsMs, new ActorId(dot.sourceId()), dot.sourceName()));
+            logger.info("[Ingestion] Party member joined via DoT: {}(id={}) | total party size={}",
+                    dot.sourceName(), Long.toHexString(dot.sourceId()), partyMemberIds.size());
+        }
+
+        combatEventPort.onEvent(new CombatEvent.DamageEvent(
+                tsMs,
+                new ActorId(dot.sourceId()),
+                dot.sourceName(),
+                new ActorId(dot.targetId()),
+                dot.statusId(),
+                dot.damage(),
+                DamageType.DOT,
+                false,
+                false
+        ));
     }
 
     private void ensureFightStarted(Instant firstEventTs) {
@@ -329,10 +439,12 @@ public final class ActIngestionService {
         fightStarted = true;
         fightStartInstant = firstEventTs;
         deadPlayers.clear();  // 새 전투 시작 시 사망자 목록 초기화
+        announcedBossId = null;
         logger.info("[Ingestion] fight started at {} zone={} zoneId={} playerJobId={} partySize={}",
                 firstEventTs, currentZoneName, currentZoneId,
                 Integer.toHexString(currentPlayerJobId), partyMemberIds.size());
         combatEventPort.onEvent(new CombatEvent.FightStart(0L, currentZoneName, currentZoneId, currentPlayerJobId));
+        emitPendingBossIfPresent();
     }
 
     /**
@@ -340,13 +452,17 @@ public final class ActIngestionService {
      * 던전/레이드 zone이거나, 타겟이 나무인형(훈련용 더미)이면 true.
      */
     private boolean isValidCombatZone(NetworkAbilityRaw a) {
+        return isValidCombatZone(a.targetName());
+    }
+
+    private boolean isValidCombatZone(String targetName) {
         // 1. 던전/레이드 zone인지 확인 (FflogsZoneLookup에 등록된 zone)
         if (fflogsZoneLookup.resolve(currentZoneId).isPresent()) {
             return true;
         }
 
         // 2. 타겟이 나무인형이면 허용 (훈련용 더미)
-        if (a.targetName() != null && a.targetName().contains("나무인형")) {
+        if (targetName != null && targetName.contains("나무인형")) {
             return true;
         }
 
@@ -374,19 +490,23 @@ public final class ActIngestionService {
      * partyDataInitialized=false이면 PC 전체 허용 (레이트 스타트 / 파티 정보 미수신 대응).
      */
     private boolean isPartyMember(NetworkAbilityRaw a) {
+        return isPartyMember(a.actorId());
+    }
+
+    private boolean isPartyMember(long actorId) {
         // 파티원 직접 확인
-        if (partyMemberIds.contains(a.actorId())) {
+        if (partyMemberIds.contains(actorId)) {
             return true;
         }
 
         // 펫/소환수의 소유자가 파티원인지 확인
-        Long owner = ownerByCombatantId.get(a.actorId());
+        Long owner = ownerByCombatantId.get(actorId);
         if (owner != null && partyMemberIds.contains(owner)) {
             return true;
         }
 
         // 파티 정보 미수신 시: PC면 파티원으로 간주 (레이트 스타트 대응)
-        if (!partyDataInitialized && isPlayerCharacter(a.actorId())) {
+        if (!partyDataInitialized && isPlayerCharacter(actorId)) {
             return true;
         }
 
@@ -401,11 +521,57 @@ public final class ActIngestionService {
         return actorId >= 0x10000000L && actorId < 0x20000000L;
     }
 
+    private static boolean isNpc(long actorId) {
+        return actorId >= 0x40000000L && actorId < 0x50000000L;
+    }
+
+    private void onCombatantAdded(CombatantAdded combatant) {
+        if (!isBoss(combatant)) {
+            return;
+        }
+
+        pendingBoss = new BossCandidate(combatant.id(), combatant.name(), combatant.maxHp());
+        logger.info("[Ingestion] boss candidate detected: {}(id={}) maxHp={}",
+                combatant.name(), Long.toHexString(combatant.id()), combatant.maxHp());
+
+        if (fightStarted) {
+            emitPendingBossIfPresent();
+        }
+    }
+
+    private boolean isBoss(CombatantAdded combatant) {
+        return isNpc(combatant.id())
+                && combatant.ownerId() == 0
+                && combatant.maxHp() >= BOSS_MIN_MAX_HP;
+    }
+
+    private void emitPendingBossIfPresent() {
+        if (!fightStarted || pendingBoss == null) {
+            return;
+        }
+        if (Objects.equals(announcedBossId, pendingBoss.actorId())) {
+            return;
+        }
+
+        combatEventPort.onEvent(new CombatEvent.BossIdentified(
+                nowElapsedMs(),
+                new ActorId(pendingBoss.actorId()),
+                pendingBoss.name(),
+                pendingBoss.maxHp()
+        ));
+        announcedBossId = pendingBoss.actorId();
+    }
+
 
     private long toElapsedMs(Instant eventTs) {
         if (fightStartInstant == null) return 0;
         long ms = Duration.between(fightStartInstant, eventTs).toMillis();
         return Math.max(0, ms);
+    }
+
+    private record BossCandidate(long actorId, String name, long maxHp) {}
+    private record DamageFlags(boolean criticalHit, boolean directHit) {
+        private static final DamageFlags NONE = new DamageFlags(false, false);
     }
 
 }

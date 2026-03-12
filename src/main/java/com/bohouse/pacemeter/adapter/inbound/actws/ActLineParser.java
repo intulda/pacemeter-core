@@ -85,12 +85,14 @@ public final class ActLineParser {
         // 3: AddCombatant
         // Format: 03|ts|id|name|jobId|level|ownerId|...
         if (typeCode == 3) {
-            if (p.length < 9) return null;
+            if (p.length < 12) return null;
             long id = parseHexLong(p[2]);
             String name = p[3];
             int jobId = (int) parseHexLong(p[4]);
             long ownerId = parseHexLong(p[6]);
-            return new CombatantAdded(ts, id, name, jobId, ownerId, line);
+            long currentHp = parseDecimalLong(p[10]);
+            long maxHp = parseDecimalLong(p[11]);
+            return new CombatantAdded(ts, id, name, jobId, ownerId, currentHp, maxHp, line);
         }
 
         // 26: StatusAdd (BuffApply)
@@ -132,6 +134,24 @@ public final class ActLineParser {
             return new NetworkAbilityRaw(ts, typeCode, actorId, actorName, skillId, skillName, targetId, targetName, damage, line);
         }
 
+        // 24: DoT tick
+        // Example:
+        // 24|ts|targetId|targetName|DoT|0|damageHex|...|sourceId|sourceName|...
+        if (typeCode == 24) {
+            if (p.length < 19) return null;
+            long targetId = parseHexLong(p[2]);
+            String targetName = p[3];
+            int statusId = (int) parseHexLong(p[5]);
+            long damage = parseHexLong(p[6]);
+            long sourceId = parseHexLong(p[17]);
+            String sourceName = p[18];
+
+            if (sourceId == 0 || sourceName == null || sourceName.isBlank() || damage <= 0) {
+                return null;
+            }
+            return new DotTickRaw(ts, targetId, targetName, statusId, sourceId, sourceName, damage, line);
+        }
+
         // 25: NetworkDeath
         if (typeCode == 25) {
             if (p.length < 4) return null;
@@ -155,6 +175,12 @@ public final class ActLineParser {
     private static long parseHexLong(String hex) {
         if (hex == null || hex.isBlank()) return 0;
         try { return Long.parseUnsignedLong(hex, 16); }
+        catch (NumberFormatException e) { return 0; }
+    }
+
+    private static long parseDecimalLong(String value) {
+        if (value == null || value.isBlank()) return 0;
+        try { return Long.parseLong(value); }
         catch (NumberFormatException e) { return 0; }
     }
 
