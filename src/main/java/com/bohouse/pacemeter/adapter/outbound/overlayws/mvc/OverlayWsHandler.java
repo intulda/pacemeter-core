@@ -51,19 +51,38 @@ public class OverlayWsHandler extends TextWebSocketHandler {
     }
 
     public void broadcast(String json) {
-        broadcastToSession(DEFAULT_SESSION_ID, json);
+        TextMessage msg = new TextMessage(json);
+        for (WebSocketSession session : sessions) {
+            sendMessage(session, msg);
+        }
     }
 
     public void broadcastToSession(String relaySessionId, String json) {
         TextMessage msg = new TextMessage(json);
         Set<WebSocketSession> scopedSessions = sessionsByRelayId.getOrDefault(relaySessionId, Set.of());
         for (WebSocketSession s : scopedSessions) {
+            sendMessage(s, msg);
+        }
+    }
+
+    private void sendMessage(WebSocketSession session, TextMessage message) {
+        try {
+            if (session.isOpen()) {
+                session.sendMessage(message);
+            }
+        } catch (Exception e) {
+            sessions.remove(session);
+            String relaySessionId = (String) session.getAttributes().getOrDefault("relaySessionId", DEFAULT_SESSION_ID);
+            Set<WebSocketSession> scopedSessions = sessionsByRelayId.get(relaySessionId);
+            if (scopedSessions != null) {
+                scopedSessions.remove(session);
+                if (scopedSessions.isEmpty()) {
+                    sessionsByRelayId.remove(relaySessionId);
+                }
+            }
             try {
-                if (s.isOpen()) s.sendMessage(msg);
-            } catch (Exception e) {
-                sessions.remove(s);
-                scopedSessions.remove(s);
-                try { s.close(); } catch (Exception ignore) {}
+                session.close();
+            } catch (Exception ignore) {
             }
         }
     }
