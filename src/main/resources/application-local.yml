@@ -1,0 +1,12 @@
+spring:
+  config:
+    activate:
+      on-profile: local
+
+pacemeter:
+  fflogs:
+    client-id: ${PACE_FFLOGS_CLIENT_ID:}
+    client-secret: ${PACE_FFLOGS_CLIENT_SECRET:}
+    partition: ${PACE_FFLOGS_PARTITION:}
+  act:
+    direct-enabled: ${PACE_ACT_DIRECT_ENABLED:false}

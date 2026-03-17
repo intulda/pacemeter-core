@@ -17,9 +17,19 @@ import java.util.*;
 
 @Component
 public final class ActIngestionService {
-
     private static final Logger logger = LoggerFactory.getLogger(ActIngestionService.class);
     private static final long BOSS_MIN_MAX_HP = 10_000_000L;
+    private static final Set<Integer> UNKNOWN_STATUS_DOT_JOB_WHITELIST = Set.of(
+            0x16, // Dragoon - Chaotic Spring
+            0x18, // White Mage - Dia
+            0x19, // Black Mage - Thunder
+            0x1C, // Scholar - Biolysis
+            0x1E, // Ninja - Dokumori
+            0x21, // Astrologian - Combust
+            0x22, // Samurai - Higanbana
+            0x25, // Gunbreaker - Sonic Break
+            0x28  // Sage - Eukrasian Dosis
+    );
 
     private final CombatEventPort combatEventPort;
     private final CombatService combatService;
@@ -36,6 +46,7 @@ public final class ActIngestionService {
     private final Set<Long> deadPlayers = new HashSet<>();     // 사망한 파티원 ID
     private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 캐릭터별 직업 ID
     private final Deque<DamageText> pendingDamageTexts = new ArrayDeque<>();
+    private final Deque<PendingBuffEvent> pendingBuffEvents = new ArrayDeque<>();
     private BossCandidate pendingBoss;
     private Long announcedBossId;
 
@@ -108,6 +119,7 @@ public final class ActIngestionService {
         ownerByCombatantId.clear();
         jobIdByActorId.clear();
         pendingDamageTexts.clear();
+        pendingBuffEvents.clear();
         combatService.clearCombatantContext();
         pendingBoss = null;
         announcedBossId = null;
@@ -147,6 +159,7 @@ public final class ActIngestionService {
             ownerByCombatantId.clear();
             jobIdByActorId.clear();
             pendingDamageTexts.clear();
+            pendingBuffEvents.clear();
             combatService.clearCombatantContext();
             pendingBoss = null;
             announcedBossId = null;
@@ -232,7 +245,7 @@ public final class ActIngestionService {
         }
 
         if (line instanceof DotTickRaw d) {
-            if (d.damage() > 0) {
+            if (d.damage() > 0 && d.isDot()) {
                 emitDotDamage(d);
             }
             return;
@@ -245,29 +258,20 @@ public final class ActIngestionService {
         }
 
         if (line instanceof BuffApplyRaw b) {
-            if (!fightStarted) return;
-            long tsMs = toElapsedMs(b.ts());
-            combatEventPort.onEvent(new CombatEvent.BuffApply(
-                    tsMs,
-                    new ActorId(b.sourceId()),
-                    new ActorId(b.targetId()),
-                    new BuffId(b.statusId()),
-                    b.statusName(),
-                    (long) (b.durationSec() * 1000)
-            ));
+            if (!fightStarted) {
+                pendingBuffEvents.addLast(PendingBuffEvent.apply(b));
+                return;
+            }
+            emitBuffApply(b);
             return;
         }
 
         if (line instanceof BuffRemoveRaw b) {
-            if (!fightStarted) return;
-            long tsMs = toElapsedMs(b.ts());
-            combatEventPort.onEvent(new CombatEvent.BuffRemove(
-                    tsMs,
-                    new ActorId(b.sourceId()),
-                    new ActorId(b.targetId()),
-                    new BuffId(b.statusId()),
-                    b.statusName()
-            ));
+            if (!fightStarted) {
+                pendingBuffEvents.addLast(PendingBuffEvent.remove(b));
+                return;
+            }
+            emitBuffRemove(b);
             return;
         }
 
@@ -299,12 +303,39 @@ public final class ActIngestionService {
         }
     }
 
-    private void emitDamage(NetworkAbilityRaw a) {
-        // 파티원만 처리 (본인 + 파티원 전체)
-        if (!isPartyMember(a)) return;
+    boolean wouldEmitDamage(NetworkAbilityRaw ability) {
+        if (!isPartyMember(ability)) {
+            return false;
+        }
+        if (isFriendlyTarget(ability.targetId())) {
+            return false;
+        }
+        return fightStarted || isValidCombatZone(ability);
+    }
 
-        // 던전/레이드 또는 나무인형 전투만 허용
-        if (!fightStarted && !isValidCombatZone(a)) {
+    boolean wouldEmitDotDamage(DotTickRaw dot) {
+        if (!shouldAcceptDot(dot)) {
+            return false;
+        }
+        if (!isPartyMember(dot.sourceId())) {
+            return false;
+        }
+        if (isFriendlyTarget(dot.targetId())) {
+            return false;
+        }
+        return fightStarted || isValidCombatZone(dot.targetName());
+    }
+
+    private boolean shouldAcceptDot(DotTickRaw dot) {
+        if (dot.hasKnownStatus()) {
+            return true;
+        }
+        Integer jobId = jobIdByActorId.get(dot.sourceId());
+        return jobId != null && UNKNOWN_STATUS_DOT_JOB_WHITELIST.contains(jobId);
+    }
+
+    private void emitDamage(NetworkAbilityRaw a) {
+        if (!wouldEmitDamage(a)) {
             return;
         }
 
@@ -349,12 +380,19 @@ public final class ActIngestionService {
     }
 
     private DamageFlags matchDamageFlags(NetworkAbilityRaw ability) {
+        if (ability.criticalHit() || ability.directHit()) {
+            return new DamageFlags(ability.criticalHit(), ability.directHit());
+        }
+
         pruneOldDamageTexts(ability.ts());
 
-        Iterator<DamageText> iterator = pendingDamageTexts.iterator();
-        while (iterator.hasNext()) {
-            DamageText text = iterator.next();
-            if (Math.abs(Duration.between(text.ts(), ability.ts()).toMillis()) > 2_000) {
+        DamageText bestMatch = null;
+        int bestScore = Integer.MAX_VALUE;
+        long bestDeltaMs = Long.MAX_VALUE;
+
+        for (DamageText text : pendingDamageTexts) {
+            long deltaMs = Math.abs(Duration.between(text.ts(), ability.ts()).toMillis());
+            if (deltaMs > 2_000) {
                 continue;
             }
             if (text.amount() != ability.damage()) {
@@ -364,16 +402,31 @@ public final class ActIngestionService {
                     && !text.targetTextName().equals(ability.targetName())) {
                 continue;
             }
-            if (text.sourceTextName() != null && !text.sourceTextName().isBlank()
-                    && !text.sourceTextName().equals(ability.actorName())) {
-                continue;
-            }
 
-            iterator.remove();
-            return new DamageFlags(text.criticalLike(), text.directHitLike());
+            int score = sourceMatchScore(text.sourceTextName(), ability.actorName());
+            if (score < bestScore || (score == bestScore && deltaMs < bestDeltaMs)) {
+                bestMatch = text;
+                bestScore = score;
+                bestDeltaMs = deltaMs;
+            }
+        }
+
+        if (bestMatch != null) {
+            pendingDamageTexts.remove(bestMatch);
+            return new DamageFlags(bestMatch.criticalLike(), bestMatch.directHitLike());
         }
 
         return DamageFlags.NONE;
+    }
+
+    private int sourceMatchScore(String textSourceName, String actorName) {
+        if (textSourceName == null || textSourceName.isBlank()) {
+            return 1;
+        }
+        if (textSourceName.equals(actorName)) {
+            return 0;
+        }
+        return 2;
     }
 
     private void pruneOldDamageTexts(Instant now) {
@@ -400,8 +453,7 @@ public final class ActIngestionService {
     }
 
     private void emitDotDamage(DotTickRaw dot) {
-        if (!isPartyMember(dot.sourceId())) return;
-        if (!fightStarted && !isValidCombatZone(dot.targetName())) {
+        if (!wouldEmitDotDamage(dot)) {
             return;
         }
 
@@ -446,7 +498,44 @@ public final class ActIngestionService {
                 firstEventTs, currentZoneName, currentZoneId,
                 Integer.toHexString(currentPlayerJobId), partyMemberIds.size());
         combatEventPort.onEvent(new CombatEvent.FightStart(0L, currentZoneName, currentZoneId, currentPlayerJobId));
+        emitPendingBuffs();
         emitPendingBossIfPresent();
+    }
+
+    private void emitPendingBuffs() {
+        while (!pendingBuffEvents.isEmpty()) {
+            PendingBuffEvent pending = pendingBuffEvents.removeFirst();
+            if (pending.apply() != null) {
+                emitBuffApply(pending.apply());
+                continue;
+            }
+            if (pending.remove() != null) {
+                emitBuffRemove(pending.remove());
+            }
+        }
+    }
+
+    private void emitBuffApply(BuffApplyRaw b) {
+        long tsMs = toElapsedMs(b.ts());
+        combatEventPort.onEvent(new CombatEvent.BuffApply(
+                tsMs,
+                new ActorId(b.sourceId()),
+                new ActorId(b.targetId()),
+                new BuffId(b.statusId()),
+                b.statusName(),
+                (long) (b.durationSec() * 1000)
+        ));
+    }
+
+    private void emitBuffRemove(BuffRemoveRaw b) {
+        long tsMs = toElapsedMs(b.ts());
+        combatEventPort.onEvent(new CombatEvent.BuffRemove(
+                tsMs,
+                new ActorId(b.sourceId()),
+                new ActorId(b.targetId()),
+                new BuffId(b.statusId()),
+                b.statusName()
+        ));
     }
 
     /**
@@ -515,6 +604,14 @@ public final class ActIngestionService {
         return false;
     }
 
+    private boolean isFriendlyTarget(long targetId) {
+        if (partyMemberIds.contains(targetId)) {
+            return true;
+        }
+        Long owner = ownerByCombatantId.get(targetId);
+        return owner != null && partyMemberIds.contains(owner);
+    }
+
     /**
      * FFXIV에서 PC(플레이어 캐릭터)의 actorId는 0x10000000 ~ 0x1FFFFFFF 범위.
      * NPC/몬스터는 0x40000000+, 환경은 0xE0000000+ 등.
@@ -572,6 +669,15 @@ public final class ActIngestionService {
     }
 
     private record BossCandidate(long actorId, String name, long maxHp) {}
+    private record PendingBuffEvent(BuffApplyRaw apply, BuffRemoveRaw remove) {
+        private static PendingBuffEvent apply(BuffApplyRaw apply) {
+            return new PendingBuffEvent(apply, null);
+        }
+
+        private static PendingBuffEvent remove(BuffRemoveRaw remove) {
+            return new PendingBuffEvent(null, remove);
+        }
+    }
     private record DamageFlags(boolean criticalHit, boolean directHit) {
         private static final DamageFlags NONE = new DamageFlags(false, false);
     }

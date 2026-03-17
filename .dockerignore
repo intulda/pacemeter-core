@@ -1,0 +1,10 @@
+.git
+.gradle
+.idea
+build
+out
+node_modules
+*.log
+README.md
+tasks.md
+AGENTS.md

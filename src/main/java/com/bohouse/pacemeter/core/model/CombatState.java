@@ -128,6 +128,7 @@ public final class CombatState {
         if (phase != Phase.ACTIVE) return false;
 
         this.elapsedMs = e.timestampMs();
+        pruneExpiredState(e.timestampMs());
 
         // 처음 보는 캐릭터면 새로 등록, 기존 캐릭터면 기존 통계를 가져옴
         ActorStats stats = actors.computeIfAbsent(e.sourceId(),
@@ -441,7 +442,8 @@ public final class CombatState {
             BuffId buffId,
             String buffName,
             AttributionContext attributionContext,
-            long appliedAtMs
+            long appliedAtMs,
+            long durationMs
     ) {
     }
 
@@ -450,6 +452,7 @@ public final class CombatState {
         if (phase != Phase.ACTIVE) return false;
 
         this.elapsedMs = e.timestampMs();
+        pruneExpiredState(e.timestampMs());
 
         // 버프는 "받는 쪽(target)" 캐릭터에 기록한다
         ActorStats target = actors.computeIfAbsent(e.targetId(),
@@ -462,7 +465,8 @@ public final class CombatState {
                             e.buffId(),
                             e.buffName(),
                             captureCurrentAttributionContext(e.sourceId(), e.targetId()),
-                            e.timestampMs()
+                            e.timestampMs(),
+                            e.durationMs()
                     )
             );
         }
@@ -477,6 +481,7 @@ public final class CombatState {
         if (phase != Phase.ACTIVE) return false;
 
         this.elapsedMs = e.timestampMs();
+        pruneExpiredState(e.timestampMs());
 
         ActorStats target = actors.get(e.targetId());
         if (target != null) {
@@ -523,6 +528,7 @@ public final class CombatState {
         if (phase != Phase.ACTIVE) return false;
 
         this.elapsedMs = e.timestampMs();
+        pruneExpiredState(e.timestampMs());
 
         // 슬라이딩 윈도우: 현재 시각 - 15초보다 오래된 데미지 기록 삭제
         long cutoff = e.timestampMs() - RECENT_WINDOW_MS;
@@ -538,9 +544,21 @@ public final class CombatState {
         if (phase != Phase.ACTIVE) return false;
 
         this.elapsedMs = e.timestampMs();
+        pruneExpiredState(e.timestampMs());
         this.phase = Phase.ENDED;
 
         return true;  // 마지막 스냅샷을 만들어라!
+    }
+
+    private void pruneExpiredState(long currentTimestampMs) {
+        for (ActorStats stats : actors.values()) {
+            stats.pruneExpiredBuffs(currentTimestampMs);
+        }
+        dotSnapshots.entrySet().removeIf(entry -> {
+            DotSnapshot snapshot = entry.getValue();
+            return snapshot.durationMs() > 0
+                    && snapshot.appliedAtMs() + snapshot.durationMs() <= currentTimestampMs;
+        });
     }
 
     // ========================================================================

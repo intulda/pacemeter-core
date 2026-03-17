@@ -118,6 +118,12 @@ public final class ActorStats {
                 b.buffId().equals(buffId) && b.sourceId().equals(sourceId));
     }
 
+    public void pruneExpiredBuffs(long currentTimestampMs) {
+        activeBuffs.removeIf(buff ->
+                buff.durationMs() > 0
+                        && buff.appliedAtMs() + buff.durationMs() <= currentTimestampMs);
+    }
+
     /**
      * 기준 시간(cutoffMs)보다 오래된 데미지 기록을 삭제한다.
      * 매 Tick마다 호출되어 최근 윈도우(기본 15초) 이내의 데이터만 남긴다.

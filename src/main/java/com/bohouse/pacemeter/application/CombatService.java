@@ -18,6 +18,7 @@ import com.bohouse.pacemeter.core.model.CombatState;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -130,14 +131,46 @@ public class CombatService implements CombatEventPort {
         }
 
         Map<ActorId, RdpsEstimate> estimates = onlineEstimator.estimate(state);
+        Map<ActorId, AggregatedActorMetrics> petMetricsByOwner = new HashMap<>();
+        for (Map.Entry<ActorId, ActorId> ownerEntry : state.ownerMap().entrySet()) {
+            ActorStats petStats = state.actors().get(ownerEntry.getKey());
+            if (petStats == null) {
+                continue;
+            }
+            AggregatedActorMetrics metrics = petMetricsByOwner.computeIfAbsent(
+                    ownerEntry.getValue(),
+                    ignored -> new AggregatedActorMetrics()
+            );
+            metrics.totalDamage += petStats.totalDamage();
+            metrics.recentDamage += petStats.recentDamage();
+            metrics.receivedBuffContribution += petStats.totalReceivedBuffContribution();
+            metrics.grantedBuffContribution += petStats.totalGrantedBuffContribution();
+            metrics.onlineRdps += estimates.getOrDefault(ownerEntry.getKey(), new RdpsEstimate(0.0, Confidence.none()))
+                    .actorOnlineRdps();
+            metrics.hitCount += petStats.hitCount();
+            metrics.observedHitSampleCount += petStats.observedHitSampleCount();
+            metrics.observedCritHitCount += petStats.observedCritHitCount();
+            metrics.observedDirectHitCount += petStats.observedDirectHitCount();
+        }
+
         List<CombatDebugSnapshot.ActorDebugEntry> actors = new ArrayList<>();
         for (Map.Entry<ActorId, ActorStats> entry : state.actors().entrySet()) {
             ActorId actorId = entry.getKey();
             ActorStats stats = entry.getValue();
+            if (state.ownerMap().containsKey(actorId)) {
+                continue;
+            }
             if (stats.name() == null || stats.name().isBlank()) {
                 continue;
             }
-            actors.add(toDebugEntry(actorId, stats, jobIds, estimates, currentPlayerId));
+            actors.add(toDebugEntry(
+                    actorId,
+                    stats,
+                    petMetricsByOwner.get(actorId),
+                    jobIds,
+                    estimates,
+                    currentPlayerId
+            ));
         }
         actors.sort(Comparator.comparingDouble(CombatDebugSnapshot.ActorDebugEntry::onlineRdps).reversed());
 
@@ -159,13 +192,15 @@ public class CombatService implements CombatEventPort {
                 currentPlayer,
                 List.copyOf(actors),
                 bossInfo.map(this::toBossDebugInfo).orElse(null),
-                enrageInfo.map(this::toEnrageDebugInfo).orElse(null)
+                enrageInfo.map(this::toEnrageDebugInfo).orElse(null),
+                List.of()
         );
     }
 
     private CombatDebugSnapshot.ActorDebugEntry toDebugEntry(
             ActorId actorId,
             ActorStats stats,
+            AggregatedActorMetrics petMetrics,
             Map<ActorId, Integer> jobIds,
             Map<ActorId, RdpsEstimate> estimates,
             ActorId currentPlayerId
@@ -174,22 +209,54 @@ public class CombatService implements CombatEventPort {
                 .map(this::toActiveBuffEntry)
                 .toList();
         RdpsEstimate estimate = estimates.getOrDefault(actorId, new RdpsEstimate(0.0, Confidence.none()));
+        long totalDamage = stats.totalDamage();
+        long recentDamage = stats.recentDamage();
+        double receivedBuffContribution = stats.totalReceivedBuffContribution();
+        double grantedBuffContribution = stats.totalGrantedBuffContribution();
+        double onlineRdps = estimate.actorOnlineRdps();
+        int hitCount = stats.hitCount();
+        int observedHitSampleCount = stats.observedHitSampleCount();
+        int observedCritHitCount = stats.observedCritHitCount();
+        int observedDirectHitCount = stats.observedDirectHitCount();
+        if (petMetrics != null) {
+            totalDamage += petMetrics.totalDamage;
+            recentDamage += petMetrics.recentDamage;
+            receivedBuffContribution += petMetrics.receivedBuffContribution;
+            grantedBuffContribution += petMetrics.grantedBuffContribution;
+            onlineRdps += petMetrics.onlineRdps;
+            hitCount += petMetrics.hitCount;
+            observedHitSampleCount += petMetrics.observedHitSampleCount;
+            observedCritHitCount += petMetrics.observedCritHitCount;
+            observedDirectHitCount += petMetrics.observedDirectHitCount;
+        }
         return new CombatDebugSnapshot.ActorDebugEntry(
                 actorId,
                 stats.name(),
                 jobIds.getOrDefault(actorId, 0),
                 actorId.equals(currentPlayerId),
-                stats.totalDamage(),
-                stats.recentDamage(),
-                stats.totalReceivedBuffContribution(),
-                stats.totalGrantedBuffContribution(),
-                estimate.actorOnlineRdps(),
-                stats.hitCount(),
-                stats.observedHitSampleCount(),
-                stats.observedCritHitCount(),
-                stats.observedDirectHitCount(),
+                totalDamage,
+                recentDamage,
+                receivedBuffContribution,
+                grantedBuffContribution,
+                onlineRdps,
+                hitCount,
+                observedHitSampleCount,
+                observedCritHitCount,
+                observedDirectHitCount,
                 activeBuffs
         );
+    }
+
+    private static final class AggregatedActorMetrics {
+        private long totalDamage;
+        private long recentDamage;
+        private double receivedBuffContribution;
+        private double grantedBuffContribution;
+        private double onlineRdps;
+        private int hitCount;
+        private int observedHitSampleCount;
+        private int observedCritHitCount;
+        private int observedDirectHitCount;
     }
 
     private CombatDebugSnapshot.ActiveBuffEntry toActiveBuffEntry(ActiveBuff activeBuff) {

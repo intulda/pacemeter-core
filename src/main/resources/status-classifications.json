@@ -1,0 +1,275 @@
+[
+  {
+    "status_id": 1362,
+    "status_name": "신성한 보호막",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Scholar shield buff. Not an rDPS raid buff."
+  },
+  {
+    "status_id": 248,
+    "status_name": "파멸의 진",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "Damage-over-time effect, not an external raid buff."
+  },
+  {
+    "status_id": 1457,
+    "status_name": "뿌리치기",
+    "classification": "exclude",
+    "category": "utility",
+    "note": "Rescue-style utility effect."
+  },
+  {
+    "status_id": 2108,
+    "status_name": "뿌리치기 대상",
+    "classification": "exclude",
+    "category": "utility",
+    "note": "Target-side utility status, not rDPS."
+  },
+  {
+    "status_id": 3685,
+    "status_name": "하늘 구현",
+    "classification": "include",
+    "category": "raid_damage_buff",
+    "note": "Confirmed as an offensive synergy that increases outgoing damage."
+  },
+  {
+    "status_id": 2703,
+    "status_name": "타오르는 빛",
+    "classification": "include",
+    "category": "raid_damage_buff",
+    "note": "Summoner raid damage buff (Searing Light)."
+  },
+  {
+    "status_id": 1894,
+    "status_name": "어둠의 포교자",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Dark Missionary defensive buff."
+  },
+  {
+    "status_id": 1879,
+    "status_name": "천궁의 반목",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Neutral Sect. Shield/healing amplification, not rDPS redistribution."
+  },
+  {
+    "status_id": 1297,
+    "status_name": "성원",
+    "classification": "exclude",
+    "category": "personal",
+    "note": "Acceleration. Personal cast enhancement, not external raid buff."
+  },
+  {
+    "status_id": 48,
+    "status_name": "식사",
+    "classification": "exclude",
+    "category": "consumable",
+    "note": "Food buff. Not external raid buff attribution."
+  },
+  {
+    "status_id": 1848,
+    "status_name": "에스프리",
+    "classification": "exclude",
+    "category": "resource",
+    "note": "Dancer resource generation, not direct damage amplification."
+  },
+  {
+    "status_id": 861,
+    "status_name": "소이탄",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "Damage-over-time effect."
+  },
+  {
+    "status_id": 3687,
+    "status_name": "템페라 덧칠",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Defensive barrier effect."
+  },
+  {
+    "status_id": 2718,
+    "status_name": "대우주",
+    "classification": "exclude",
+    "category": "healing",
+    "note": "Macrocosmos-style healing effect, not rDPS."
+  },
+  {
+    "status_id": 1873,
+    "status_name": "절제: 효과",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Scholar mitigation effect."
+  },
+  {
+    "status_id": 1912,
+    "status_name": "성소: 효과",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Sacred Soil mitigation effect."
+  },
+  {
+    "status_id": 1881,
+    "status_name": "컴버가",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "Damage-over-time effect."
+  },
+  {
+    "status_id": 1895,
+    "status_name": "고독법",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "Mostly SCH source -> boss target pattern indicates a DoT/debuff, not raid-buff redistribution."
+  },
+  {
+    "status_id": 2217,
+    "status_name": "현인의 담시곡",
+    "classification": "include",
+    "category": "raid_damage_buff",
+    "note": "Bard song; party damage contribution candidate."
+  },
+  {
+    "status_id": 1838,
+    "status_name": "원형충격파",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "Target debuff / DoT, not raid damage buff redistribution."
+  },
+  {
+    "status_id": 2711,
+    "status_name": "노도계",
+    "classification": "exclude",
+    "category": "personal",
+    "note": "Personal VPR status."
+  },
+  {
+    "status_id": 1871,
+    "status_name": "디아",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "Dia DoT."
+  },
+  {
+    "status_id": 1951,
+    "status_name": "책략가",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "MCH source -> party-wide spread strongly suggests Tactician-style mitigation, not offensive buff."
+  },
+  {
+    "status_id": 2712,
+    "status_name": "질풍계",
+    "classification": "exclude",
+    "category": "personal",
+    "note": "Personal VPR status."
+  },
+  {
+    "status_id": 2216,
+    "status_name": "여행신의 무곡",
+    "classification": "include",
+    "category": "raid_damage_buff",
+    "note": "Bard song; party damage contribution candidate."
+  },
+  {
+    "status_id": 2618,
+    "status_name": "케이라콜레",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Sage mitigation effect."
+  },
+  {
+    "status_id": 2938,
+    "status_name": "케이라콜레[회복]",
+    "classification": "exclude",
+    "category": "healing",
+    "note": "Heal-over-time companion effect."
+  },
+  {
+    "status_id": 1193,
+    "status_name": "앙갚음",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Mitigation / damage down effect."
+  },
+  {
+    "status_id": 1176,
+    "status_name": "수호자의 결의",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Tank mitigation."
+  },
+  {
+    "status_id": 786,
+    "status_name": "전투 기도",
+    "classification": "include",
+    "category": "crit_rate_buff",
+    "note": "Battle Litany-style crit rate raid buff."
+  },
+  {
+    "status_id": 3914,
+    "status_name": "백뢰총",
+    "classification": "review",
+    "category": "unknown",
+    "note": "Needs confirmation."
+  },
+  {
+    "status_id": 1839,
+    "status_name": "빛의 심장",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Heart of Light defensive buff."
+  },
+  {
+    "status_id": 1837,
+    "status_name": "음속 파괴",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "Sonic Break DoT."
+  },
+  {
+    "status_id": 148,
+    "status_name": "부활",
+    "classification": "exclude",
+    "category": "utility",
+    "note": "Raise effect."
+  },
+  {
+    "status_id": 1195,
+    "status_name": "견제",
+    "classification": "exclude",
+    "category": "defensive",
+    "note": "Feint mitigation debuff."
+  },
+  {
+    "status_id": 1228,
+    "status_name": "피안화",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "DoT effect."
+  },
+  {
+    "status_id": 3849,
+    "status_name": "강탈",
+    "classification": "include",
+    "category": "raid_damage_buff",
+    "note": "Mug/Dokumori-style offensive debuff candidate."
+  },
+  {
+    "status_id": 1221,
+    "status_name": "연환계",
+    "classification": "include",
+    "category": "crit_rate_buff",
+    "note": "Chain Stratagem-style crit rate debuff."
+  },
+  {
+    "status_id": 3883,
+    "status_name": "매복지독",
+    "classification": "exclude",
+    "category": "dot",
+    "note": "Mostly SCH source -> boss target pattern and poison naming suggest a non-rDPS debuff/DoT."
+  }
+]

@@ -4,6 +4,7 @@
 - FFXIV 실시간 전투 DPS 페이스 비교 오버레이 툴.
 - 주요 흐름: ACT -> 전투 로그 -> rDPS 추정 -> FFLogs TOP 페이스 비교 -> Electron UI 표시.
 - 핵심 원칙: 모든 rDPS는 추정치이며, FFLogs live rDPS와 최대한 유사하게 구현한다.
+- 핵심 원칙: 에러로 인해 사용자 경험을 망치면 안 된다.
 
 ## 작업 시작 전 확인
 - 작업 시작 전에 항상 [`tasks.md`](/Users/kimbogeun/Documents/Project/paceMeter/tasks.md)를 확인한다.

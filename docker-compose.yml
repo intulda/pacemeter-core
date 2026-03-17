@@ -1,0 +1,45 @@
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: pacemeter-nginx
+    depends_on:
+      - pacemeter-blue
+      - pacemeter-green
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+    restart: unless-stopped
+
+  pacemeter-blue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pacemeter-blue
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      PACE_FFLOGS_CLIENT_ID: ${PACE_FFLOGS_CLIENT_ID:-}
+      PACE_FFLOGS_CLIENT_SECRET: ${PACE_FFLOGS_CLIENT_SECRET:-}
+      PACE_FFLOGS_PARTITION: ${PACE_FFLOGS_PARTITION:-}
+      PACE_ACT_DIRECT_ENABLED: ${PACE_ACT_DIRECT_ENABLED:-false}
+      JAVA_OPTS: ${JAVA_OPTS:-}
+    ports:
+      - "18081:8080"
+    restart: unless-stopped
+
+  pacemeter-green:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pacemeter-green
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      PACE_FFLOGS_CLIENT_ID: ${PACE_FFLOGS_CLIENT_ID:-}
+      PACE_FFLOGS_CLIENT_SECRET: ${PACE_FFLOGS_CLIENT_SECRET:-}
+      PACE_FFLOGS_PARTITION: ${PACE_FFLOGS_PARTITION:-}
+      PACE_ACT_DIRECT_ENABLED: ${PACE_ACT_DIRECT_ENABLED:-false}
+      JAVA_OPTS: ${JAVA_OPTS:-}
+    ports:
+      - "18082:8080"
+    restart: unless-stopped

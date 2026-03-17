@@ -38,6 +38,10 @@ public class FflogsApiClient {
         this.restClient = RestClient.create(API_URL);
     }
 
+    public boolean isConfigured() {
+        return tokenStore.isConfigured();
+    }
+
     /**
      * 해당 인카운터의 rDPS 1위 랭킹 정보를 가져온다.
      *
@@ -391,6 +395,18 @@ public class FflogsApiClient {
         }
     }
 
+    private JsonNode parseScalarJson(JsonNode node, String fieldName) {
+        if (node.isTextual()) {
+            try {
+                return objectMapper.readTree(node.asText());
+            } catch (Exception e) {
+                log.error("[FFLogs] failed to parse {} scalar JSON: {}", fieldName, e.getMessage());
+                return objectMapper.createObjectNode();
+            }
+        }
+        return node;
+    }
+
     /**
      * masterData.actors에서 플레이어 이름으로 sourceId를 조회한다.
      * characterRankings 응답에 actorID가 없을 때 사용.
@@ -658,7 +674,238 @@ public class FflogsApiClient {
         return defaultPartition;
     }
 
+    public Optional<ReportSummary> fetchReportSummary(String reportCode) {
+        Optional<String> token = tokenStore.getToken();
+        if (token.isEmpty()) {
+            log.warn("[FFLogs] fetchReportSummary skipped - no token");
+            return Optional.empty();
+        }
+
+        String query = """
+                query($code: String!) {
+                  reportData {
+                    report(code: $code) {
+                      code
+                      startTime
+                      fights {
+                        id
+                        name
+                        startTime
+                        endTime
+                        kill
+                        encounterID
+                      }
+                    }
+                  }
+                }
+                """;
+
+        try {
+            byte[] body = objectMapper.writeValueAsBytes(Map.of(
+                    "query", query,
+                    "variables", Map.of("code", reportCode)
+            ));
+
+            String response = restClient.post()
+                    .header("Authorization", "Bearer " + token.get())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode root = objectMapper.readTree(response);
+            checkErrors(root, "fetchReportSummary");
+
+            JsonNode reportNode = root.path("data").path("reportData").path("report");
+            if (reportNode.isMissingNode() || reportNode.isNull()) {
+                log.warn("[FFLogs] report summary missing for code={}", reportCode);
+                return Optional.empty();
+            }
+
+            String code = reportNode.path("code").asText(reportCode);
+            long startTime = reportNode.path("startTime").asLong(0L);
+            JsonNode fightsNode = reportNode.path("fights");
+
+            List<ReportFight> fights = new ArrayList<>();
+            if (fightsNode.isArray()) {
+                for (JsonNode fightNode : fightsNode) {
+                    int id = fightNode.path("id").asInt(0);
+                    String name = fightNode.path("name").asText("");
+                    long fightStartTime = fightNode.path("startTime").asLong(0L);
+                    long endTime = fightNode.path("endTime").asLong(0L);
+                    boolean kill = fightNode.path("kill").asBoolean(false);
+                    int encounterId = fightNode.path("encounterID").asInt(0);
+
+                    fights.add(new ReportFight(id, name, fightStartTime, endTime, kill, encounterId));
+                }
+            }
+
+            return Optional.of(new ReportSummary(code, startTime, fights));
+        } catch (Exception e) {
+            log.error("[FFLogs] fetchReportSummary failed: {}", e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    public List<DamageDoneEntry> fetchDamageDoneTable(String reportCode, int fightId) {
+        Optional<String> token = tokenStore.getToken();
+        if (token.isEmpty()) {
+            log.warn("[FFLogs] fetchDamageDoneTable skipped - no token");
+            return List.of();
+        }
+
+        String query = """
+                query($code: String!, $fightId: Int!) {
+                  reportData {
+                    report(code: $code) {
+                      table(dataType: DamageDone, fightIDs: [$fightId])
+                    }
+                  }
+                }
+                """;
+
+        try {
+            byte[] body = objectMapper.writeValueAsBytes(Map.of(
+                    "query", query,
+                    "variables", Map.of(
+                            "code", reportCode,
+                            "fightId", fightId
+                    )
+            ));
+
+            String response = restClient.post()
+                    .header("Authorization", "Bearer " + token.get())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode root = objectMapper.readTree(response);
+            checkErrors(root, "fetchDamageDoneTable");
+
+            JsonNode tableNode = root.path("data").path("reportData").path("report").path("table");
+            tableNode = parseScalarJson(tableNode, "table");
+
+            JsonNode entriesNode = tableNode.path("entries");
+            if (!entriesNode.isArray() || entriesNode.isEmpty()) {
+                entriesNode = tableNode.path("data").path("entries");
+            }
+            if (!entriesNode.isArray() || entriesNode.isEmpty()) {
+                log.warn("[FFLogs] damage table has no entries for code={} fightId={}", reportCode, fightId);
+                return List.of();
+            }
+
+            List<DamageDoneEntry> entries = new ArrayList<>();
+            for (JsonNode entryNode : entriesNode) {
+                entries.add(new DamageDoneEntry(
+                        entryNode.path("id").isMissingNode() ? null : entryNode.path("id").asInt(),
+                        entryNode.path("name").asText(""),
+                        entryNode.path("type").asText(""),
+                        entryNode.path("icon").asText(""),
+                        entryNode.path("total").asDouble(0.0),
+                        entryNode.path("activeTime").asDouble(0.0),
+                        entryNode.path("totalRDPS").asDouble(0.0),
+                        entryNode.path("totalRDPSTaken").asDouble(0.0),
+                        entryNode.path("totalRDPSGiven").asDouble(0.0)
+                ));
+            }
+            return entries;
+        } catch (Exception e) {
+            log.error("[FFLogs] fetchDamageDoneTable failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    public List<AbilityDamageEntry> fetchDamageDoneAbilities(String reportCode, int fightId, int sourceId) {
+        Optional<String> token = tokenStore.getToken();
+        if (token.isEmpty()) {
+            log.warn("[FFLogs] fetchDamageDoneAbilities skipped - no token");
+            return List.of();
+        }
+
+        String query = """
+                query($code: String!, $fightId: Int!, $sourceId: Int!) {
+                  reportData {
+                    report(code: $code) {
+                      table(dataType: DamageDone, fightIDs: [$fightId], sourceID: $sourceId, viewBy: Ability)
+                    }
+                  }
+                }
+                """;
+
+        try {
+            byte[] body = objectMapper.writeValueAsBytes(Map.of(
+                    "query", query,
+                    "variables", Map.of(
+                            "code", reportCode,
+                            "fightId", fightId,
+                            "sourceId", sourceId
+                    )
+            ));
+
+            String response = restClient.post()
+                    .header("Authorization", "Bearer " + token.get())
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(String.class);
+
+            JsonNode root = objectMapper.readTree(response);
+            checkErrors(root, "fetchDamageDoneAbilities");
+
+            JsonNode tableNode = root.path("data").path("reportData").path("report").path("table");
+            tableNode = parseScalarJson(tableNode, "table");
+
+            JsonNode entriesNode = tableNode.path("entries");
+            if (!entriesNode.isArray() || entriesNode.isEmpty()) {
+                entriesNode = tableNode.path("data").path("entries");
+            }
+            if (!entriesNode.isArray() || entriesNode.isEmpty()) {
+                log.warn("[FFLogs] damage ability table has no entries for code={} fightId={} sourceId={}",
+                        reportCode, fightId, sourceId);
+                return List.of();
+            }
+
+            List<AbilityDamageEntry> entries = new ArrayList<>();
+            for (JsonNode entryNode : entriesNode) {
+                entries.add(new AbilityDamageEntry(
+                        entryNode.path("guid").isMissingNode() ? null : entryNode.path("guid").asInt(),
+                        entryNode.path("name").asText(""),
+                        entryNode.path("total").asDouble(0.0),
+                        entryNode.path("type").asText("")
+                ));
+            }
+            return entries;
+        } catch (Exception e) {
+            log.error("[FFLogs] fetchDamageDoneAbilities failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
     public record TopRanking(String reportCode, long reportStartMs, long fightStartMs, long durationMs, int sourceId, String playerName) {}
 
     public record EncounterInfo(int id, String name) {}
+
+    public record ReportSummary(String reportCode, long startTime, List<ReportFight> fights) {}
+
+    public record ReportFight(int id, String name, long startTime, long endTime, boolean kill, int encounterId) {}
+
+    public record DamageDoneEntry(
+            Integer id,
+            String name,
+            String type,
+            String icon,
+            double total,
+            double activeTime,
+            double totalRdps,
+            double totalRdpsTaken,
+            double totalRdpsGiven
+    ) {}
+
+    public record AbilityDamageEntry(
+            Integer guid,
+            String name,
+            double total,
+            String type
+    ) {}
 }

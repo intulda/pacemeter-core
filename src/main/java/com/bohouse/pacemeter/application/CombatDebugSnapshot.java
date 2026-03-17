@@ -14,7 +14,8 @@ public record CombatDebugSnapshot(
         ActorDebugEntry currentPlayer,
         List<ActorDebugEntry> actors,
         BossDebugInfo boss,
-        EnrageDebugInfo enrage
+        EnrageDebugInfo enrage,
+        List<ActorSkillBreakdown> skillBreakdowns
 ) {
     public record ActorDebugEntry(
             ActorId actorId,
@@ -54,6 +55,20 @@ public record CombatDebugSnapshot(
             double seconds,
             String confidence,
             String source
+    ) {
+    }
+
+    public record ActorSkillBreakdown(
+            ActorId actorId,
+            String actorName,
+            List<SkillDebugEntry> skills
+    ) {
+    }
+
+    public record SkillDebugEntry(
+            String skillName,
+            long totalDamage,
+            long hitCount
     ) {
     }
 }

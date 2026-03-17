@@ -140,4 +140,87 @@ class Heavy3ReplayIntegrationTest {
         );
         assertEquals(154_287_371L / 480.0, snapshot.clearability().requiredDps(), 0.001);
     }
+
+    @Test
+    void heavy3MinimalReplay_withoutEnrageProvider_keepsClearabilityNullEvenWithBoss() throws Exception {
+        CombatEngine engine = new CombatEngine();
+        List<OverlaySnapshot> publishedSnapshots = new ArrayList<>();
+        SnapshotPublisher snapshotPublisher = publishedSnapshots::add;
+
+        CombatService combatService = new CombatService(
+                engine,
+                snapshotPublisher,
+                (fightName, actTerritoryId) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ActIngestionService ingestion = new ActIngestionService(
+                combatService,
+                combatService,
+                new FflogsZoneLookup(new ObjectMapper())
+        );
+        ActLineParser parser = new ActLineParser();
+
+        var resource = new ClassPathResource("replay/raw/heavy3_pull1_minimal.log");
+        try (var reader = new BufferedReader(
+                new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isBlank()) continue;
+                ParsedLine parsed = parser.parse(line);
+                assertNotNull(parsed);
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        combatService.onEvent(new CombatEvent.Tick(ingestion.nowElapsedMs()));
+
+        OverlaySnapshot snapshot = publishedSnapshots.get(publishedSnapshots.size() - 1);
+        assertNotNull(engine.currentState().bossInfo().orElse(null), "boss should still be identified");
+        assertNull(snapshot.clearability(), "clearability must remain null when enrage info is absent");
+    }
+
+    @Test
+    void fightEndSnapshot_preservesClearabilityWhenEnrageIsAvailable() throws Exception {
+        CombatEngine engine = new CombatEngine();
+        List<OverlaySnapshot> publishedSnapshots = new ArrayList<>();
+        SnapshotPublisher snapshotPublisher = publishedSnapshots::add;
+        EnrageTimeProvider.EnrageInfo enrageInfo = new EnrageTimeProvider.EnrageInfo(
+                480.0,
+                EnrageTimeProvider.ConfidenceLevel.HIGH,
+                "test://heavy3"
+        );
+
+        CombatService combatService = new CombatService(
+                engine,
+                snapshotPublisher,
+                (fightName, actTerritoryId) -> Optional.empty(),
+                territoryId -> Optional.of(enrageInfo)
+        );
+        ActIngestionService ingestion = new ActIngestionService(
+                combatService,
+                combatService,
+                new FflogsZoneLookup(new ObjectMapper())
+        );
+        ActLineParser parser = new ActLineParser();
+
+        var resource = new ClassPathResource("replay/raw/heavy3_pull1_minimal.log");
+        try (var reader = new BufferedReader(
+                new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isBlank()) continue;
+                ParsedLine parsed = parser.parse(line);
+                assertNotNull(parsed);
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        long elapsedMs = ingestion.nowElapsedMs();
+        combatService.onEvent(new CombatEvent.FightEnd(elapsedMs, false));
+
+        OverlaySnapshot snapshot = publishedSnapshots.get(publishedSnapshots.size() - 1);
+        assertTrue(snapshot.isFinal());
+        assertNotNull(snapshot.clearability());
+        assertEquals(CombatState.Phase.ENDED, snapshot.phase());
+    }
 }

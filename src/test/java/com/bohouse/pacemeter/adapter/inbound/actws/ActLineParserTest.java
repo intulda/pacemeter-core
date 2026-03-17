@@ -44,6 +44,16 @@ class ActLineParserTest {
     }
 
     @Test
+    void parse_networkAbility_ignoresSupplementalEffectSlots() {
+        String line = "21|" + TS + "|1008B280|이끼이끼|8776|Player162|4000664C|린드블룸|756003|8D864002|1B|87768000|0|0|0|0|0|0|0|0|0|0|0|0";
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(NetworkAbilityRaw.class, result);
+        NetworkAbilityRaw raw = (NetworkAbilityRaw) result;
+        assertEquals(0x028D86, raw.damage());
+    }
+
+    @Test
     void parse_dotTick_typeCode24() {
         String line = "24|" + TS + "|40005E82|더 타이런트|DoT|0|EBAC|142805740|154287371|10000|10000|||99.96|100.39|0.00|3.12|101C2E9E|돌체라떼|FFFFFFFF|121751|185402|7220|10000|||101.49|108.00|0.00|-2.53|8c8069c0758193c7";
         ParsedLine result = parser.parse(line);
@@ -52,6 +62,7 @@ class ActLineParserTest {
         DotTickRaw raw = (DotTickRaw) result;
         assertEquals(0x40005E82L, raw.targetId());
         assertEquals("더 타이런트", raw.targetName());
+        assertEquals("DoT", raw.effectType());
         assertEquals(0, raw.statusId());
         assertEquals(0x101C2E9EL, raw.sourceId());
         assertEquals("돌체라떼", raw.sourceName());
@@ -70,14 +81,9 @@ class ActLineParserTest {
 
     @Test
     void decodeDamage_bigDamage_shiftFlag() {
-        // 데미지 > 65535일 때 d0의 bit6(0x40)이 설정됨
-        // 예: 실제 데미지 = 0x020FA6 = 134054
-        // 인코딩: d3=0x02, d2=0xA6, d1=0x0F, d0=0x40
-        // → raw = 0x02A60F40
-        // → (d3 << 16) | (d1 << 8) | d2 = (0x02 << 16) | (0x0F << 8) | 0xA6
-        //   = 131072 + 3840 + 166 = 135078
-        long dmg = ActLineParser.decodeDamage("02A60F40");
-        assertEquals((0x02 << 16) | (0x0F << 8) | 0xA6, dmg);
+        // 공식 LogGuide 예시: 423F400F -> 999999 (0x0F423F)
+        long dmg = ActLineParser.decodeDamage("423F400F");
+        assertEquals(999999, dmg);
         assertTrue(dmg > 65535, "big damage should exceed 65535");
     }
 
@@ -178,6 +184,41 @@ class ActLineParserTest {
         assertNull(parser.parse(line));
     }
 
+    @Test
+    void parse_damageText_acceptsAlternateA9Opcodes() {
+        String line = "00|" + TS + "|0AA9||생쥐의 공격 \ue06f 직격! 린드블룸에게 피해를 8268 주었습니다.|checksum";
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(DamageText.class, result);
+        DamageText text = (DamageText) result;
+        assertEquals(8268L, text.amount());
+        assertTrue(text.directHitLike());
+    }
+
+    @Test
+    void parse_damageText_normalizesTargetAndSourceNames() {
+        String line = "00|" + TS + "|12A9||한정서너나좋아싫어펜리르의 공격 \ue06f 극대화! 린드블룸에게 피해를 14226 주었습니다.|checksum";
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(DamageText.class, result);
+        DamageText text = (DamageText) result;
+        assertEquals("한정서너나좋아싫어펜리르", text.sourceTextName());
+        assertEquals("린드블룸", text.targetTextName());
+        assertTrue(text.criticalLike());
+    }
+
+    @Test
+    void parse_networkAbility_decodesCriticalAndDirectFlagsFromActionField() {
+        String line = "21|" + TS + "|100B73AC|생쥐|07|공격|4000664C|린드블룸|716003|414A0000";
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(NetworkAbilityRaw.class, result);
+        NetworkAbilityRaw ability = (NetworkAbilityRaw) result;
+        assertTrue(ability.criticalHit());
+        assertTrue(ability.directHit());
+        assertEquals(16714L, ability.damage());
+    }
+
     // ── typeCode 2: PrimaryPlayerChanged ──
 
     @Test
@@ -202,5 +243,18 @@ class ActLineParserTest {
         assertEquals("나무인형", combatant.name());
         assertEquals(123456789L, combatant.currentHp());
         assertEquals(234567890L, combatant.maxHp());
+    }
+
+    @Test
+    void parse_combatantAdded_from261Add_withOwner() {
+        String line = "261|" + TS + "|Add|400066A3|BNpcID|6DF|BNpcNameID|35000000|CurrentMP|256|Heading|0.0000|Level|185|MaxHP|215512|Name|Player137|OwnerID|1008B280|PosX|99.9398|PosY|104.7190|Type|11|WorldID|6400|checksum";
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(CombatantAdded.class, result);
+        CombatantAdded combatant = (CombatantAdded) result;
+        assertEquals(0x400066A3L, combatant.id());
+        assertEquals("Player137", combatant.name());
+        assertEquals(0x1008B280L, combatant.ownerId());
+        assertEquals(215512L, combatant.maxHp());
     }
 }

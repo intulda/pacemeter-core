@@ -9,10 +9,22 @@ public record DotTickRaw(
         Instant ts,
         long targetId,
         String targetName,
+        String effectType,
         int statusId,
         long sourceId,
         String sourceName,
         long damage,
         String rawLine
 ) implements ParsedLine {
+    public boolean isDot() {
+        return "DoT".equalsIgnoreCase(effectType);
+    }
+
+    public boolean hasKnownStatus() {
+        return statusId != 0;
+    }
+
+    public boolean isHot() {
+        return "HoT".equalsIgnoreCase(effectType);
+    }
 }

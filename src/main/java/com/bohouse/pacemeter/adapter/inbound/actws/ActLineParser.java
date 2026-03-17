@@ -6,7 +6,9 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 @Component
@@ -15,6 +17,7 @@ public final class ActLineParser {
     private static final Pattern AMOUNT = Pattern.compile("피해를\\s*(\\d+)");
     private static final Pattern TARGET = Pattern.compile("(.+?)에게\\s*피해를");
     private static final Pattern SOURCE = Pattern.compile("^(.+?)의 공격");
+    private static final Pattern PRIVATE_USE_ICON = Pattern.compile("[\\uE000-\\uF8FF]");
 
     public ParsedLine parse(String line) {
         if (line == null || line.isBlank()) return null;
@@ -44,14 +47,19 @@ public final class ActLineParser {
             try { opcode = Integer.parseInt(p[2], 16); }
             catch (NumberFormatException e) { return null; }
 
-            if (opcode != 0x12A9) return null; // only damage line for v1
+            if (!isDamageTextOpcode(opcode)) return null;
 
             String msg = p[4];
-            long amount = extractLong(AMOUNT, msg, 1, -1);
+            String normalizedMessage = normalizeDamageTextMessage(msg);
+            long amount = extractLong(AMOUNT, normalizedMessage, 1, -1);
             if (amount <= 0) return null;
 
-            String target = extractString(TARGET, msg, 1);
-            String source = extractString(SOURCE, msg, 1); // may be null
+            String source = normalizeCombatTextName(extractString(SOURCE, normalizedMessage, 1));
+            String targetSection = normalizedMessage;
+            if (source != null && !source.isBlank()) {
+                targetSection = normalizedMessage.replaceFirst("^\\s*" + Pattern.quote(source) + "의 공격\\s*", "");
+            }
+            String target = normalizeCombatTextName(extractString(TARGET, targetSection, 1));
 
             boolean direct = msg.contains("직격");
             boolean crit = msg.contains("극대화") || msg.contains("치명");
@@ -95,6 +103,19 @@ public final class ActLineParser {
             return new CombatantAdded(ts, id, name, jobId, ownerId, currentHp, maxHp, line);
         }
 
+        // 261 Add: key/value combatant payload
+        if (typeCode == 261) {
+            if (p.length < 6 || !"Add".equals(p[2])) return null;
+            long id = parseHexLong(p[3]);
+            Map<String, String> fields = parseKeyValueFields(p, 4);
+            String name = fields.getOrDefault("Name", "");
+            int jobId = (int) parseHexLong(fields.get("Job"));
+            long ownerId = parseHexLong(fields.get("OwnerID"));
+            long currentHp = parseDecimalLong(fields.get("CurrentHP"));
+            long maxHp = parseDecimalLong(fields.get("MaxHP"));
+            return new CombatantAdded(ts, id, name, jobId, ownerId, currentHp, maxHp, line);
+        }
+
         // 26: StatusAdd (BuffApply)
         if (typeCode == 26) {
             if (p.length < 9) return null;
@@ -129,9 +150,25 @@ public final class ActLineParser {
             String skillName = p[5];
             long targetId = parseHexLong(p[6]);
             String targetName = p[7];
+            long actionFlags = parseHexLong(p[8]);
             long damage = decodeDamage(p[9]);
+            boolean criticalHit = (actionFlags & 0x2000L) != 0;
+            boolean directHit = (actionFlags & 0x4000L) != 0;
 
-            return new NetworkAbilityRaw(ts, typeCode, actorId, actorName, skillId, skillName, targetId, targetName, damage, line);
+            return new NetworkAbilityRaw(
+                    ts,
+                    typeCode,
+                    actorId,
+                    actorName,
+                    skillId,
+                    skillName,
+                    targetId,
+                    targetName,
+                    criticalHit,
+                    directHit,
+                    damage,
+                    line
+            );
         }
 
         // 24: DoT tick
@@ -141,6 +178,7 @@ public final class ActLineParser {
             if (p.length < 19) return null;
             long targetId = parseHexLong(p[2]);
             String targetName = p[3];
+            String effectType = p[4];
             int statusId = (int) parseHexLong(p[5]);
             long damage = parseHexLong(p[6]);
             long sourceId = parseHexLong(p[17]);
@@ -149,7 +187,7 @@ public final class ActLineParser {
             if (sourceId == 0 || sourceName == null || sourceName.isBlank() || damage <= 0) {
                 return null;
             }
-            return new DotTickRaw(ts, targetId, targetName, statusId, sourceId, sourceName, damage, line);
+            return new DotTickRaw(ts, targetId, targetName, effectType, statusId, sourceId, sourceName, damage, line);
         }
 
         // 25: NetworkDeath
@@ -186,11 +224,9 @@ public final class ActLineParser {
 
     /**
      * FFXIV NetworkAbility 데미지 디코딩.
-     * p[9]의 8자리 hex 값: 0xAABBCCDD (AA=d3, BB=d2, CC=d1, DD=d0)
-     *
-     * d0(최하위 바이트)의 bit6(0x40)이 "shift" 플래그:
-     *   - 0x40 set → 데미지 > 65535, 실제값 = (d3 << 16) | (d1 << 8) | d2
-     *   - 0x40 unset → 일반 데미지, 실제값 = (d3 << 8) | d2
+     * 공식 LogGuide 기준:
+     * - 일반 데미지: 첫 2바이트(AA BB) 사용
+     * - 큰 데미지: raw & 0x00004000 != 0 이면 DD AA BB 사용
      */
     static long decodeDamage(String hex) {
         if (hex == null || hex.isBlank()) return 0;
@@ -203,11 +239,9 @@ public final class ActLineParser {
         int d2 = (int) ((raw >> 16) & 0xFF);
         int d3 = (int) ((raw >> 24) & 0xFF);
 
-        if ((d0 & 0x40) != 0) {
-            // big damage: 65536 이상
-            return ((long) d3 << 16) | ((long) d1 << 8) | d2;
+        if ((raw & 0x00004000L) != 0) {
+            return ((long) d0 << 16) | ((long) d3 << 8) | d2;
         }
-        // normal damage
         return ((long) d3 << 8) | d2;
     }
 
@@ -229,5 +263,42 @@ public final class ActLineParser {
         if (!m.find()) return null;
         String v = m.group(group);
         return v == null ? null : v.trim();
+    }
+
+    private static String normalizeDamageTextMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return "";
+        }
+        String normalized = PRIVATE_USE_ICON.matcher(message).replaceAll(" ");
+        normalized = normalized.replace("직격!", " ");
+        normalized = normalized.replace("극대화!", " ");
+        normalized = normalized.replace("치명타!", " ");
+        return normalized.trim().replaceAll("\\s+", " ");
+    }
+
+    private static String normalizeCombatTextName(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = PRIVATE_USE_ICON.matcher(value).replaceAll(" ");
+        normalized = normalized.trim().replaceAll("\\s+", " ");
+        return normalized.isBlank() ? null : normalized;
+    }
+
+    private static boolean isDamageTextOpcode(int opcode) {
+        return (opcode & 0xFF) == 0xA9;
+    }
+
+    private static Map<String, String> parseKeyValueFields(String[] parts, int startIndex) {
+        Map<String, String> fields = new HashMap<>();
+        for (int i = startIndex; i + 1 < parts.length; i += 2) {
+            String key = parts[i];
+            String value = parts[i + 1];
+            if (key == null || key.isBlank()) {
+                continue;
+            }
+            fields.put(key, value);
+        }
+        return fields;
     }
 }

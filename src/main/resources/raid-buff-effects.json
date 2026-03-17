@@ -1,0 +1,131 @@
+[
+  {
+    "ids": [3887],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.06 }
+    ],
+    "aliases": ["The Balance", "Balance", "균형", "아제마의 균형"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [1878],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.06 }
+    ],
+    "aliases": ["Divination", "점복"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [1821, 2105],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.05 }
+    ],
+    "aliases": ["Standard Finish", "정석 마무리"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [1822],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.05 }
+    ],
+    "aliases": ["Technical Finish", "기교 마무리"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.05 }
+    ],
+    "aliases": ["Embolden"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.05 }
+    ],
+    "aliases": ["Brotherhood"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.03 }
+    ],
+    "aliases": ["Arcane Circle"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.03 }
+    ],
+    "aliases": ["Searing Light", "타오르는 빛"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.05 }
+    ],
+    "aliases": ["Mug"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [],
+    "effects": [
+      { "kind": "CRIT_RATE", "amount": 0.10 }
+    ],
+    "aliases": ["Battle Litany", "전투 기도"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [1221],
+    "effects": [
+      { "kind": "CRIT_RATE", "amount": 0.10 }
+    ],
+    "aliases": ["Chain Stratagem", "연환계"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [3849],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.05 }
+    ],
+    "aliases": ["Mug", "강탈", "Dokumori"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [],
+    "effects": [
+      { "kind": "DIRECT_HIT_RATE", "amount": 0.20 }
+    ],
+    "aliases": ["Battle Voice"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [2216, 2217],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.01 }
+    ],
+    "aliases": ["The Wanderer's Minuet", "Wanderer's Minuet", "Mage's Ballad", "현인의 담시곡", "여행신의 무곡"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [3685],
+    "effects": [
+      { "kind": "PERCENT_DAMAGE", "amount": 0.06 }
+    ],
+    "aliases": ["하늘 구현", "Starry Muse"],
+    "source": "manual-effect-map"
+  },
+  {
+    "ids": [],
+    "effects": [
+      { "kind": "CRIT_RATE", "amount": 0.20 },
+      { "kind": "DIRECT_HIT_RATE", "amount": 0.20 }
+    ],
+    "aliases": ["Devilment"],
+    "source": "manual-effect-map"
+  }
+]

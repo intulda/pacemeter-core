@@ -1,0 +1,15 @@
+{
+  "submissionId": "2026-03-17-heavy3-sample-01",
+  "submittedAt": "2026-03-17T14:00:00+09:00",
+  "region": "KR",
+  "clientLanguage": "ko",
+  "zoneId": 1238,
+  "encounterName": "아르카디아 선수권: 헤비급(영웅) 3",
+  "difficulty": "savage",
+  "partyJobs": ["PLD", "SCH", "AST", "BRD", "NIN", "SAM", "VPR", "DNC"],
+  "fflogsReportUrl": "https://www.fflogs.com/reports/example",
+  "fflogsFightId": 12,
+  "pullStartApprox": "pull 1 full",
+  "hasDotTicks": true,
+  "notes": "중간 사망 1회, wipe 아님"
+}

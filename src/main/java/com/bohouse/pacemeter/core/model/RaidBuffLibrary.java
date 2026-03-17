@@ -1,7 +1,14 @@
 package com.bohouse.pacemeter.core.model;
 
-import java.util.Locale;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+
+import java.io.InputStream;
+import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -9,54 +16,14 @@ import java.util.Set;
 /**
  * rDPS 재분배에 사용할 레이드 버프 정의.
  *
- * 현재는 "직접 데미지에 배수로 작용하는 외부 버프"만 최소 지원한다.
- * FFLogs Live 쪽으로 확장할 때 crit/direct-hit/받는 피해 증가 디버프를 여기에 추가한다.
+ * 정의는 classpath의 {@code raid-buff-catalog.json}에서 로드한다.
+ * 이 카탈로그는 외부 메타데이터(XIVAPI 등)로 ID/이름을 수집하고,
+ * 우리 쪽에서 rDPS 의미가 있는 효과(kind/amount)를 유지하는 구조를 전제로 한다.
  */
 public final class RaidBuffLibrary {
 
-    private static final List<RaidBuffDefinition> DEFINITIONS = List.of(
-            RaidBuffDefinition.directDamage(Set.of(new BuffId(0x74F)),
-                    RaidBuffEffect.percentageDamage(0.06),
-                    "The Balance",
-                    "Balance",
-                    "균형"),
-            RaidBuffDefinition.directDamage(Set.of(),
-                    RaidBuffEffect.percentageDamage(0.06),
-                    "Divination"),
-            RaidBuffDefinition.directDamage(Set.of(),
-                    RaidBuffEffect.percentageDamage(0.05),
-                    "Embolden"),
-            RaidBuffDefinition.directDamage(Set.of(),
-                    RaidBuffEffect.percentageDamage(0.05),
-                    "Technical Finish"),
-            RaidBuffDefinition.directDamage(Set.of(),
-                    RaidBuffEffect.percentageDamage(0.05),
-                    "Brotherhood"),
-            RaidBuffDefinition.directDamage(Set.of(),
-                    RaidBuffEffect.percentageDamage(0.03),
-                    "Arcane Circle"),
-            RaidBuffDefinition.directDamage(Set.of(),
-                    RaidBuffEffect.percentageDamage(0.03),
-                    "Searing Light"),
-            RaidBuffDefinition.directDamage(Set.of(),
-                    RaidBuffEffect.percentageDamage(0.05),
-                    "Mug"),
-            RaidBuffDefinition.critRate(Set.of(),
-                    RaidBuffEffect.critRate(0.10),
-                    "Battle Litany"),
-            RaidBuffDefinition.critRate(Set.of(),
-                    RaidBuffEffect.critRate(0.10),
-                    "Chain Stratagem"),
-            RaidBuffDefinition.directHitRate(Set.of(),
-                    RaidBuffEffect.directHitRate(0.20),
-                    "Battle Voice"),
-            RaidBuffDefinition.mixedRates(Set.of(),
-                    List.of(
-                            RaidBuffEffect.critRate(0.20),
-                            RaidBuffEffect.directHitRate(0.20)
-                    ),
-                    "Devilment")
-    );
+    private static final String RESOURCE = "raid-buff-catalog.json";
+    private static final List<RaidBuffDefinition> DEFINITIONS = loadDefinitions();
     private static final Map<BuffId, RaidBuffDefinition> BY_ID = buildIdIndex();
     private static final Map<String, RaidBuffDefinition> BY_NAME = buildNameIndex();
 
@@ -75,6 +42,28 @@ public final class RaidBuffLibrary {
         return byName != null ? Optional.of(byName) : Optional.empty();
     }
 
+    static List<RaidBuffDefinition> definitions() {
+        return DEFINITIONS;
+    }
+
+    private static List<RaidBuffDefinition> loadDefinitions() {
+        ObjectMapper objectMapper = new ObjectMapper()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        try (InputStream is = RaidBuffLibrary.class.getClassLoader().getResourceAsStream(RESOURCE)) {
+            if (is == null) {
+                throw new IllegalStateException("Missing resource: " + RESOURCE);
+            }
+
+            List<CatalogEntry> entries = objectMapper.readValue(is, new TypeReference<>() {});
+            return entries.stream()
+                    .map(CatalogEntry::toDefinition)
+                    .toList();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to load " + RESOURCE, e);
+        }
+    }
+
     private static Map<BuffId, RaidBuffDefinition> buildIdIndex() {
         java.util.HashMap<BuffId, RaidBuffDefinition> index = new java.util.HashMap<>();
         for (RaidBuffDefinition definition : DEFINITIONS) {
@@ -82,7 +71,7 @@ public final class RaidBuffLibrary {
                 index.put(id, definition);
             }
         }
-        return Map.copyOf(index);
+        return Collections.unmodifiableMap(index);
     }
 
     private static Map<String, RaidBuffDefinition> buildNameIndex() {
@@ -92,11 +81,35 @@ public final class RaidBuffLibrary {
                 index.put(normalize(alias), definition);
             }
         }
-        return Map.copyOf(index);
+        return Collections.unmodifiableMap(index);
     }
 
     private static String normalize(String name) {
         return name.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private record CatalogEntry(
+            List<Integer> ids,
+            List<CatalogEffect> effects,
+            Set<String> aliases,
+            String source
+    ) {
+        RaidBuffDefinition toDefinition() {
+            Set<BuffId> buffIds = ids == null
+                    ? Set.of()
+                    : ids.stream().map(BuffId::new).collect(java.util.stream.Collectors.toUnmodifiableSet());
+            List<RaidBuffEffect> raidBuffEffects = effects == null
+                    ? List.of()
+                    : effects.stream().map(CatalogEffect::toEffect).toList();
+            Set<String> normalizedAliases = aliases == null ? Set.of() : Set.copyOf(aliases);
+            return new RaidBuffDefinition(buffIds, raidBuffEffects, normalizedAliases, source);
+        }
+    }
+
+    private record CatalogEffect(String kind, double amount) {
+        RaidBuffEffect toEffect() {
+            return new RaidBuffEffect(RaidBuffEffect.Kind.valueOf(kind), amount);
+        }
     }
 
     public record RaidBuffEffect(Kind kind, double amount) {
@@ -105,35 +118,8 @@ public final class RaidBuffLibrary {
             CRIT_RATE,
             DIRECT_HIT_RATE
         }
-
-        public static RaidBuffEffect percentageDamage(double amount) {
-            return new RaidBuffEffect(Kind.PERCENT_DAMAGE, amount);
-        }
-
-        public static RaidBuffEffect critRate(double amount) {
-            return new RaidBuffEffect(Kind.CRIT_RATE, amount);
-        }
-
-        public static RaidBuffEffect directHitRate(double amount) {
-            return new RaidBuffEffect(Kind.DIRECT_HIT_RATE, amount);
-        }
     }
 
-    public record RaidBuffDefinition(Set<BuffId> ids, List<RaidBuffEffect> effects, Set<String> aliases) {
-        public static RaidBuffDefinition directDamage(Set<BuffId> ids, RaidBuffEffect effect, String... aliases) {
-            return new RaidBuffDefinition(ids, List.of(effect), Set.of(aliases));
-        }
-
-        public static RaidBuffDefinition critRate(Set<BuffId> ids, RaidBuffEffect effect, String... aliases) {
-            return new RaidBuffDefinition(ids, List.of(effect), Set.of(aliases));
-        }
-
-        public static RaidBuffDefinition directHitRate(Set<BuffId> ids, RaidBuffEffect effect, String... aliases) {
-            return new RaidBuffDefinition(ids, List.of(effect), Set.of(aliases));
-        }
-
-        public static RaidBuffDefinition mixedRates(Set<BuffId> ids, List<RaidBuffEffect> effects, String... aliases) {
-            return new RaidBuffDefinition(ids, List.copyOf(effects), Set.of(aliases));
-        }
+    public record RaidBuffDefinition(Set<BuffId> ids, List<RaidBuffEffect> effects, Set<String> aliases, String source) {
     }
 }

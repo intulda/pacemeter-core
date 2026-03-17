@@ -137,3 +137,6 @@ build/*
 .gradle/*
 /build/*
 /.gradle/*
+.env.prod
+data/catalog/
+data/submissions/

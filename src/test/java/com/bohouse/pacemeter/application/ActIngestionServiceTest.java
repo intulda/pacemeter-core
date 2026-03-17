@@ -58,19 +58,18 @@ class ActIngestionServiceTest {
         return Instant.parse("2026-02-11T12:00:00Z");
     }
 
-    private void startFight() {
-        // ZoneChanged로 유효한 Zone 설정 (나무인형 Zone으로 설정)
+    private void initializeZoneAndParty() {
         service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
-
-        // PrimaryPlayerChanged → NetworkAbilityRaw(damage>0) 로 전투 시작
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
-
-        // PartyList 추가 (본인을 파티원으로 등록)
         service.onParsed(new PartyList(base(), List.of(0x1000000AL)));
+    }
+
+    private void startFight() {
+        initializeZoneAndParty();
 
         Instant t1 = base().plusMillis(100);
         service.onParsed(new NetworkAbilityRaw(t1, 21, 0x1000000AL, "Warrior",
-                0xB4, "Fast Blade", 0x40000001L, "나무인형", 5000,
+                0xB4, "Fast Blade", 0x40000001L, "나무인형", false, false, 5000,
                 "21|...|raw"));
 
         // 전투가 시작되었는지 확인
@@ -80,12 +79,52 @@ class ActIngestionServiceTest {
     // ── BuffApply 테스트 ──
 
     @Test
-    void buffApply_beforeFightStarted_ignored() {
+    void buffApply_beforeFightStarted_emitsWhenFightStarts() {
+        initializeZoneAndParty();
         service.onParsed(new BuffApplyRaw(base(), 0x74F, "The Balance", 15.0,
                 0x1000000BL, "Astrologian", 0x1000000AL, "Warrior"));
 
-        // 전투 시작 전이므로 BuffApply 이벤트가 발생하지 않아야 함
         assertTrue(captured.stream().noneMatch(e -> e instanceof CombatEvent.BuffApply));
+
+        Instant t1 = base().plusMillis(100);
+        service.onParsed(new NetworkAbilityRaw(t1, 21, 0x1000000AL, "Warrior",
+                0xB4, "Fast Blade", 0x40000001L, "나무인형", false, false, 5000,
+                "21|...|raw"));
+
+        CombatEvent.BuffApply event = captured.stream()
+                .filter(CombatEvent.BuffApply.class::isInstance)
+                .map(CombatEvent.BuffApply.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(new ActorId(0x1000000BL), event.sourceId());
+        assertEquals(new ActorId(0x1000000AL), event.targetId());
+        assertEquals(0L, event.timestampMs());
+    }
+
+    @Test
+    void buffRemove_beforeFightStarted_emitsWhenFightStarts() {
+        initializeZoneAndParty();
+        service.onParsed(new BuffRemoveRaw(base(), 0x74F, "The Balance",
+                0x1000000BL, "Astrologian", 0x1000000AL, "Warrior"));
+
+        assertTrue(captured.stream().noneMatch(e -> e instanceof CombatEvent.BuffApply));
+        assertTrue(captured.stream().noneMatch(e -> e instanceof CombatEvent.BuffRemove));
+
+        Instant t1 = base().plusMillis(100);
+        service.onParsed(new NetworkAbilityRaw(t1, 21, 0x1000000AL, "Warrior",
+                0xB4, "Fast Blade", 0x40000001L, "나무인형", false, false, 5000,
+                "21|...|raw"));
+
+        CombatEvent.BuffRemove event = captured.stream()
+                .filter(CombatEvent.BuffRemove.class::isInstance)
+                .map(CombatEvent.BuffRemove.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(new ActorId(0x1000000BL), event.sourceId());
+        assertEquals(new ActorId(0x1000000AL), event.targetId());
+        assertEquals(0L, event.timestampMs());
     }
 
     @Test
@@ -122,14 +161,6 @@ class ActIngestionServiceTest {
     }
 
     // ── BuffRemove 테스트 ──
-
-    @Test
-    void buffRemove_beforeFightStarted_ignored() {
-        service.onParsed(new BuffRemoveRaw(base(), 0x74F, "The Balance",
-                0x1000000BL, "Astrologian", 0x1000000AL, "Warrior"));
-
-        assertTrue(captured.stream().noneMatch(e -> e instanceof CombatEvent.BuffRemove));
-    }
 
     @Test
     void buffRemove_afterFightStarted_emitsCombatEvent() {
@@ -192,6 +223,8 @@ class ActIngestionServiceTest {
                 "Fast Blade",
                 0x40000001L,
                 "나무인형",
+                false,
+                false,
                 5000,
                 "21|...|raw"
         ));
@@ -207,6 +240,47 @@ class ActIngestionServiceTest {
     }
 
     @Test
+    void damageText_withDifferentSourceName_stillMatchesByAmountTargetAndTime() {
+        startFight();
+        captured.clear();
+
+        Instant damageTime = base().plusMillis(1500);
+        service.onParsed(new DamageText(
+                damageTime,
+                "다른이름",
+                "나무인형",
+                5000,
+                true,
+                false,
+                "00|...|12A9",
+                "극대화!"
+        ));
+        service.onParsed(new NetworkAbilityRaw(
+                damageTime.plusMillis(50),
+                21,
+                0x1000000AL,
+                "Warrior",
+                0xB4,
+                "Fast Blade",
+                0x40000001L,
+                "나무인형",
+                false,
+                false,
+                5000,
+                "21|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+
+        assertTrue(event.criticalHit());
+        assertFalse(event.directHit());
+    }
+
+    @Test
     void dotTick_emitsDotDamageEvent() {
         service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
@@ -217,6 +291,7 @@ class ActIngestionServiceTest {
                 base().plusMillis(200),
                 0x40000001L,
                 "나무인형",
+                "DoT",
                 0x2ED,
                 0x101C2E9EL,
                 "Scholar",
@@ -237,6 +312,110 @@ class ActIngestionServiceTest {
         assertEquals(0xEBACL, event.amount());
         assertFalse(event.criticalHit());
         assertFalse(event.directHit());
+    }
+
+    @Test
+    void hotTick_isIgnored() {
+        service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x101C2E9EL)));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(200),
+                0x1000000AL,
+                "Warrior",
+                "HoT",
+                0,
+                0x101C2E9EL,
+                "Scholar",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_isIgnored() {
+        service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL)));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(200),
+                0x40000001L,
+                "나무인형",
+                "DoT",
+                0,
+                0x1000000AL,
+                "Warrior",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void networkAbility_targetingFriendlyActor_isIgnored() {
+        service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL)));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(200),
+                21,
+                0x1000000AL,
+                "Warrior",
+                0xB4,
+                "Fast Blade",
+                0x1000000BL,
+                "Scholar",
+                false,
+                false,
+                5000,
+                "21|...|raw"
+        ));
+
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void networkAbility_from261OwnedSummon_isAttributedToParty() {
+        service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x400066A3L,
+                "Summon",
+                0,
+                0x1000000AL,
+                0L,
+                215512L,
+                "261|...|Add"
+        ));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(200),
+                21,
+                0x400066A3L,
+                "Summon",
+                0x875A,
+                "Summon Attack",
+                0x40000001L,
+                "나무인형",
+                false,
+                false,
+                40000,
+                "21|...|raw"
+        ));
+
+        assertTrue(captured.stream().anyMatch(CombatEvent.DamageEvent.class::isInstance));
     }
 
     @Test
@@ -292,11 +471,44 @@ class ActIngestionServiceTest {
                 "Fast Blade",
                 0x40000001L,
                 "나무인형",
+                false,
+                false,
                 5000,
                 "21|...|raw"
         ));
 
         assertTrue(captured.stream().anyMatch(e -> e instanceof CombatEvent.BossIdentified));
+    }
+
+    @Test
+    void networkFlags_areUsedWithoutDamageTextMatch() {
+        startFight();
+        captured.clear();
+
+        Instant damageTime = base().plusMillis(1500);
+        service.onParsed(new NetworkAbilityRaw(
+                damageTime,
+                21,
+                0x1000000AL,
+                "Warrior",
+                0xB4,
+                "Fast Blade",
+                0x40000001L,
+                "나무인형",
+                true,
+                true,
+                5000,
+                "21|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+
+        assertTrue(event.criticalHit());
+        assertTrue(event.directHit());
     }
 
     @Test

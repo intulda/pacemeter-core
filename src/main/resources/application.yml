@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: paceMeter
+  profiles:
+    default: local
+
+pacemeter:
+  fflogs:
+    client-id: ""
+    client-secret: ""
+    partition: ""
+  act:
+    direct-enabled: false

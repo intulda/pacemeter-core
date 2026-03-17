@@ -50,6 +50,92 @@ src/main/java/com/bohouse/pacemeter/
 
 ACT OverlayPlugin WebSocket이 `ws://127.0.0.1:10501/ws`에서 실행 중이어야 한다.
 
+## Docker 배포
+
+```bash
+# 이미지 빌드
+docker build -t pacemeter-backend .
+
+# 운영 프로필로 실행
+docker run --rm -p 8080:8080 \
+  -e SPRING_PROFILES_ACTIVE=prod \
+  -e PACE_FFLOGS_CLIENT_ID=your-client-id \
+  -e PACE_FFLOGS_CLIENT_SECRET=your-client-secret \
+  -e PACE_FFLOGS_PARTITION= \
+  -e PACE_ACT_DIRECT_ENABLED=false \
+  pacemeter-backend
+```
+
+### 주요 환경변수
+
+- `SPRING_PROFILES_ACTIVE`: `local`, `dev`, `prod` 중 선택. Docker 기본값은 `prod`
+- `PACE_FFLOGS_CLIENT_ID`: FFLogs API client id
+- `PACE_FFLOGS_CLIENT_SECRET`: FFLogs API client secret
+- `PACE_FFLOGS_PARTITION`: 한국 서버면 `KR`, 글로벌이면 빈 값
+- `PACE_ACT_DIRECT_ENABLED`: 서버가 직접 ACT WebSocket에 붙을지 여부. 중앙 서버 배포는 보통 `false`
+- `JAVA_OPTS`: JVM 옵션 추가 메모리 제한 예시 `-Xms256m -Xmx512m`
+
+현재 구조는 relay 세션과 overlay 연결 상태를 인메모리로 관리하므로, 운영 배포는 단일 인스턴스를 권장한다.
+
+## Docker Compose 운영
+
+```bash
+cp .env.prod.example .env.prod
+docker compose --env-file .env.prod up -d nginx pacemeter-blue
+```
+
+- 외부 진입점: `nginx`
+- 내부 앱 컨테이너: `pacemeter-blue`, `pacemeter-green`
+- 로컬 점검 포트:
+  - blue: `18081`
+  - green: `18082`
+
+## 무중단 배포
+
+blue/green 방식으로 배포한다.
+
+```bash
+chmod +x scripts/deploy_blue_green.sh
+docker compose --env-file .env.prod up -d nginx pacemeter-blue
+./scripts/deploy_blue_green.sh
+```
+
+배포 스크립트가 하는 일:
+- 현재 active 색상 확인
+- 반대 색상 컨테이너를 `--build`로 기동
+- 새 컨테이너의 `/ready`가 `200 OK`인지 확인
+- nginx upstream을 새 색상으로 전환 후 reload
+- 드레인 시간 이후 기존 색상 컨테이너 정지
+
+주의:
+- readiness 판정은 `GET /ready` 기준이다.
+- WebSocket 트래픽은 nginx가 그대로 프록시한다.
+- 현재 애플리케이션 상태는 인메모리이므로 다중 인스턴스 확장보다는 단일 활성 인스턴스 운영을 전제로 한다.
+- 기본 드레인 시간은 `30초`이며, `DRAIN_SECONDS=60 ./scripts/deploy_blue_green.sh`처럼 조정할 수 있다.
+
+## FFLogs Parity 로그 수집
+
+FFLogs Live rDPS와 paceMeter 추정값을 비교하려면 실제 전투 로그 수집이 필요하다.
+
+- 수집 가이드: [docs/fflogs-parity-log-collection.md](/Users/kimbogeun/Documents/Project/paceMeter/docs/fflogs-parity-log-collection.md)
+- 메타데이터 템플릿: [docs/metadata-template.json](/Users/kimbogeun/Documents/Project/paceMeter/docs/metadata-template.json)
+- 익명화 스크립트: [scripts/anonymize_act_log.py](/Users/kimbogeun/Documents/Project/paceMeter/scripts/anonymize_act_log.py)
+- SQLite 등록 스크립트: [scripts/register_log_submission.py](/Users/kimbogeun/Documents/Project/paceMeter/scripts/register_log_submission.py)
+- SQLite 조회 스크립트: [scripts/list_log_submissions.py](/Users/kimbogeun/Documents/Project/paceMeter/scripts/list_log_submissions.py)
+
+예시:
+
+```bash
+python3 scripts/anonymize_act_log.py raw.log shared.log --mapping-output mapping.json
+python3 scripts/register_log_submission.py data/submissions/sample-01
+```
+
+등록된 submission의 로컬 parity 초안 리포트는 아래 엔드포인트로 조회할 수 있다.
+
+```bash
+GET /api/debug/parity/submissions/{submissionId}
+```
+
 ## 개발 현황
 
 ### 완성 (백엔드 코어)

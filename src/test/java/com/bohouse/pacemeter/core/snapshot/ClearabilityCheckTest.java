@@ -63,8 +63,8 @@ class ClearabilityCheckTest {
         );
 
         assertFalse(result.canClear());
-        assertTrue(Double.isInfinite(result.estimatedKillTimeSeconds()));
-        assertTrue(Double.isInfinite(-result.marginSeconds()));
+        assertEquals(1_000_090.0, result.estimatedKillTimeSeconds(), 0.001);
+        assertEquals(-1_000_000.0, result.marginSeconds(), 0.001);
         assertEquals(16_666.666, result.requiredDps(), 0.001);
         assertEquals(EnrageTimeProvider.ConfidenceLevel.LOW, result.confidence());
     }
@@ -75,5 +75,40 @@ class ClearabilityCheckTest {
         assertEquals(EnrageTimeProvider.ConfidenceLevel.MEDIUM, ClearabilityCheck.classifyConfidence(60_000));
         assertEquals(EnrageTimeProvider.ConfidenceLevel.MEDIUM, ClearabilityCheck.classifyConfidence(179_999));
         assertEquals(EnrageTimeProvider.ConfidenceLevel.HIGH, ClearabilityCheck.classifyConfidence(180_000));
+    }
+
+    @Test
+    void calculate_canClearWhenEstimatedKillMatchesEnrageExactly() {
+        ClearabilityCheck result = ClearabilityCheck.calculate(
+                900_000L,
+                300_000L,
+                60_000L,
+                new EnrageTimeProvider.EnrageInfo(
+                        180.0,
+                        EnrageTimeProvider.ConfidenceLevel.HIGH,
+                        "test"
+                )
+        );
+
+        assertTrue(result.canClear());
+        assertEquals(180.0, result.estimatedKillTimeSeconds(), 0.001);
+        assertEquals(0.0, result.marginSeconds(), 0.001);
+    }
+
+    @Test
+    void calculate_requiredDpsFallsBackToZeroWhenEnrageIsNotPositive() {
+        ClearabilityCheck result = ClearabilityCheck.calculate(
+                1_000_000L,
+                500_000L,
+                60_000L,
+                new EnrageTimeProvider.EnrageInfo(
+                        0.0,
+                        EnrageTimeProvider.ConfidenceLevel.LOW,
+                        "test"
+                )
+        );
+
+        assertEquals(0.0, result.requiredDps(), 0.001);
+        assertFalse(result.canClear());
     }
 }
