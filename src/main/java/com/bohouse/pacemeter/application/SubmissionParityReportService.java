@@ -20,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -150,7 +151,12 @@ public class SubmissionParityReportService {
         }
 
         return fflogsApiClient.fetchReportSummary(reportCode)
-                .map(summary -> toSubmissionFflogsSummary(reportUrl, metadata.fflogsFightId(), summary))
+                .map(summary -> toSubmissionFflogsSummary(
+                        reportUrl,
+                        metadata.fflogsFightId(),
+                        metadata.submittedAt(),
+                        summary
+                ))
                 .orElseGet(() -> new SubmissionParityReport.FflogsReportSummary(
                         "fetch_failed",
                         reportUrl,
@@ -169,6 +175,7 @@ public class SubmissionParityReportService {
     private SubmissionParityReport.FflogsReportSummary toSubmissionFflogsSummary(
             String reportUrl,
             Integer selectedFightId,
+            String submittedAt,
             FflogsApiClient.ReportSummary summary
     ) {
         FflogsApiClient.ReportFight selectedFight = null;
@@ -181,7 +188,7 @@ public class SubmissionParityReportService {
             }
         }
         if (selectedFight == null) {
-            selectedFight = chooseFight(summary.fights(), reportUrl, selectedFightId);
+            selectedFight = chooseFight(summary.fights(), reportUrl, selectedFightId, summary.startTime(), submittedAt);
         }
 
         List<SubmissionParityReport.FflogsFightSummary> fights = summary.fights().stream()
@@ -236,7 +243,9 @@ public class SubmissionParityReportService {
     private FflogsApiClient.ReportFight chooseFight(
             List<FflogsApiClient.ReportFight> fights,
             String reportUrl,
-            Integer selectedFightId
+            Integer selectedFightId,
+            long reportStartTime,
+            String submittedAt
     ) {
         if (fights.isEmpty()) {
             return null;
@@ -260,10 +269,73 @@ public class SubmissionParityReportService {
                 }
             }
         }
+
+        Long submittedAtMs = parseSubmittedAtMs(submittedAt);
+        if (submittedAtMs != null) {
+            FflogsApiClient.ReportFight nearestSubmittedFight = chooseNearestFightToSubmittedAt(
+                    fights,
+                    reportStartTime,
+                    submittedAtMs
+            );
+            if (nearestSubmittedFight != null) {
+                return nearestSubmittedFight;
+            }
+        }
+
         return fights.stream()
                 .filter(FflogsApiClient.ReportFight::kill)
                 .reduce((first, second) -> second)
                 .orElseGet(() -> fights.get(fights.size() - 1));
+    }
+
+    private Long parseSubmittedAtMs(String submittedAt) {
+        if (submittedAt == null || submittedAt.isBlank()) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(submittedAt).toInstant().toEpochMilli();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private FflogsApiClient.ReportFight chooseNearestFightToSubmittedAt(
+            List<FflogsApiClient.ReportFight> fights,
+            long reportStartTime,
+            long submittedAtMs
+    ) {
+        List<FflogsApiClient.ReportFight> meaningfulFights = fights.stream()
+                .filter(this::isMeaningfulEncounterFight)
+                .toList();
+        if (meaningfulFights.isEmpty()) {
+            meaningfulFights = fights;
+        }
+
+        FflogsApiClient.ReportFight nearestAfterSubmittedAt = meaningfulFights.stream()
+                .filter(fight -> reportStartTime + fight.startTime() >= submittedAtMs)
+                .min((left, right) -> Long.compare(
+                        (reportStartTime + left.startTime()) - submittedAtMs,
+                        (reportStartTime + right.startTime()) - submittedAtMs
+                ))
+                .orElse(null);
+        if (nearestAfterSubmittedAt != null) {
+            return nearestAfterSubmittedAt;
+        }
+
+        return meaningfulFights.stream()
+                .min((left, right) -> Long.compare(
+                        Math.abs((reportStartTime + left.startTime()) - submittedAtMs),
+                        Math.abs((reportStartTime + right.startTime()) - submittedAtMs)
+                ))
+                .orElse(null);
+    }
+
+    private boolean isMeaningfulEncounterFight(FflogsApiClient.ReportFight fight) {
+        return fight != null
+                && fight.encounterId() > 0
+                && fight.name() != null
+                && !fight.name().isBlank()
+                && !"Unknown".equalsIgnoreCase(fight.name());
     }
 
     private String extractReportCode(String reportUrl) {
@@ -352,8 +424,8 @@ public class SubmissionParityReportService {
         }
         Map<String, CombatDebugSnapshot.ActorDebugEntry> unmatchedLocal = new HashMap<>(localByName);
 
-        List<SubmissionParityReport.ActorParityComparison> comparisons = new java.util.ArrayList<>();
-        List<SubmissionParityReport.UnmatchedFflogsActor> unmatchedFflogsActors = new java.util.ArrayList<>();
+        List<SubmissionParityReport.ActorParityComparison> comparisons = new ArrayList<>();
+        List<SubmissionParityReport.UnmatchedFflogsActor> unmatchedFflogsActors = new ArrayList<>();
         for (SubmissionParityReport.FflogsActorSummary fflogsActor : fflogs.actors()) {
             if (isExcludedFflogsActorType(fflogsActor.type())) {
                 continue;
@@ -816,7 +888,7 @@ public class SubmissionParityReportService {
                     dot.sourceId(),
                     ignored -> new SkillAccumulator()
             );
-            accumulator.add("DoT#" + Integer.toHexString(dot.statusId()).toUpperCase(), dot.damage());
+            accumulator.add("DoT#" + Integer.toHexString(ingestion.resolveDotActionId(dot)).toUpperCase(), dot.damage());
         }
     }
 
@@ -838,6 +910,7 @@ public class SubmissionParityReportService {
         }
 
         String type = parts[0];
+        String subtype = parts.length >= 3 ? parts[2] : "";
         Long timestampMs = parseLineTimestampMs(parts[1]);
         if (timestampMs == null) {
             return false;
@@ -851,9 +924,9 @@ public class SubmissionParityReportService {
             return true;
         }
         if (timestampMs >= window.startInclusiveMs()) {
-            return isPrePullContextLineType(type);
+            return isPrePullContextLineType(type, subtype);
         }
-        return isHistoricalContextLineType(type);
+        return isHistoricalContextLineType(type, subtype);
     }
 
     private Long parseLineTimestampMs(String value) {
@@ -864,20 +937,22 @@ public class SubmissionParityReportService {
         }
     }
 
-    private boolean isPrePullContextLineType(String type) {
+    private boolean isPrePullContextLineType(String type, String subtype) {
         return "01".equals(type)
                 || "02".equals(type)
                 || "03".equals(type)
                 || "11".equals(type)
+                || ("261".equals(type) && "Add".equals(subtype))
                 || "26".equals(type)
                 || "30".equals(type);
     }
 
-    private boolean isHistoricalContextLineType(String type) {
+    private boolean isHistoricalContextLineType(String type, String subtype) {
         return "01".equals(type)
                 || "02".equals(type)
                 || "03".equals(type)
-                || "11".equals(type);
+                || "11".equals(type)
+                || ("261".equals(type) && "Add".equals(subtype));
     }
 
     private record ReplayRunResult(

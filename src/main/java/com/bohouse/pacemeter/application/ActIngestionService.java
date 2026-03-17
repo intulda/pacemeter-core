@@ -8,6 +8,7 @@ import com.bohouse.pacemeter.core.event.CombatEvent;
 import com.bohouse.pacemeter.core.model.ActorId;
 import com.bohouse.pacemeter.core.model.BuffId;
 import com.bohouse.pacemeter.core.model.DamageType;
+import com.bohouse.pacemeter.core.model.DotStatusLibrary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -30,6 +31,17 @@ public final class ActIngestionService {
             0x25, // Gunbreaker - Sonic Break
             0x28  // Sage - Eukrasian Dosis
     );
+    private static final long UNKNOWN_STATUS_DOT_WINDOW_MS = 45_000L;
+    private static final Map<Integer, Set<Integer>> UNKNOWN_STATUS_DOT_APPLICATION_ACTIONS = Map.of(
+            0x1C, Set.of(0x409C),
+            0x1E, Set.of(0x1093),
+            0x28, Set.of(0x5EF8)
+    );
+    private static final Map<Integer, Set<Integer>> UNKNOWN_STATUS_DOT_STATUS_IDS = Map.of(
+            0x16, Set.of(0x0A9F),
+            0x1C, Set.of(0x0767),
+            0x28, Set.of(0x0A38)
+    );
 
     private final CombatEventPort combatEventPort;
     private final CombatService combatService;
@@ -47,6 +59,8 @@ public final class ActIngestionService {
     private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 캐릭터별 직업 ID
     private final Deque<DamageText> pendingDamageTexts = new ArrayDeque<>();
     private final Deque<PendingBuffEvent> pendingBuffEvents = new ArrayDeque<>();
+    private final Map<UnknownStatusDotKey, UnknownStatusDotApplication> unknownStatusDotApplications = new HashMap<>();
+    private final Map<UnknownStatusDotKey, UnknownStatusDotApplication> unknownStatusDotStatusApplications = new HashMap<>();
     private BossCandidate pendingBoss;
     private Long announcedBossId;
 
@@ -116,11 +130,10 @@ public final class ActIngestionService {
         lastDamageAt = null;
         lastEventInstant = null;
         deadPlayers.clear();
-        ownerByCombatantId.clear();
-        jobIdByActorId.clear();
         pendingDamageTexts.clear();
         pendingBuffEvents.clear();
-        combatService.clearCombatantContext();
+        unknownStatusDotApplications.clear();
+        unknownStatusDotStatusApplications.clear();
         pendingBoss = null;
         announcedBossId = null;
         // currentPlayerId, currentPlayerName은 유지 (다음 전투에서도 사용)
@@ -160,6 +173,8 @@ public final class ActIngestionService {
             jobIdByActorId.clear();
             pendingDamageTexts.clear();
             pendingBuffEvents.clear();
+            unknownStatusDotApplications.clear();
+            unknownStatusDotStatusApplications.clear();
             combatService.clearCombatantContext();
             pendingBoss = null;
             announcedBossId = null;
@@ -238,6 +253,7 @@ public final class ActIngestionService {
                     a.skillName(), Integer.toHexString(a.skillId()),
                     a.damage(), isParty,
                     receivedAbilityCount, emittedDamageCount, filteredByYouCount, zeroDamageCount);
+            noteUnknownStatusDotApplication(a);
             if (a.damage() > 0) {
                 emitDamage(a);
             }
@@ -258,6 +274,7 @@ public final class ActIngestionService {
         }
 
         if (line instanceof BuffApplyRaw b) {
+            noteUnknownStatusDotBuffApply(b);
             if (!fightStarted) {
                 pendingBuffEvents.addLast(PendingBuffEvent.apply(b));
                 return;
@@ -331,7 +348,119 @@ public final class ActIngestionService {
             return true;
         }
         Integer jobId = jobIdByActorId.get(dot.sourceId());
-        return jobId != null && UNKNOWN_STATUS_DOT_JOB_WHITELIST.contains(jobId);
+        if (jobId == null || !UNKNOWN_STATUS_DOT_JOB_WHITELIST.contains(jobId)) {
+            return false;
+        }
+        Set<Integer> applicationActionIds = UNKNOWN_STATUS_DOT_APPLICATION_ACTIONS.get(jobId);
+        Set<Integer> statusIds = UNKNOWN_STATUS_DOT_STATUS_IDS.get(jobId);
+        boolean tracksApplicationAction = applicationActionIds != null && !applicationActionIds.isEmpty();
+        boolean tracksStatusApply = statusIds != null && !statusIds.isEmpty();
+        if (!tracksApplicationAction && !tracksStatusApply) {
+            return true;
+        }
+
+        return resolveTrackedUnknownStatusDotStatusId(dot) != null
+                || resolveTrackedUnknownStatusDotActionId(dot) != null;
+    }
+
+    private void noteUnknownStatusDotApplication(NetworkAbilityRaw ability) {
+        Integer jobId = jobIdByActorId.get(ability.actorId());
+        if (jobId == null) {
+            return;
+        }
+        Set<Integer> actionIds = UNKNOWN_STATUS_DOT_APPLICATION_ACTIONS.get(jobId);
+        if (actionIds == null || !actionIds.contains(ability.skillId())) {
+            return;
+        }
+
+        pruneExpiredUnknownStatusDotApplications(ability.ts());
+        unknownStatusDotApplications.put(
+                new UnknownStatusDotKey(ability.actorId(), ability.targetId()),
+                new UnknownStatusDotApplication(ability.skillId(), ability.ts())
+        );
+    }
+
+    private void noteUnknownStatusDotBuffApply(BuffApplyRaw buffApply) {
+        Integer jobId = jobIdByActorId.get(buffApply.sourceId());
+        if (jobId == null || !UNKNOWN_STATUS_DOT_JOB_WHITELIST.contains(jobId)) {
+            return;
+        }
+        Set<Integer> expectedStatusIds = UNKNOWN_STATUS_DOT_STATUS_IDS.get(jobId);
+        if (expectedStatusIds == null || !expectedStatusIds.contains(buffApply.statusId())) {
+            return;
+        }
+        if (!DotStatusLibrary.isLikelyDot(
+                new BuffId(buffApply.statusId()),
+                buffApply.statusName(),
+                (long) (buffApply.durationSec() * 1000),
+                new ActorId(buffApply.sourceId()),
+                new ActorId(buffApply.targetId())
+        )) {
+            return;
+        }
+
+        pruneExpiredUnknownStatusDotApplications(buffApply.ts());
+        unknownStatusDotStatusApplications.put(
+                new UnknownStatusDotKey(buffApply.sourceId(), buffApply.targetId()),
+                new UnknownStatusDotApplication(buffApply.statusId(), buffApply.ts())
+        );
+    }
+
+    private void pruneExpiredUnknownStatusDotApplications(Instant now) {
+        Instant cutoff = now.minusMillis(UNKNOWN_STATUS_DOT_WINDOW_MS);
+        unknownStatusDotApplications.entrySet().removeIf(entry -> entry.getValue().appliedAt().isBefore(cutoff));
+        unknownStatusDotStatusApplications.entrySet().removeIf(entry -> entry.getValue().appliedAt().isBefore(cutoff));
+    }
+
+    int resolveDotActionId(DotTickRaw dot) {
+        if (dot.hasKnownStatus()) {
+            return dot.statusId();
+        }
+        Integer actionId = resolveTrackedUnknownStatusDotStatusId(dot);
+        if (actionId == null) {
+            actionId = resolveTrackedUnknownStatusDotActionId(dot);
+        }
+        return actionId != null ? actionId : dot.statusId();
+    }
+
+    private Integer resolveTrackedUnknownStatusDotStatusId(DotTickRaw dot) {
+        pruneExpiredUnknownStatusDotApplications(dot.ts());
+        UnknownStatusDotApplication application = unknownStatusDotStatusApplications.get(
+                new UnknownStatusDotKey(dot.sourceId(), dot.targetId())
+        );
+        if (application == null) {
+            return null;
+        }
+        if (application.appliedAt().isBefore(dot.ts().minusMillis(UNKNOWN_STATUS_DOT_WINDOW_MS))) {
+            return null;
+        }
+        return application.actionId();
+    }
+
+    Integer debugJobId(long actorId) {
+        return jobIdByActorId.get(actorId);
+    }
+
+    boolean debugHasUnknownStatusDotAction(long sourceId, long targetId) {
+        return unknownStatusDotApplications.containsKey(new UnknownStatusDotKey(sourceId, targetId));
+    }
+
+    boolean debugHasUnknownStatusDotStatus(long sourceId, long targetId) {
+        return unknownStatusDotStatusApplications.containsKey(new UnknownStatusDotKey(sourceId, targetId));
+    }
+
+    private Integer resolveTrackedUnknownStatusDotActionId(DotTickRaw dot) {
+        pruneExpiredUnknownStatusDotApplications(dot.ts());
+        UnknownStatusDotApplication application = unknownStatusDotApplications.get(
+                new UnknownStatusDotKey(dot.sourceId(), dot.targetId())
+        );
+        if (application == null) {
+            return null;
+        }
+        if (application.appliedAt().isBefore(dot.ts().minusMillis(UNKNOWN_STATUS_DOT_WINDOW_MS))) {
+            return null;
+        }
+        return application.actionId();
     }
 
     private void emitDamage(NetworkAbilityRaw a) {
@@ -475,12 +604,13 @@ public final class ActIngestionService {
                     dot.sourceName(), Long.toHexString(dot.sourceId()), partyMemberIds.size());
         }
 
+        int actionId = resolveDotActionId(dot);
         combatEventPort.onEvent(new CombatEvent.DamageEvent(
                 tsMs,
                 new ActorId(dot.sourceId()),
                 dot.sourceName(),
                 new ActorId(dot.targetId()),
-                dot.statusId(),
+                actionId,
                 dot.damage(),
                 DamageType.DOT,
                 false,
@@ -669,6 +799,8 @@ public final class ActIngestionService {
     }
 
     private record BossCandidate(long actorId, String name, long maxHp) {}
+    private record UnknownStatusDotKey(long sourceId, long targetId) {}
+    private record UnknownStatusDotApplication(int actionId, Instant appliedAt) {}
     private record PendingBuffEvent(BuffApplyRaw apply, BuffRemoveRaw remove) {
         private static PendingBuffEvent apply(BuffApplyRaw apply) {
             return new PendingBuffEvent(apply, null);

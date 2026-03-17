@@ -18,6 +18,12 @@ public final class ActLineParser {
     private static final Pattern TARGET = Pattern.compile("(.+?)에게\\s*피해를");
     private static final Pattern SOURCE = Pattern.compile("^(.+?)의 공격");
     private static final Pattern PRIVATE_USE_ICON = Pattern.compile("[\\uE000-\\uF8FF]");
+    private static final Pattern AMOUNT_KR_V2 = Pattern.compile("\uD53C\uD574\uB97C\\s*(\\d+)");
+    private static final Pattern TARGET_KR_V2 = Pattern.compile("(.+?)\uC5D0\uAC8C\\s*\uD53C\uD574\uB97C");
+    private static final Pattern SOURCE_KR_V2 = Pattern.compile("^(.+?)\uC758\\s*\uACF5\uACA9");
+    private static final Pattern AMOUNT_KR = Pattern.compile("피해를\\s*(\\d+)");
+    private static final Pattern TARGET_KR = Pattern.compile("(.+?)에게\\s*피해를");
+    private static final Pattern SOURCE_KR = Pattern.compile("^(.+?)의\\s*공격");
 
     public ParsedLine parse(String line) {
         if (line == null || line.isBlank()) return null;
@@ -51,19 +57,35 @@ public final class ActLineParser {
 
             String msg = p[4];
             String normalizedMessage = normalizeDamageTextMessage(msg);
-            long amount = extractLong(AMOUNT, normalizedMessage, 1, -1);
+            long amount = extractLong(AMOUNT_KR_V2, normalizedMessage, 1, -1);
             if (amount <= 0) return null;
 
-            String source = normalizeCombatTextName(extractString(SOURCE, normalizedMessage, 1));
+            String source = normalizeCombatTextName(extractString(SOURCE_KR_V2, normalizedMessage, 1));
             String targetSection = normalizedMessage;
+            String targetSourcePrefix = source == null || source.isBlank()
+                    ? ""
+                    : "^\\s*" + Pattern.quote(source) + "의\\s*공격\\s*";
             if (source != null && !source.isBlank()) {
                 targetSection = normalizedMessage.replaceFirst("^\\s*" + Pattern.quote(source) + "의 공격\\s*", "");
             }
-            String target = normalizeCombatTextName(extractString(TARGET, targetSection, 1));
+            String targetSourcePrefixV2 = source == null || source.isBlank()
+                    ? ""
+                    : "^\\s*" + Pattern.quote(source) + "\uC758\\s*\uACF5\uACA9\\s*";
+            if (!targetSourcePrefixV2.isBlank()) {
+                targetSection = normalizedMessage.replaceFirst(targetSourcePrefixV2, "");
+            }
+            if (!targetSourcePrefix.isBlank()) {
+                targetSection = normalizedMessage.replaceFirst(targetSourcePrefix, "");
+            }
+            String target = normalizeCombatTextName(extractString(TARGET_KR_V2, targetSection, 1));
 
             boolean direct = msg.contains("직격");
             boolean crit = msg.contains("극대화") || msg.contains("치명");
 
+            direct = direct || msg.contains("직격");
+            crit = crit || msg.contains("극대") || msg.contains("치명");
+            direct = direct || msg.contains("\uC9C1\uACA9");
+            crit = crit || msg.contains("\uADF9\uB300") || msg.contains("\uCE58\uBA85");
             return new DamageText(ts, source, target, amount, crit, direct, line, msg);
         }
 
@@ -273,6 +295,12 @@ public final class ActLineParser {
         normalized = normalized.replace("직격!", " ");
         normalized = normalized.replace("극대화!", " ");
         normalized = normalized.replace("치명타!", " ");
+        normalized = normalized.replace("직격!", " ");
+        normalized = normalized.replace("극대화!", " ");
+        normalized = normalized.replace("치명타!", " ");
+        normalized = normalized.replace("\uC9C1\uACA9!", " ");
+        normalized = normalized.replace("\uADF9\uB300\uD654!", " ");
+        normalized = normalized.replace("\uCE58\uBA85\uD0C0!", " ");
         return normalized.trim().replaceAll("\\s+", " ");
     }
 

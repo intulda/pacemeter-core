@@ -161,6 +161,38 @@ class ActLineParserTest {
     }
 
     @Test
+    void parse_damageText_koreanCritDirectMessage() {
+        String message = "\uBCF4\uC2A4\uC5D0\uAC8C \uC9C1\uACA9! \uADF9\uB300\uD654! \uD53C\uD574\uB97C 6026 \uC8FC\uC5C8\uC2B5\uB2C8\uB2E4";
+        String line = "00|" + TS + "|12A9||" + message + "|deadbeef";
+
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(DamageText.class, result);
+        DamageText raw = (DamageText) result;
+        assertNull(raw.sourceTextName());
+        assertEquals("\uBCF4\uC2A4", raw.targetTextName());
+        assertEquals(6026L, raw.amount());
+        assertTrue(raw.criticalLike());
+        assertTrue(raw.directHitLike());
+    }
+
+    @Test
+    void parse_damageText_koreanSourceAndTargetMessage() {
+        String message = "\uC0DD\uC950\uC758 \uACF5\uACA9 \uBCF4\uC2A4\uC5D0\uAC8C \uD53C\uD574\uB97C 12345 \uC8FC\uC5C8\uC2B5\uB2C8\uB2E4";
+        String line = "00|" + TS + "|12A9||" + message + "|deadbeef";
+
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(DamageText.class, result);
+        DamageText raw = (DamageText) result;
+        assertEquals("\uC0DD\uC950", raw.sourceTextName());
+        assertEquals("\uBCF4\uC2A4", raw.targetTextName());
+        assertEquals(12345L, raw.amount());
+        assertFalse(raw.criticalLike());
+        assertFalse(raw.directHitLike());
+    }
+
+    @Test
     void parse_typeCode260_returnsNull() {
         String line = "260|" + TS + "|some|data|here|more";
         assertNull(parser.parse(line));

@@ -226,6 +226,33 @@ class CombatEngineReplayTest {
     }
 
     @Test
+    void onlineRdps_usesFixedRecentWindow_toAvoidBurstSpike() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Ninja"));
+        engine.process(new CombatEvent.DamageEvent(
+                1_000, new ActorId(1), "Ninja", new ActorId(100), 1, 300_000,
+                DamageType.DIRECT, false, false));
+        engine.process(new CombatEvent.Tick(1_000));
+        engine.process(new CombatEvent.DamageEvent(
+                19_900, new ActorId(1), "Ninja", new ActorId(100), 2, 120_000,
+                DamageType.DIRECT, false, false));
+        engine.process(new CombatEvent.DamageEvent(
+                20_000, new ActorId(1), "Ninja", new ActorId(100), 3, 120_000,
+                DamageType.DIRECT, false, false));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(20_000)).snapshot().orElseThrow();
+        ActorSnapshot actor = snapshot.actors().stream()
+                .filter(entry -> entry.name().equals("Ninja"))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(27_000.0, actor.dps(), 0.1);
+        assertEquals(16_000.0, actor.recentDps(), 0.1);
+        assertEquals(23_088.9, actor.onlineRdps(), 0.1);
+    }
+
+    @Test
     void bossIdentified_updatesCombatState() {
         CombatEngine engine = new CombatEngine();
         engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));

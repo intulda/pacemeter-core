@@ -4,6 +4,7 @@ import com.bohouse.pacemeter.adapter.inbound.actws.*;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
 import com.bohouse.pacemeter.application.port.inbound.CombatEventPort;
 import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider;
+import com.bohouse.pacemeter.core.engine.CombatEngine;
 import com.bohouse.pacemeter.core.engine.EngineResult;
 import com.bohouse.pacemeter.core.event.CombatEvent;
 import com.bohouse.pacemeter.core.model.ActorId;
@@ -46,7 +47,7 @@ class ActIngestionServiceTest {
         };
         // Mock CombatService (jobId 설정은 무시)
         CombatService mockCombatService = new CombatService(
-                new com.bohouse.pacemeter.core.engine.CombatEngine(),
+                new CombatEngine(),
                 snapshot -> {},
                 (name, zone) -> Optional.empty(),
                 territoryId -> Optional.empty()
@@ -257,7 +258,7 @@ class ActIngestionServiceTest {
         ));
         service.onParsed(new NetworkAbilityRaw(
                 damageTime.plusMillis(50),
-                21,
+                0x0A9F,
                 0x1000000AL,
                 "Warrior",
                 0xB4,
@@ -356,6 +357,397 @@ class ActIngestionServiceTest {
         ));
 
         assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forTrackedJob_requiresRecentApplication() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x101C2E9EL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x101C2E9EL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x101C2E9EL,
+                "Scholar",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(300),
+                21,
+                0x101C2E9EL,
+                "Scholar",
+                0x409C,
+                "Biolysis",
+                0x40000001L,
+                "보스",
+                false,
+                false,
+                1200,
+                "21|...|raw"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(3200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x101C2E9EL,
+                "Scholar",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(0x409C, event.actionId());
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forNinja_requiresRecentDokumoriApplication() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x1013ABCDL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x1013ABCDL,
+                "Ninja",
+                0x1E,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Ninja"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x1013ABCDL,
+                "Ninja",
+                0xEBA0L,
+                "24|...|raw"
+        ));
+
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(300),
+                21,
+                0x1013ABCDL,
+                "Ninja",
+                0x1093,
+                "Dokumori",
+                0x40000001L,
+                "보스",
+                false,
+                false,
+                1200,
+                "21|...|raw"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(3200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x1013ABCDL,
+                "Ninja",
+                0xEBA0L,
+                "24|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(0x1093, event.actionId());
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forSage_requiresRecentEukrasianDosisApplication() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x10127ABCL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x10127ABCL,
+                "Sage",
+                0x28,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Sage"
+        ));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(300),
+                21,
+                0x10127ABCL,
+                "Sage",
+                0x5EF8,
+                "Eukrasian Dosis III",
+                0x40000001L,
+                "보스",
+                false,
+                false,
+                1200,
+                "21|...|raw"
+        ));
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(3200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x10127ABCL,
+                "Sage",
+                0xEBA0L,
+                "24|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(0x5EF8, event.actionId());
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forTrackedJob_isIgnoredWhenApplicationExpired() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x101C2E9EL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x101C2E9EL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(300),
+                21,
+                0x101C2E9EL,
+                "Scholar",
+                0x409C,
+                "Biolysis",
+                0x40000001L,
+                "보스",
+                false,
+                false,
+                1200,
+                "21|...|raw"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusSeconds(46),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x101C2E9EL,
+                "Scholar",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forTrackedJob_isIgnoredWhenApplicationWasOnDifferentTarget() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x101C2E9EL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x101C2E9EL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(300),
+                21,
+                0x101C2E9EL,
+                "Scholar",
+                0x409C,
+                "Biolysis",
+                0x40000002L,
+                "다른 보스",
+                false,
+                false,
+                1200,
+                "21|...|raw"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(3200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x101C2E9EL,
+                "Scholar",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forDragoon_requiresRecentChaoticSpringStatusApply() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x101589A6L)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x101589A6L,
+                "Dragoon",
+                0x16,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Dragoon"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x101589A6L,
+                "Dragoon",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+
+        service.onParsed(new BuffApplyRaw(
+                base().plusMillis(300),
+                0x0A9F,
+                "Chaotic Spring",
+                24.0,
+                0x101589A6L,
+                "Dragoon",
+                0x40000001L,
+                "보스"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(3200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x101589A6L,
+                "Dragoon",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(DamageType.DOT, event.damageType());
+        assertEquals(new ActorId(0x101589A6L), event.sourceId());
+        assertEquals(0x0A9F, event.actionId());
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forFallbackJob_stillUsesWhitelist() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x10180001L)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x10180001L,
+                "WhiteMage",
+                0x18,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|WhiteMage"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x10180001L,
+                "WhiteMage",
+                0xEBACL,
+                "24|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(DamageType.DOT, event.damageType());
+        assertEquals(new ActorId(0x10180001L), event.sourceId());
+        assertEquals(0, event.actionId());
     }
 
     @Test
@@ -528,5 +920,79 @@ class ActIngestionServiceTest {
         ));
 
         assertTrue(captured.isEmpty());
+    }
+
+    @Test
+    void fightEnd_preservesCombatantContextForNextPullInSameZone() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x1013CC4BL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x1013CC4BL,
+                "나성",
+                0x28,
+                0,
+                191512L,
+                191512L,
+                "03|..."
+        ));
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(100),
+                21,
+                0x1013CC4BL,
+                "나성",
+                0x5EF8,
+                "Player127",
+                0x4000664CL,
+                "보스",
+                false,
+                false,
+                1000,
+                "21|..."
+        ));
+        service.onParsed(new NetworkDeath(
+                base().plusMillis(200),
+                0x1013CC4BL,
+                "나성"
+        ));
+
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusSeconds(40),
+                21,
+                0x1013CC4BL,
+                "나성",
+                0x5EF8,
+                "Player127",
+                0x4000664CL,
+                "보스",
+                false,
+                false,
+                1000,
+                "21|..."
+        ));
+        service.onParsed(new DotTickRaw(
+                base().plusSeconds(41),
+                0x4000664CL,
+                "보스",
+                "DoT",
+                0,
+                0x1013CC4BL,
+                "나성",
+                2500,
+                "24|..."
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .filter(damage -> damage.damageType() == DamageType.DOT)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(0x5EF8, event.actionId());
+        assertEquals(new ActorId(0x1013CC4BL), event.sourceId());
     }
 }

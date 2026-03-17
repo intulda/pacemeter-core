@@ -97,9 +97,8 @@ public final class SnapshotAggregator {
 
             // 슬라이딩 윈도우 기반 최근 DPS 계산
             long recentDamage = stats.recentDamage();
-            long oldestSample = stats.oldestSampleTimestamp();
-            long windowSpan = (oldestSample >= 0) ? (elapsedMs - oldestSample) : 0;
-            double recentDps = (windowSpan > 0) ? recentDamage / (windowSpan / 1000.0) : dps;
+            long recentWindowMs = Math.min(elapsedMs, CombatState.RECENT_WINDOW_MS);
+            double recentDps = (recentWindowMs > 0) ? recentDamage / (recentWindowMs / 1000.0) : dps;
 
             int jobId = jobIdMap.getOrDefault(actorId, 0);  // 직업 정보 (없으면 0)
 
