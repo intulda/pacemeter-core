@@ -8,6 +8,7 @@ public record SubmissionParityReport(
         DamageTextMatchDiagnostics damageTextMatchDiagnostics,
         CombatDebugSnapshot combat,
         FflogsReportSummary fflogs,
+        ParityQualitySummary parityQuality,
         List<ActorParityComparison> comparisons,
         List<UnmatchedLocalActor> unmatchedLocalActors,
         List<UnmatchedFflogsActor> unmatchedFflogsActors
@@ -138,6 +139,20 @@ public record SubmissionParityReport(
             String skillName,
             long totalDamage,
             long hitCount
+    ) {
+    }
+
+    public record ParityQualitySummary(
+            int matchedActorCount,
+            int unmatchedLocalActorCount,
+            int unmatchedFflogsActorCount,
+            double meanAbsolutePercentageError,
+            double p95AbsolutePercentageError,
+            double maxAbsolutePercentageError,
+            int outlierActorCount,
+            double withinOnePercentRatio,
+            double withinThreePercentRatio,
+            double withinFivePercentRatio
     ) {
     }
 

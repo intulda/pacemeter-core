@@ -32,17 +32,40 @@ public final class ActIngestionService {
             0x28  // Sage - Eukrasian Dosis
     );
     private static final long UNKNOWN_STATUS_DOT_WINDOW_MS = 45_000L;
+    private static final Duration STATUS_SNAPSHOT_REDISTRIBUTION_WINDOW = Duration.ofMillis(3000);
     private static final Map<Integer, Set<Integer>> UNKNOWN_STATUS_DOT_APPLICATION_ACTIONS = Map.of(
-            0x1C, Set.of(0x409C),
+            0x1C, Set.of(0x409C, 0x9094),
             0x1E, Set.of(0x1093),
-            0x28, Set.of(0x5EF8)
+            0x21, Set.of(0x40AA),
+            0x28, Set.of(0x5EFA, 0x5EF8)
     );
     private static final Map<Integer, Set<Integer>> UNKNOWN_STATUS_DOT_STATUS_IDS = Map.of(
             0x16, Set.of(0x0A9F),
-            0x1C, Set.of(0x0767),
+            0x1C, Set.of(0x0767, 0x0F2B),
+            0x21, Set.of(0x0759),
             0x28, Set.of(0x0A38)
     );
-
+    private static final Map<Integer, Integer> TRACKED_DOT_STATUS_TO_ACTION_ID = Map.of(
+            0x0759, 0x40AA, // Astrologian - Combust
+            0x0767, 0x409C, // Scholar - Biolysis
+            0x0F2B, 0x9094, // Scholar - Baneful Impaction
+            0x0A38, 0x5EFA, // Sage - Eukrasian Dosis III
+            0x0A9F, 0x64AC  // Dragoon - Chaotic Spring
+    );
+    private static final Set<Integer> SNAPSHOT_REDISTRIBUTION_DENOMINATOR_STATUS_IDS = Set.of(
+            0x0759,
+            0x0767,
+            0x0F2B,
+            0x0A38,
+            0x0A9F
+    );
+    private static final Set<Integer> SNAPSHOT_REDISTRIBUTION_EMIT_STATUS_IDS = Set.of(
+            0x0759,
+            0x0767,
+            0x0F2B,
+            0x0A38,
+            0x0A9F
+    );
     private final CombatEventPort combatEventPort;
     private final CombatService combatService;
     private final FflogsZoneLookup fflogsZoneLookup;
@@ -57,10 +80,13 @@ public final class ActIngestionService {
     private final Set<Long> partyMemberIds = new HashSet<>();  // 파티원 ID 추적
     private final Set<Long> deadPlayers = new HashSet<>();     // 사망한 파티원 ID
     private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 캐릭터별 직업 ID
+    private final Map<Long, String> actorNameById = new HashMap<>();
     private final Deque<DamageText> pendingDamageTexts = new ArrayDeque<>();
     private final Deque<PendingBuffEvent> pendingBuffEvents = new ArrayDeque<>();
     private final Map<UnknownStatusDotKey, UnknownStatusDotApplication> unknownStatusDotApplications = new HashMap<>();
     private final Map<UnknownStatusDotKey, UnknownStatusDotApplication> unknownStatusDotStatusApplications = new HashMap<>();
+    private final Map<Long, Map<TrackedDotKey, TrackedDotState>> activeTargetDots = new HashMap<>();
+    private final Map<Long, StatusSnapshotState> latestStatusSnapshotsByTarget = new HashMap<>();
     private BossCandidate pendingBoss;
     private Long announcedBossId;
 
@@ -134,6 +160,9 @@ public final class ActIngestionService {
         pendingBuffEvents.clear();
         unknownStatusDotApplications.clear();
         unknownStatusDotStatusApplications.clear();
+        activeTargetDots.clear();
+        latestStatusSnapshotsByTarget.clear();
+        actorNameById.clear();
         pendingBoss = null;
         announcedBossId = null;
         // currentPlayerId, currentPlayerName은 유지 (다음 전투에서도 사용)
@@ -171,10 +200,13 @@ public final class ActIngestionService {
             partyMemberIds.clear();
             ownerByCombatantId.clear();
             jobIdByActorId.clear();
+            actorNameById.clear();
             pendingDamageTexts.clear();
             pendingBuffEvents.clear();
             unknownStatusDotApplications.clear();
             unknownStatusDotStatusApplications.clear();
+            activeTargetDots.clear();
+            latestStatusSnapshotsByTarget.clear();
             combatService.clearCombatantContext();
             pendingBoss = null;
             announcedBossId = null;
@@ -185,6 +217,7 @@ public final class ActIngestionService {
         if (line instanceof PrimaryPlayerChanged p) {
             this.currentPlayerId = p.playerId();
             this.currentPlayerName = p.playerName();
+            actorNameById.put(p.playerId(), p.playerName());
             // jobId는 CombatantAdded에서 설정됨
 
             // 엔진에 현재 플레이어 ID 전달 (개인 페이스 비교용)
@@ -210,6 +243,7 @@ public final class ActIngestionService {
             logger.info("[Ingestion] CombatantAdded: name={}(id={}) jobId={} ownerId={} rawLine={}",
                     c.name(), Long.toHexString(c.id()), Integer.toHexString(c.jobId()),
                     Long.toHexString(c.ownerId()), c.rawLine());
+            actorNameById.put(c.id(), c.name());
 
             // 펫/소환수 소유자 추적
             if (c.ownerId() != 0) {
@@ -267,6 +301,11 @@ public final class ActIngestionService {
             return;
         }
 
+        if (line instanceof StatusSnapshotRaw snapshot) {
+            noteStatusSnapshot(snapshot);
+            return;
+        }
+
         if (line instanceof DamageText d) {
             pendingDamageTexts.addLast(d);
             pruneOldDamageTexts(d.ts());
@@ -275,6 +314,7 @@ public final class ActIngestionService {
 
         if (line instanceof BuffApplyRaw b) {
             noteUnknownStatusDotBuffApply(b);
+            trackActiveDot(b);
             if (!fightStarted) {
                 pendingBuffEvents.addLast(PendingBuffEvent.apply(b));
                 return;
@@ -284,6 +324,7 @@ public final class ActIngestionService {
         }
 
         if (line instanceof BuffRemoveRaw b) {
+            untrackActiveDot(b);
             if (!fightStarted) {
                 pendingBuffEvents.addLast(PendingBuffEvent.remove(b));
                 return;
@@ -331,13 +372,13 @@ public final class ActIngestionService {
     }
 
     boolean wouldEmitDotDamage(DotTickRaw dot) {
-        if (!shouldAcceptDot(dot)) {
-            return false;
-        }
-        if (!isPartyMember(dot.sourceId())) {
-            return false;
-        }
         if (isFriendlyTarget(dot.targetId())) {
+            return false;
+        }
+        if (shouldAcceptDot(dot) && isPartyMember(dot.sourceId())) {
+            return fightStarted || isValidCombatZone(dot.targetName());
+        }
+        if (resolveSnapshotRedistribution(dot).isEmpty()) {
             return false;
         }
         return fightStarted || isValidCombatZone(dot.targetName());
@@ -404,6 +445,143 @@ public final class ActIngestionService {
                 new UnknownStatusDotKey(buffApply.sourceId(), buffApply.targetId()),
                 new UnknownStatusDotApplication(buffApply.statusId(), buffApply.ts())
         );
+    }
+
+    private void trackActiveDot(BuffApplyRaw buffApply) {
+        long durationMs = (long) (buffApply.durationSec() * 1000);
+        int trackedActionId = toTrackedDotActionId(buffApply.statusId());
+        if (trackedActionId == 0) {
+            return;
+        }
+        if (!isPartyMember(buffApply.sourceId())
+                || isFriendlyTarget(buffApply.targetId())
+                || !DotStatusLibrary.isLikelyDot(
+                        new BuffId(buffApply.statusId()),
+                        buffApply.statusName(),
+                        durationMs,
+                        new ActorId(buffApply.sourceId()),
+                        new ActorId(buffApply.targetId()))) {
+            return;
+        }
+
+        pruneExpiredTrackedDots(buffApply.ts());
+        activeTargetDots
+                .computeIfAbsent(buffApply.targetId(), ignored -> new HashMap<>())
+                .put(
+                        new TrackedDotKey(buffApply.sourceId(), trackedActionId),
+                        new TrackedDotState(
+                                buffApply.sourceId(),
+                                buffApply.sourceName(),
+                                trackedActionId,
+                                buffApply.ts().plusMillis(durationMs)
+                        )
+                );
+    }
+
+    private void untrackActiveDot(BuffRemoveRaw buffRemove) {
+        int trackedActionId = toTrackedDotActionId(buffRemove.statusId());
+        if (trackedActionId == 0) {
+            return;
+        }
+        Map<TrackedDotKey, TrackedDotState> targetDots = activeTargetDots.get(buffRemove.targetId());
+        if (targetDots == null) {
+            return;
+        }
+        targetDots.remove(new TrackedDotKey(buffRemove.sourceId(), trackedActionId));
+        if (targetDots.isEmpty()) {
+            activeTargetDots.remove(buffRemove.targetId());
+        }
+    }
+
+    private void pruneExpiredTrackedDots(Instant now) {
+        Iterator<Map.Entry<Long, Map<TrackedDotKey, TrackedDotState>>> targetIterator = activeTargetDots.entrySet().iterator();
+        while (targetIterator.hasNext()) {
+            Map<TrackedDotKey, TrackedDotState> targetDots = targetIterator.next().getValue();
+            targetDots.values().removeIf(dot -> !dot.expiresAt().isAfter(now));
+            if (targetDots.isEmpty()) {
+                targetIterator.remove();
+            }
+        }
+    }
+
+    private void noteStatusSnapshot(StatusSnapshotRaw snapshot) {
+        Map<TrackedDotKey, Double> weights = new HashMap<>();
+        for (StatusSnapshotRaw.StatusEntry entry : snapshot.statuses()) {
+            if (!SNAPSHOT_REDISTRIBUTION_DENOMINATOR_STATUS_IDS.contains(entry.statusId())) {
+                continue;
+            }
+            double value = decodeSnapshotFloat(entry.rawValueHex());
+            if (value <= 0.0) {
+                continue;
+            }
+            weights.put(new TrackedDotKey(entry.sourceId(), entry.statusId()), value);
+        }
+        if (weights.isEmpty()) {
+            return;
+        }
+        latestStatusSnapshotsByTarget.put(snapshot.actorId(), new StatusSnapshotState(snapshot.ts(), Map.copyOf(weights)));
+    }
+
+    private List<TrackedDotState> resolveTrackedTargetDots(DotTickRaw dot) {
+        if (dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
+            return List.of();
+        }
+        pruneExpiredTrackedDots(dot.ts());
+        Map<TrackedDotKey, TrackedDotState> targetDots = activeTargetDots.get(dot.targetId());
+        if (targetDots == null || targetDots.isEmpty()) {
+            return List.of();
+        }
+        return targetDots.values().stream()
+                .filter(dotState -> isPartyMember(dotState.sourceId()))
+                .sorted(Comparator.comparingLong(TrackedDotState::sourceId).thenComparingInt(TrackedDotState::actionId))
+                .toList();
+    }
+
+    private List<SnapshotRedistributedDot> resolveSnapshotRedistribution(DotTickRaw dot) {
+        if (dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
+            return List.of();
+        }
+        StatusSnapshotState snapshot = latestStatusSnapshotsByTarget.get(dot.targetId());
+        if (snapshot == null) {
+            return List.of();
+        }
+        if (Duration.between(snapshot.ts(), dot.ts()).abs().compareTo(STATUS_SNAPSHOT_REDISTRIBUTION_WINDOW) > 0) {
+            return List.of();
+        }
+
+        double denominator = snapshot.weights().entrySet().stream()
+                .filter(entry -> SNAPSHOT_REDISTRIBUTION_DENOMINATOR_STATUS_IDS.contains(entry.getKey().actionId()))
+                .mapToDouble(Map.Entry::getValue)
+                .sum();
+        if (denominator <= 0.0) {
+            return List.of();
+        }
+
+        List<SnapshotRedistributedDot> redistributedDots = new ArrayList<>();
+        for (Map.Entry<TrackedDotKey, Double> entry : snapshot.weights().entrySet()) {
+            TrackedDotKey key = entry.getKey();
+            if (!SNAPSHOT_REDISTRIBUTION_EMIT_STATUS_IDS.contains(key.actionId())) {
+                continue;
+            }
+            long amount = Math.round(dot.damage() * (entry.getValue() / denominator));
+            if (amount <= 0) {
+                continue;
+            }
+            redistributedDots.add(new SnapshotRedistributedDot(key.sourceId(), key.actionId(), amount));
+        }
+        return redistributedDots;
+    }
+
+    private static double decodeSnapshotFloat(String rawValueHex) {
+        if (rawValueHex == null || rawValueHex.isBlank()) {
+            return 0.0;
+        }
+        try {
+            int bits = (int) Long.parseUnsignedLong(rawValueHex, 16);
+            return Float.intBitsToFloat(bits);
+        } catch (NumberFormatException e) {
+            return 0.0;
+        }
     }
 
     private void pruneExpiredUnknownStatusDotApplications(Instant now) {
@@ -586,6 +764,9 @@ public final class ActIngestionService {
             return;
         }
 
+        boolean unknownStatusDot = dot.statusId() == 0;
+        boolean acceptedBySource = shouldAcceptDot(dot) && isPartyMember(dot.sourceId());
+
         ensureFightStarted(dot.ts());
         lastDamageAt = dot.ts();
 
@@ -604,18 +785,95 @@ public final class ActIngestionService {
                     dot.sourceName(), Long.toHexString(dot.sourceId()), partyMemberIds.size());
         }
 
-        int actionId = resolveDotActionId(dot);
-        combatEventPort.onEvent(new CombatEvent.DamageEvent(
-                tsMs,
-                new ActorId(dot.sourceId()),
-                dot.sourceName(),
-                new ActorId(dot.targetId()),
-                actionId,
-                dot.damage(),
-                DamageType.DOT,
-                false,
-                false
-        ));
+        if (unknownStatusDot) {
+            List<SnapshotRedistributedDot> redistributedDots = resolveSnapshotRedistribution(dot);
+            if (!redistributedDots.isEmpty()) {
+                long remaining = dot.damage();
+                for (int i = 0; i < redistributedDots.size(); i++) {
+                    SnapshotRedistributedDot redistributedDot = redistributedDots.get(i);
+                    long allocated = i == redistributedDots.size() - 1
+                            ? remaining
+                            : Math.min(remaining, redistributedDot.amount());
+                    remaining -= allocated;
+                    combatEventPort.onEvent(new CombatEvent.DamageEvent(
+                            tsMs,
+                            new ActorId(redistributedDot.sourceId()),
+                            actorNameById.getOrDefault(redistributedDot.sourceId(), dot.sourceName()),
+                            new ActorId(dot.targetId()),
+                            redistributedDot.actionId(),
+                            allocated,
+                            DamageType.DOT,
+                            false,
+                            false
+                    ));
+                }
+                return;
+            }
+
+            List<TrackedDotState> trackedDots = resolveTrackedTargetDots(dot);
+            if (!trackedDots.isEmpty()) {
+                long remaining = dot.damage();
+                for (int i = 0; i < trackedDots.size(); i++) {
+                    TrackedDotState trackedDot = trackedDots.get(i);
+                    long allocated = remaining / (trackedDots.size() - i);
+                    remaining -= allocated;
+                    combatEventPort.onEvent(new CombatEvent.DamageEvent(
+                            tsMs,
+                            new ActorId(trackedDot.sourceId()),
+                            trackedDot.sourceName(),
+                            new ActorId(dot.targetId()),
+                            trackedDot.actionId(),
+                            allocated,
+                            DamageType.DOT,
+                            false,
+                            false
+                    ));
+                }
+                return;
+            }
+        }
+
+        if (acceptedBySource) {
+            int actionId = resolveDotActionId(dot);
+            combatEventPort.onEvent(new CombatEvent.DamageEvent(
+                    tsMs,
+                    new ActorId(dot.sourceId()),
+                    dot.sourceName(),
+                    new ActorId(dot.targetId()),
+                    actionId,
+                    dot.damage(),
+                    DamageType.DOT,
+                    false,
+                    false
+            ));
+            return;
+        }
+
+        List<TrackedDotState> trackedDots = resolveTrackedTargetDots(dot);
+        if (!trackedDots.isEmpty()) {
+            long remaining = dot.damage();
+            for (int i = 0; i < trackedDots.size(); i++) {
+                TrackedDotState trackedDot = trackedDots.get(i);
+                long allocated = remaining / (trackedDots.size() - i);
+                remaining -= allocated;
+                combatEventPort.onEvent(new CombatEvent.DamageEvent(
+                        tsMs,
+                        new ActorId(trackedDot.sourceId()),
+                        trackedDot.sourceName(),
+                        new ActorId(dot.targetId()),
+                        trackedDot.actionId(),
+                        allocated,
+                        DamageType.DOT,
+                        false,
+                        false
+                ));
+            }
+        }
+    }
+
+    private int toTrackedDotActionId(int statusId) {
+        Integer actionId = TRACKED_DOT_STATUS_TO_ACTION_ID.get(statusId);
+        return actionId != null ? actionId : 0;
     }
 
     private void ensureFightStarted(Instant firstEventTs) {
@@ -801,6 +1059,10 @@ public final class ActIngestionService {
     private record BossCandidate(long actorId, String name, long maxHp) {}
     private record UnknownStatusDotKey(long sourceId, long targetId) {}
     private record UnknownStatusDotApplication(int actionId, Instant appliedAt) {}
+    private record TrackedDotKey(long sourceId, int actionId) {}
+    private record TrackedDotState(long sourceId, String sourceName, int actionId, Instant expiresAt) {}
+    private record StatusSnapshotState(Instant ts, Map<TrackedDotKey, Double> weights) {}
+    private record SnapshotRedistributedDot(long sourceId, int actionId, long amount) {}
     private record PendingBuffEvent(BuffApplyRaw apply, BuffRemoveRaw remove) {
         private static PendingBuffEvent apply(BuffApplyRaw apply) {
             return new PendingBuffEvent(apply, null);

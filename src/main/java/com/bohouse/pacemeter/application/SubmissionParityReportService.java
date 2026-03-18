@@ -5,6 +5,7 @@ import com.bohouse.pacemeter.adapter.inbound.actws.DamageText;
 import com.bohouse.pacemeter.adapter.inbound.actws.DotTickRaw;
 import com.bohouse.pacemeter.adapter.inbound.actws.NetworkAbilityRaw;
 import com.bohouse.pacemeter.adapter.inbound.actws.ParsedLine;
+import com.bohouse.pacemeter.adapter.inbound.actws.ZoneChanged;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsApiClient;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
 import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider;
@@ -28,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Service
 public class SubmissionParityReportService {
@@ -43,6 +45,9 @@ public class SubmissionParityReportService {
     private static final double SEVERE_PARITY_GAP_RATIO = 0.50;
     private static final double MODERATE_PARITY_GAP_RATIO = 0.30;
     private static final int UNKNOWN_SKILL_WARNING_COUNT = 3;
+    private static final Map<Integer, Integer> TERRITORY_ENCOUNTER_ID_OVERRIDES = Map.of(
+            1327, 105
+    );
 
     public SubmissionParityReportService(
             ActLineParser parser,
@@ -75,26 +80,127 @@ public class SubmissionParityReportService {
                 SubmissionParityReport.SubmissionMetadata.class
         );
 
+        Map<String, String> originalToAlias = loadOriginalToAlias(submissionDir.resolve("mapping.json"));
+        Map<String, String> aliasToOriginal = invertAliasMapping(originalToAlias);
         SubmissionParityReport.FflogsReportSummary fflogsSummary = buildFflogsSummary(metadata);
+        fflogsSummary = maybeRefineFightSelection(
+                combatLogPath,
+                metadata,
+                fflogsSummary,
+                originalToAlias,
+                aliasToOriginal
+        );
         Optional<ReplayWindow> replayWindow = deriveReplayWindow(fflogsSummary);
         ReplayRunResult replayResult = runReplay(
                 combatLogPath,
                 metadata.zoneId(),
-                replayWindow
+                replayWindow,
+                aliasToOriginal
         );
         SubmissionParityReport.DamageTextMatchDiagnostics damageTextMatchDiagnostics =
-                diagnoseDamageTextMatching(combatLogPath, replayWindow);
+                diagnoseDamageTextMatching(combatLogPath, replayWindow, aliasToOriginal);
         ComparisonBundle comparisonBundle = buildComparisons(submissionDir, replayResult.snapshot(), fflogsSummary);
+        SubmissionParityReport.ParityQualitySummary parityQuality = computeParityQualitySummary(
+                comparisonBundle.comparisons(),
+                comparisonBundle.unmatchedLocalActors(),
+                comparisonBundle.unmatchedFflogsActors()
+        );
         return new SubmissionParityReport(
                 metadata,
                 replayResult.summary(),
                 damageTextMatchDiagnostics,
                 replayResult.snapshot(),
                 fflogsSummary,
+                parityQuality,
                 comparisonBundle.comparisons(),
                 comparisonBundle.unmatchedLocalActors(),
                 comparisonBundle.unmatchedFflogsActors()
         );
+    }
+
+    private SubmissionParityReport.ParityQualitySummary computeParityQualitySummary(
+            List<SubmissionParityReport.ActorParityComparison> comparisons,
+            List<SubmissionParityReport.UnmatchedLocalActor> unmatchedLocalActors,
+            List<SubmissionParityReport.UnmatchedFflogsActor> unmatchedFflogsActors
+    ) {
+        if (comparisons.isEmpty()) {
+            return new SubmissionParityReport.ParityQualitySummary(
+                    0,
+                    unmatchedLocalActors.size(),
+                    unmatchedFflogsActors.size(),
+                    0.0,
+                    0.0,
+                    0.0,
+                    0,
+                    0.0,
+                    0.0,
+                    0.0
+            );
+        }
+
+        List<Double> absolutePercentageErrors = comparisons.stream()
+                .map(comparison -> {
+                    double baseline = Math.max(Math.abs(comparison.fflogsRdpsPerSecond()), 1.0);
+                    return Math.abs(comparison.rdpsDelta()) / baseline;
+                })
+                .sorted()
+                .collect(Collectors.toList());
+
+        double sum = absolutePercentageErrors.stream().mapToDouble(Double::doubleValue).sum();
+        double mean = sum / absolutePercentageErrors.size();
+        double p95 = percentile(absolutePercentageErrors, 0.95);
+        double max = absolutePercentageErrors.get(absolutePercentageErrors.size() - 1);
+
+        int withinOne = 0;
+        int withinThree = 0;
+        int withinFive = 0;
+        int outliers = 0;
+        for (double ape : absolutePercentageErrors) {
+            if (ape <= 0.01) {
+                withinOne++;
+            }
+            if (ape <= 0.03) {
+                withinThree++;
+            }
+            if (ape <= 0.05) {
+                withinFive++;
+            } else {
+                outliers++;
+            }
+        }
+
+        int count = absolutePercentageErrors.size();
+        return new SubmissionParityReport.ParityQualitySummary(
+                comparisons.size(),
+                unmatchedLocalActors.size(),
+                unmatchedFflogsActors.size(),
+                mean,
+                p95,
+                max,
+                outliers,
+                (double) withinOne / count,
+                (double) withinThree / count,
+                (double) withinFive / count
+        );
+    }
+
+    private static double percentile(List<Double> sortedValues, double ratio) {
+        if (sortedValues.isEmpty()) {
+            return 0.0;
+        }
+        if (sortedValues.size() == 1) {
+            return sortedValues.get(0);
+        }
+
+        double boundedRatio = Math.min(Math.max(ratio, 0.0), 1.0);
+        double index = boundedRatio * (sortedValues.size() - 1);
+        int lower = (int) Math.floor(index);
+        int upper = (int) Math.ceil(index);
+        if (lower == upper) {
+            return sortedValues.get(lower);
+        }
+        double weight = index - lower;
+        return sortedValues.get(lower) * (1.0 - weight) + sortedValues.get(upper) * weight;
     }
 
     private SubmissionParityReport.FflogsReportSummary buildFflogsSummary(
@@ -154,6 +260,7 @@ public class SubmissionParityReportService {
                 .map(summary -> toSubmissionFflogsSummary(
                         reportUrl,
                         metadata.fflogsFightId(),
+                        metadata.zoneId(),
                         metadata.submittedAt(),
                         summary
                 ))
@@ -175,9 +282,11 @@ public class SubmissionParityReportService {
     private SubmissionParityReport.FflogsReportSummary toSubmissionFflogsSummary(
             String reportUrl,
             Integer selectedFightId,
+            int actZoneId,
             String submittedAt,
             FflogsApiClient.ReportSummary summary
     ) {
+        Integer expectedEncounterId = resolveExpectedEncounterId(actZoneId);
         FflogsApiClient.ReportFight selectedFight = null;
         if (selectedFightId != null) {
             for (FflogsApiClient.ReportFight fight : summary.fights()) {
@@ -188,7 +297,14 @@ public class SubmissionParityReportService {
             }
         }
         if (selectedFight == null) {
-            selectedFight = chooseFight(summary.fights(), reportUrl, selectedFightId, summary.startTime(), submittedAt);
+            selectedFight = chooseFight(
+                    summary.fights(),
+                    reportUrl,
+                    selectedFightId,
+                    expectedEncounterId,
+                    summary.startTime(),
+                    submittedAt
+            );
         }
 
         List<SubmissionParityReport.FflogsFightSummary> fights = summary.fights().stream()
@@ -244,6 +360,7 @@ public class SubmissionParityReportService {
             List<FflogsApiClient.ReportFight> fights,
             String reportUrl,
             Integer selectedFightId,
+            Integer expectedEncounterId,
             long reportStartTime,
             String submittedAt
     ) {
@@ -267,6 +384,37 @@ public class SubmissionParityReportService {
                 if (fight.id() == selectedFightId) {
                     return fight;
                 }
+            }
+        }
+
+        if (expectedEncounterId != null) {
+            List<FflogsApiClient.ReportFight> encounterMatchedFights = fights.stream()
+                    .filter(fight -> fight.encounterId() == expectedEncounterId)
+                    .toList();
+            if (!encounterMatchedFights.isEmpty()) {
+                List<FflogsApiClient.ReportFight> preferredEncounterFights = encounterMatchedFights.stream()
+                        .filter(FflogsApiClient.ReportFight::kill)
+                        .toList();
+                if (preferredEncounterFights.isEmpty()) {
+                    preferredEncounterFights = encounterMatchedFights;
+                }
+
+                Long submittedAtMs = parseSubmittedAtMs(submittedAt);
+                if (submittedAtMs != null) {
+                    FflogsApiClient.ReportFight nearestEncounterFight = chooseNearestFightToSubmittedAt(
+                            preferredEncounterFights,
+                            reportStartTime,
+                            submittedAtMs
+                    );
+                    if (nearestEncounterFight != null) {
+                        return nearestEncounterFight;
+                    }
+                }
+
+                return preferredEncounterFights.stream()
+                        .filter(FflogsApiClient.ReportFight::kill)
+                        .reduce((first, second) -> second)
+                        .orElse(preferredEncounterFights.get(preferredEncounterFights.size() - 1));
             }
         }
 
@@ -330,7 +478,32 @@ public class SubmissionParityReportService {
                 .orElse(null);
     }
 
+    private Integer resolveExpectedEncounterId(int actZoneId) {
+        Integer overrideEncounterId = TERRITORY_ENCOUNTER_ID_OVERRIDES.get(actZoneId);
+        if (overrideEncounterId != null) {
+            return overrideEncounterId;
+        }
+        return fflogsZoneLookup.resolve(actZoneId)
+                .flatMap(zone -> {
+                    List<FflogsApiClient.EncounterInfo> encounters =
+                            fflogsApiClient.fetchZoneEncounters(zone.fflogsZoneId());
+                    if (zone.encounterIndex() < 0 || zone.encounterIndex() >= encounters.size()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(encounters.get(zone.encounterIndex()).id());
+                })
+                .orElse(null);
+    }
+
     private boolean isMeaningfulEncounterFight(FflogsApiClient.ReportFight fight) {
+        return fight != null
+                && fight.encounterId() > 0
+                && fight.name() != null
+                && !fight.name().isBlank()
+                && !"Unknown".equalsIgnoreCase(fight.name());
+    }
+
+    private boolean isMeaningfulEncounterFight(SubmissionParityReport.FflogsFightSummary fight) {
         return fight != null
                 && fight.encounterId() > 0
                 && fight.name() != null
@@ -390,11 +563,141 @@ public class SubmissionParityReportService {
             long absoluteFightEndMs = fflogsSummary.reportStartTime() + fight.endTime();
             return Optional.of(new ReplayWindow(
                     absoluteFightStartMs,
+                    absoluteFightEndMs,
                     absoluteFightStartMs - PRE_PULL_CONTEXT_MS,
                     absoluteFightEndMs + POST_FIGHT_PADDING_MS
             ));
         }
         return Optional.empty();
+    }
+
+    private SubmissionParityReport.FflogsReportSummary maybeRefineFightSelection(
+            Path combatLogPath,
+            SubmissionParityReport.SubmissionMetadata metadata,
+            SubmissionParityReport.FflogsReportSummary initialSummary,
+            Map<String, String> originalToAlias,
+            Map<String, String> aliasToOriginal
+    ) throws IOException {
+        if (initialSummary == null
+                || !"ok".equals(initialSummary.status())
+                || initialSummary.reportCode() == null
+                || initialSummary.reportStartTime() == null
+                || initialSummary.fights() == null
+                || initialSummary.fights().size() <= 1
+                || metadata.fflogsFightId() != null
+                || extractFightIdFromUrl(metadata.fflogsReportUrl()) != null) {
+            return initialSummary;
+        }
+
+        double bestScore = Double.POSITIVE_INFINITY;
+        SubmissionParityReport.FflogsFightSummary bestFight = null;
+        List<SubmissionParityReport.FflogsActorSummary> bestActors = List.of();
+        Integer expectedEncounterId = resolveExpectedEncounterId(metadata.zoneId());
+
+        for (SubmissionParityReport.FflogsFightSummary fight : initialSummary.fights()) {
+            if (!isMeaningfulEncounterFight(fight)) {
+                continue;
+            }
+
+            ReplayWindow replayWindow = new ReplayWindow(
+                    initialSummary.reportStartTime() + fight.startTime(),
+                    initialSummary.reportStartTime() + fight.endTime(),
+                    initialSummary.reportStartTime() + fight.startTime() - PRE_PULL_CONTEXT_MS,
+                    initialSummary.reportStartTime() + fight.endTime() + POST_FIGHT_PADDING_MS
+            );
+            ReplayRunResult replay = runReplay(combatLogPath, metadata.zoneId(), Optional.of(replayWindow), aliasToOriginal);
+            if (replay.snapshot() == null || replay.snapshot().actors() == null || replay.snapshot().actors().isEmpty()) {
+                continue;
+            }
+
+            long fightDurationMs = Math.max(0L, fight.endTime() - fight.startTime());
+            List<SubmissionParityReport.FflogsActorSummary> actors = fflogsApiClient
+                    .fetchDamageDoneTable(initialSummary.reportCode(), fight.id()).stream()
+                    .map(actor -> new SubmissionParityReport.FflogsActorSummary(
+                            actor.id(),
+                            actor.name(),
+                            actor.type(),
+                            actor.icon(),
+                            actor.total(),
+                            actor.activeTime(),
+                            actor.totalRdps(),
+                            actor.totalRdpsTaken(),
+                            actor.totalRdpsGiven(),
+                            toPerSecond(actor.totalRdps(), fightDurationMs),
+                            toPerSecond(actor.totalRdpsTaken(), fightDurationMs),
+                            toPerSecond(actor.totalRdpsGiven(), fightDurationMs)
+                    ))
+                    .toList();
+            if (actors.isEmpty()) {
+                continue;
+            }
+
+            double score = scoreFightMatch(replay.snapshot(), actors, originalToAlias, expectedEncounterId, fight.encounterId());
+            if (score < bestScore) {
+                bestScore = score;
+                bestFight = fight;
+                bestActors = actors;
+            }
+        }
+
+        if (bestFight == null || bestFight.id() == initialSummary.selectedFightId()) {
+            return initialSummary;
+        }
+
+        long selectedFightDurationMs = Math.max(0L, bestFight.endTime() - bestFight.startTime());
+        return new SubmissionParityReport.FflogsReportSummary(
+                initialSummary.status(),
+                initialSummary.reportUrl(),
+                initialSummary.reportCode(),
+                bestFight.id(),
+                bestFight.name(),
+                bestFight.kill(),
+                initialSummary.reportStartTime(),
+                selectedFightDurationMs,
+                initialSummary.fights(),
+                bestActors,
+                initialSummary.message()
+        );
+    }
+
+    private double scoreFightMatch(
+            CombatDebugSnapshot localCombat,
+            List<SubmissionParityReport.FflogsActorSummary> fflogsActors,
+            Map<String, String> originalToAlias,
+            Integer expectedEncounterId,
+            int actualEncounterId
+    ) {
+        Map<String, CombatDebugSnapshot.ActorDebugEntry> localByName = new HashMap<>();
+        for (CombatDebugSnapshot.ActorDebugEntry actor : localCombat.actors()) {
+            localByName.put(actor.name(), actor);
+        }
+
+        double score = 0.0;
+        int matchedActors = 0;
+        for (SubmissionParityReport.FflogsActorSummary fflogsActor : fflogsActors) {
+            if (isExcludedFflogsActorType(fflogsActor.type())) {
+                continue;
+            }
+
+            String localName = originalToAlias.getOrDefault(fflogsActor.name(), fflogsActor.name());
+            CombatDebugSnapshot.ActorDebugEntry localActor = localByName.get(localName);
+            if (localActor == null) {
+                score += 5.0;
+                continue;
+            }
+
+            matchedActors++;
+            double total = Math.max(1.0, Math.abs(fflogsActor.total()));
+            score += Math.abs(localActor.totalDamage() - fflogsActor.total()) / total;
+        }
+
+        if (matchedActors == 0) {
+            return Double.POSITIVE_INFINITY;
+        }
+        if (expectedEncounterId != null && expectedEncounterId != actualEncounterId) {
+            score += 0.25;
+        }
+        return score / matchedActors;
     }
 
     private ComparisonBundle buildComparisons(
@@ -651,10 +954,25 @@ public class SubmissionParityReportService {
         }
     }
 
+    private Map<String, String> invertAliasMapping(Map<String, String> originalToAlias) {
+        if (originalToAlias == null || originalToAlias.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> aliasToOriginal = new HashMap<>();
+        for (Map.Entry<String, String> entry : originalToAlias.entrySet()) {
+            if (entry.getKey() == null || entry.getValue() == null) {
+                continue;
+            }
+            aliasToOriginal.put(entry.getValue(), entry.getKey());
+        }
+        return Map.copyOf(aliasToOriginal);
+    }
+
     private ReplayRunResult runReplay(
             Path combatLogPath,
             int territoryId,
-            Optional<ReplayWindow> replayWindow
+            Optional<ReplayWindow> replayWindow,
+            Map<String, String> aliasToOriginal
     ) throws IOException {
         CombatEngine engine = new CombatEngine();
         CombatService combatService = new CombatService(
@@ -669,6 +987,12 @@ public class SubmissionParityReportService {
                 combatService,
                 fflogsZoneLookup
         );
+        if (territoryId > 0) {
+            Instant contextTs = replayWindow
+                    .map(window -> Instant.ofEpochMilli(window.startInclusiveMs()))
+                    .orElse(Instant.EPOCH);
+            ingestion.onParsed(new ZoneChanged(contextTs, territoryId, ""));
+        }
 
         long totalLines = 0L;
         long parsedLines = 0L;
@@ -685,7 +1009,7 @@ public class SubmissionParityReportService {
                     continue;
                 }
                 totalLines++;
-                ParsedLine parsed = parser.parse(line);
+                ParsedLine parsed = parser.parse(deanonymizeLine(line, aliasToOriginal));
                 if (parsed == null) {
                     continue;
                 }
@@ -728,7 +1052,8 @@ public class SubmissionParityReportService {
 
     private SubmissionParityReport.DamageTextMatchDiagnostics diagnoseDamageTextMatching(
             Path combatLogPath,
-            Optional<ReplayWindow> replayWindow
+            Optional<ReplayWindow> replayWindow,
+            Map<String, String> aliasToOriginal
     ) throws IOException {
         Deque<DamageText> recentTexts = new ArrayDeque<>();
         long damageTextLines = 0L;
@@ -743,7 +1068,7 @@ public class SubmissionParityReportService {
                 if (line.isBlank() || !shouldIncludeLine(line, replayWindow)) {
                     continue;
                 }
-                ParsedLine parsed = parser.parse(line);
+                ParsedLine parsed = parser.parse(deanonymizeLine(line, aliasToOriginal));
                 if (parsed == null) {
                     continue;
                 }
@@ -845,7 +1170,6 @@ public class SubmissionParityReportService {
                                     skill.hitCount()
                             ))
                             .sorted((left, right) -> Long.compare(right.totalDamage(), left.totalDamage()))
-                            .limit(TOP_SKILLS_PER_ACTOR)
                             .toList();
                     return new CombatDebugSnapshot.ActorSkillBreakdown(actor.actorId(), actor.name(), skills);
                 })
@@ -899,6 +1223,25 @@ public class SubmissionParityReportService {
         return skillName + " (" + Integer.toHexString(skillId).toUpperCase() + ")";
     }
 
+    private String deanonymizeLine(String line, Map<String, String> aliasToOriginal) {
+        if (line == null || line.isBlank() || aliasToOriginal == null || aliasToOriginal.isEmpty()) {
+            return line;
+        }
+        String[] parts = line.split("\\|", -1);
+        boolean changed = false;
+        for (int i = 0; i < parts.length; i++) {
+            String original = aliasToOriginal.get(parts[i]);
+            if (original != null) {
+                parts[i] = original;
+                changed = true;
+            }
+        }
+        if (!changed) {
+            return line;
+        }
+        return String.join("|", parts);
+    }
+
     private boolean shouldIncludeLine(String line, Optional<ReplayWindow> replayWindow) {
         if (replayWindow.isEmpty()) {
             return true;
@@ -919,6 +1262,9 @@ public class SubmissionParityReportService {
         ReplayWindow window = replayWindow.orElseThrow();
         if (timestampMs > window.endInclusiveMs()) {
             return false;
+        }
+        if (timestampMs > window.fightEndMs()) {
+            return isPostFightContextLineType(type, subtype);
         }
         if (timestampMs >= window.fightStartMs()) {
             return true;
@@ -955,6 +1301,16 @@ public class SubmissionParityReportService {
                 || ("261".equals(type) && "Add".equals(subtype));
     }
 
+    private boolean isPostFightContextLineType(String type, String subtype) {
+        return "01".equals(type)
+                || "02".equals(type)
+                || "03".equals(type)
+                || "11".equals(type)
+                || ("261".equals(type) && "Add".equals(subtype))
+                || "26".equals(type)
+                || "30".equals(type);
+    }
+
     private record ReplayRunResult(
             SubmissionParityReport.ReplaySummary summary,
             CombatDebugSnapshot snapshot
@@ -968,7 +1324,7 @@ public class SubmissionParityReportService {
     ) {
     }
 
-    private record ReplayWindow(long fightStartMs, long startInclusiveMs, long endInclusiveMs) {
+    private record ReplayWindow(long fightStartMs, long fightEndMs, long startInclusiveMs, long endInclusiveMs) {
     }
 
     private static final class SkillAccumulator {

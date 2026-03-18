@@ -659,6 +659,37 @@ class CombatEngineReplayTest {
         assertEquals(600.0, providerB.onlineRdps(), 1.0);
     }
 
+    @Test
+    void selfAppliedRaidBuff_doesNotCountAsExternalContribution() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Dancer"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(1),
+                new ActorId(1),
+                new BuffId(1821),
+                "정석 마무리",
+                60_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Dancer",
+                new ActorId(0x40000001L),
+                0x3E85,
+                10_500,
+                DamageType.DIRECT,
+                false,
+                false
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dancer = snapshot.actors().stream().filter(a -> a.name().equals("Dancer")).findFirst().orElseThrow();
+
+        assertEquals(10_500.0, dancer.onlineRdps(), 1.0);
+    }
+
     /** 이벤트 리스트를 엔진에 넣고 나온 스냅샷들을 수집하는 헬퍼 메서드 */
     private List<OverlaySnapshot> runReplay(List<CombatEvent> events) {
         CombatEngine engine = new CombatEngine();

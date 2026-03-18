@@ -54,6 +54,32 @@ class ActLineParserTest {
     }
 
     @Test
+    void parse_networkAbility_replacesKnownPlayerPlaceholdersWithDefinitionNames() {
+        ParsedLine ninjaResult = parser.parse(
+                "21|" + TS + "|100B73AC|생쥐|8C0|Player99|4000664C|린드블룸|714003|7F7C0000"
+        );
+        ParsedLine sageResult = parser.parse(
+                "21|" + TS + "|1013CC4B|나성|5EF8|Player127|4000664C|린드블룸|750003|AE4C0000"
+        );
+        ParsedLine dragoonResult = parser.parse(
+                "21|" + TS + "|101589A6|치삐|405E|Player164|4000664C|린드블룸|724003|FE090000"
+        );
+        ParsedLine unknownResult = parser.parse(
+                "21|" + TS + "|100B73AC|생쥐|49B9|Player36|4000664C|린드블룸|714003|10094001"
+        );
+
+        assertInstanceOf(NetworkAbilityRaw.class, ninjaResult);
+        assertInstanceOf(NetworkAbilityRaw.class, sageResult);
+        assertInstanceOf(NetworkAbilityRaw.class, dragoonResult);
+        assertInstanceOf(NetworkAbilityRaw.class, unknownResult);
+
+        assertEquals("spinning edge", ((NetworkAbilityRaw) ninjaResult).skillName());
+        assertEquals("dosis iii", ((NetworkAbilityRaw) sageResult).skillName());
+        assertEquals("high jump", ((NetworkAbilityRaw) dragoonResult).skillName());
+        assertEquals("Player36", ((NetworkAbilityRaw) unknownResult).skillName());
+    }
+
+    @Test
     void parse_dotTick_typeCode24() {
         String line = "24|" + TS + "|40005E82|더 타이런트|DoT|0|EBAC|142805740|154287371|10000|10000|||99.96|100.39|0.00|3.12|101C2E9E|돌체라떼|FFFFFFFF|121751|185402|7220|10000|||101.49|108.00|0.00|-2.53|8c8069c0758193c7";
         ParsedLine result = parser.parse(line);
@@ -150,6 +176,22 @@ class ActLineParserTest {
     void parse_buffRemove_tooFewFields_returnsNull() {
         String line = "30|" + TS + "|74F|The Balance|0.00|1000000B|Astrologian|1000000A";
         assertNull(parser.parse(line));
+    }
+
+    @Test
+    void parse_statusSnapshot_typeCode38_extractsTrackedStatuses() {
+        String line = "38|" + TS + "|100B73AC|생쥐|0064641E|226548|226548|10000|10000|36||100.40|99.20|0.00|1.52|0|0|0|0A0168|41F00000|E0000000|29CE0030|450E6719|100B73AC|0720|42700000|101EF25B|077D|418E55EB|40006875|0839|422AA96F|101EF25B|29D60031|41B80820|100B73AC|0312|41988312|101589A6|0552|41E9374B|10128857|0301F0|40B5FBE6|100B73AC|0D25|41F00000|1013CC4B|0BBB|41A00000|1013CC4B|0|0|0|0737|422AA96F|101EF25B|012B|407E9784|100B744D|0E65|4196624C|1008B280|708392671ac69ade";
+
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(StatusSnapshotRaw.class, result);
+        StatusSnapshotRaw raw = (StatusSnapshotRaw) result;
+        assertEquals(0x100B73ACL, raw.actorId());
+        assertEquals("생쥐", raw.actorName());
+        assertTrue(raw.statuses().stream().anyMatch(status -> status.statusId() == 0x0030 && status.sourceId() == 0x100B73ACL));
+        assertTrue(raw.statuses().stream().anyMatch(status -> status.statusId() == 0x0839 && status.sourceId() == 0x101EF25BL));
+        assertTrue(raw.statuses().stream().anyMatch(status -> status.statusId() == 0x0312 && status.sourceId() == 0x101589A6L));
+        assertTrue(raw.statuses().stream().anyMatch(status -> status.statusId() == 0x0E65 && status.sourceId() == 0x1008B280L));
     }
 
     // ── 무시 대상 ──

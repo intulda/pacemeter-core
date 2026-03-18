@@ -85,6 +85,9 @@ public final class ActorStats {
 
     /** 이 캐릭터에게 버프를 추가한다. */
     public void applyBuff(ActiveBuff buff) {
+        activeBuffs.removeIf(existing ->
+                existing.buffId().equals(buff.buffId())
+                        && existing.sourceId().equals(buff.sourceId()));
         activeBuffs.add(buff);
     }
 

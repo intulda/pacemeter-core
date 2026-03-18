@@ -179,7 +179,9 @@
     "source": "manual-effect-map"
   },
   {
-    "ids": [],
+    "ids": [
+      786
+    ],
     "effects": [
       {
         "kind": "CRIT_RATE",
@@ -321,7 +323,9 @@
     }
   },
   {
-    "ids": [],
+    "ids": [
+      1825
+    ],
     "effects": [
       {
         "kind": "CRIT_RATE",

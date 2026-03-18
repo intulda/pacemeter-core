@@ -1,6 +1,7 @@
 package com.bohouse.pacemeter.adapter.inbound.debug;
 
 import com.bohouse.pacemeter.application.SubmissionParityReport;
+import com.bohouse.pacemeter.application.SubmissionParityQualityService;
 import com.bohouse.pacemeter.application.SubmissionParityReportService;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,13 +17,23 @@ import java.io.IOException;
 public class SubmissionParityReportController {
 
     private final SubmissionParityReportService submissionParityReportService;
+    private final SubmissionParityQualityService submissionParityQualityService;
 
-    public SubmissionParityReportController(SubmissionParityReportService submissionParityReportService) {
+    public SubmissionParityReportController(
+            SubmissionParityReportService submissionParityReportService,
+            SubmissionParityQualityService submissionParityQualityService
+    ) {
         this.submissionParityReportService = submissionParityReportService;
+        this.submissionParityQualityService = submissionParityQualityService;
     }
 
     @GetMapping("/submissions/{submissionId}")
     public SubmissionParityReport submissionReport(@PathVariable String submissionId) throws IOException {
         return submissionParityReportService.buildReport(submissionId);
+    }
+
+    @GetMapping("/quality")
+    public SubmissionParityQualityService.SubmissionParityQualityRollup qualityRollup() throws IOException {
+        return submissionParityQualityService.buildRollup();
     }
 }

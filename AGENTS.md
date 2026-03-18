@@ -129,3 +129,35 @@
 - FFLogs API: https://www.fflogs.com/v2-api-docs/ff/
 - OverlayPlugin: https://github.com/OverlayPlugin/OverlayPlugin
 - Cactbot: https://github.com/OverlayPlugin/cactbot
+- ACT_Plugin: https://github.com/ravahn/FFXIV_ACT_Plugin
+
+## LogLine 참고
+- LogLine = 0,
+- ChangeZone = 1
+- ChangePrimaryPlayer = 2, 
+- AddCombatant = 3,
+- RemoveCombatant = 4,
+- AddBuff = 5,
+- RemoveBuff = 6,
+- FlyingText = 7,
+- OutgoingAbility = 8,
+- IncomingAbility = 10,
+- PartyList = 11,
+- PlayerStats = 12,
+- CombatantHP = 13,
+- NetworkStartsCasting = 20,
+- NetworkAbility = 21,
+- NetworkAOEAbility = 22,
+- NetworkCancelAbility = 23,
+- NetworkDoT = 24,
+- NetworkDeath = 25,
+- NetworkBuff = 26,
+- NetworkTargetIcon = 27,
+- NetworkRaidMarker = 28,
+- NetworkTargetMarker = 29,
+- NetworkBuffRemove = 30,
+- Debug = 251,
+- PacketDump = 252,
+- Version = 253,
+- Error = 254,
+- Timer = 255

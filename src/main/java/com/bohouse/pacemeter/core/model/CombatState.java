@@ -316,6 +316,9 @@ public final class CombatState {
         ActorStats targetStats = actors.get(targetId);
         if (targetStats != null) {
             for (ActiveBuff buff : targetStats.activeBuffs()) {
+                if (buff.sourceId().equals(sourceId)) {
+                    continue;
+                }
                 applyBuffEffects(buff, totalMultiplier, providerMultiplierLogWeight, providerCritRate, providerDirectHitRate);
             }
         }
@@ -360,15 +363,11 @@ public final class CombatState {
             double minimumRate,
             RateKind rateKind
     ) {
-        if (sourceStats == null || sourceStats.observedHitSampleCount() < 10) {
-            return defaultRate;
-        }
-
-        double observedRate = switch (rateKind) {
-            case CRIT -> sourceStats.observedCritHitCount() / (double) sourceStats.observedHitSampleCount();
-            case DIRECT_HIT -> sourceStats.observedDirectHitCount() / (double) sourceStats.observedHitSampleCount();
-        };
-        return Math.max(minimumRate, clampRate(observedRate - totalRateUp));
+        // CombatState only keeps one rolling observed crit/direct rate per actor.
+        // Subtracting the *current* buff stack from that fight-wide sample biases the base rate
+        // downward during stacked buff windows and consistently over-attributes external rDPS.
+        // Use a stable baseline instead of deriving a per-hit "unbuffed" rate from mixed samples.
+        return Math.max(minimumRate, defaultRate);
     }
 
     private double clampRate(double rate) {

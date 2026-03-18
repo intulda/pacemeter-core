@@ -163,13 +163,29 @@ public final class ActLineParser {
             return new BuffRemoveRaw(ts, statusId, statusName, sourceId, sourceName, targetId, targetName);
         }
 
+        if (typeCode == 38) {
+            if (p.length < 19) return null;
+            long actorId = parseHexLong(p[2]);
+            String actorName = p[3];
+            List<StatusSnapshotRaw.StatusEntry> statuses = new ArrayList<>();
+            for (int i = 18; i + 2 < p.length - 1; i += 3) {
+                long packedStatus = parseHexLong(p[i]);
+                int statusId = (int) (packedStatus & 0xFFFFL);
+                if (statusId == 0) {
+                    continue;
+                }
+                statuses.add(new StatusSnapshotRaw.StatusEntry(statusId, p[i + 1], parseHexLong(p[i + 2])));
+            }
+            return new StatusSnapshotRaw(ts, actorId, actorName, List.copyOf(statuses), line);
+        }
+
         // 21/22: NetworkAbility / NetworkAOEAbility
         if (typeCode == 21 || typeCode == 22) {
             if (p.length < 10) return null;
             long actorId = parseHexLong(p[2]);
             String actorName = p[3];
             int skillId = (int) parseHexLong(p[4]);
-            String skillName = p[5];
+            String skillName = ActActionNameLibrary.resolve(skillId, p[5]);
             long targetId = parseHexLong(p[6]);
             String targetName = p[7];
             long actionFlags = parseHexLong(p[8]);

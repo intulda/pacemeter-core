@@ -19,9 +19,6 @@ import re
 from pathlib import Path
 
 
-NAME_PATTERN = re.compile(r"(?<=\|)([^|]{2,24})\|")
-
-
 def anonymize_lines(lines: list[str]) -> tuple[list[str], dict[str, str]]:
     alias_map: dict[str, str] = {}
     next_id = 1
@@ -33,9 +30,10 @@ def anonymize_lines(lines: list[str]) -> tuple[list[str], dict[str, str]]:
             continue
 
         parts = line.rstrip("\n").split("|")
+        line_type = parts[0]
         replaced = []
-        for part in parts:
-            if is_probable_name(part):
+        for index, part in enumerate(parts):
+            if should_anonymize_field(line_type, index, part):
                 alias = alias_map.get(part)
                 if alias is None:
                     alias = f"Player{next_id:02d}"
@@ -52,15 +50,50 @@ def anonymize_lines(lines: list[str]) -> tuple[list[str], dict[str, str]]:
 def is_probable_name(value: str) -> bool:
     if not value or len(value) < 2 or len(value) > 24:
         return False
-    if value.startswith("0x"):
-        return False
     if value.isdigit():
+        return False
+    if all(ch in "0123456789ABCDEFabcdef" for ch in value):
         return False
     if any(ch in value for ch in ("=", "{", "}", "[", "]", "/", "\\")):
         return False
-    if value.lower() in {"logline", "combatdata", "changeparty", "changezone"}:
+    if value.lower() in {"logline", "combatdata", "changeparty", "changezone", "dot", "hot"}:
         return False
-    return " " in value or NAME_PATTERN.fullmatch(f"|{value}|") is not None
+    return True
+
+
+def should_anonymize_field(line_type: str, index: int, value: str) -> bool:
+    if not is_probable_name(value):
+        return False
+
+    name_fields_by_type = {
+        "00": {4},
+        "01": {3},
+        "02": {3},
+        "03": {3, 7},
+        "04": {3, 7},
+        "11": set(),
+        "21": {3, 5, 7},
+        "22": {3, 5, 7},
+        "24": {3, 4, 18},
+        "25": {3},
+        "26": {3, 6, 8},
+        "27": {3, 6, 8},
+        "28": {3, 6, 8},
+        "29": {3, 6, 8},
+        "30": {3, 6, 8},
+        "31": {3, 6, 8},
+        "37": {3},
+        "38": {3},
+        "39": {3},
+        "261": set(),
+        "264": set(),
+        "270": {3},
+    }
+
+    name_fields = name_fields_by_type.get(line_type)
+    if name_fields is None:
+        return False
+    return index in name_fields
 
 
 def main() -> None:

@@ -428,6 +428,179 @@ class ActIngestionServiceTest {
     }
 
     @Test
+    void dotTick_withUnknownStatusId_onEnemyTarget_prefersTrackedSourceDot() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Sage"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x1000000AL,
+                "Sage",
+                0x28,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Sage"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(60),
+                0x1000000BL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(100),
+                21,
+                0x1000000AL,
+                "Sage",
+                0x5EF8,
+                "Dosis III",
+                0x40000001L,
+                "Boss",
+                false,
+                false,
+                5_000,
+                "21|...|raw"
+        ));
+        captured.clear();
+
+        Instant applyTime = base().plusMillis(1_000);
+        service.onParsed(new BuffApplyRaw(
+                applyTime,
+                0x0A38,
+                "Eukrasian Dosis III",
+                30.0,
+                0x1000000AL,
+                "Sage",
+                0x40000001L,
+                "Boss"
+        ));
+        service.onParsed(new BuffApplyRaw(
+                applyTime.plusMillis(100),
+                0x0767,
+                "Biolysis",
+                30.0,
+                0x1000000BL,
+                "Scholar",
+                0x40000001L,
+                "Boss"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                applyTime.plusMillis(3_000),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0,
+                0x1000000AL,
+                "Sage",
+                9_001,
+                "24|...|raw"
+        ));
+
+        List<CombatEvent.DamageEvent> events = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .toList();
+
+        assertEquals(2, events.size());
+        assertEquals(9_001L, events.stream().mapToLong(CombatEvent.DamageEvent::amount).sum());
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000AL)) && event.actionId() == 0x5EFA));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x409C));
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_fromIgnoredSource_redistributesUsingRecentSnapshot() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Sage"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL, 0x1000000CL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x1000000AL,
+                "Sage",
+                0x28,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Sage"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(60),
+                0x1000000BL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(70),
+                0x1000000CL,
+                "Dragoon",
+                0x16,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Dragoon"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(80),
+                0x1000000DL,
+                "Paladin",
+                0x13,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Paladin"
+        ));
+        captured.clear();
+
+        Instant snapshotTime = base().plusMillis(1_000);
+        service.onParsed(new StatusSnapshotRaw(
+                snapshotTime,
+                0x40000001L,
+                "Boss",
+                List.of(
+                        new StatusSnapshotRaw.StatusEntry(0x0A38, "42200000", 0x1000000AL),
+                        new StatusSnapshotRaw.StatusEntry(0x0767, "41F00000", 0x1000000BL),
+                        new StatusSnapshotRaw.StatusEntry(0x0F2B, "41200000", 0x1000000BL),
+                        new StatusSnapshotRaw.StatusEntry(0x0A9F, "41A00000", 0x1000000CL)
+                ),
+                "38|...|raw"
+        ));
+
+        service.onParsed(new DotTickRaw(
+                snapshotTime.plusMillis(100),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0,
+                0x1000000DL,
+                "Paladin",
+                10_000,
+                "24|...|raw"
+        ));
+
+        List<CombatEvent.DamageEvent> events = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .toList();
+
+        assertEquals(4, events.size());
+        assertEquals(10_000L, events.stream().mapToLong(CombatEvent.DamageEvent::amount).sum());
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000AL)) && event.actionId() == 0x0A38));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x0767));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x0F2B));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000CL)) && event.actionId() == 0x0A9F));
+    }
+
+    @Test
     void dotTick_withUnknownStatusId_forNinja_requiresRecentDokumoriApplication() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
@@ -517,7 +690,7 @@ class ActIngestionServiceTest {
                 21,
                 0x10127ABCL,
                 "Sage",
-                0x5EF8,
+                0x5EFA,
                 "Eukrasian Dosis III",
                 0x40000001L,
                 "보스",
@@ -545,7 +718,56 @@ class ActIngestionServiceTest {
                 .findFirst()
                 .orElseThrow();
 
-        assertEquals(0x5EF8, event.actionId());
+        assertEquals(0x5EFA, event.actionId());
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forScholarBaneful_requiresRecentStatusApply() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x101C2E9EL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x101C2E9EL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        captured.clear();
+
+        service.onParsed(new BuffApplyRaw(
+                base().plusMillis(300),
+                0x0F2B,
+                "Baneful Impaction",
+                15.0,
+                0x101C2E9EL,
+                "Scholar",
+                0x40000001L,
+                "보스"
+        ));
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(3200),
+                0x40000001L,
+                "보스",
+                "DoT",
+                0,
+                0x101C2E9EL,
+                "Scholar",
+                0xEBA0L,
+                "24|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(0x9094, event.actionId());
     }
 
     @Test
@@ -707,7 +929,7 @@ class ActIngestionServiceTest {
 
         assertEquals(DamageType.DOT, event.damageType());
         assertEquals(new ActorId(0x101589A6L), event.sourceId());
-        assertEquals(0x0A9F, event.actionId());
+        assertEquals(0x64AC, event.actionId());
     }
 
     @Test

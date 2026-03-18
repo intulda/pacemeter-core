@@ -56,13 +56,19 @@ class RaidBuffLibraryTest {
 
     @Test
     void find_resolvesCritAndDirectHitRateBuffs() {
-        var critDefinition = RaidBuffLibrary.find(new BuffId(0xEEEE), "Battle Litany").orElseThrow();
+        var critDefinition = RaidBuffLibrary.find(new BuffId(0x312), "ignored").orElseThrow();
         assertEquals(RaidBuffLibrary.RaidBuffEffect.Kind.CRIT_RATE, critDefinition.effects().get(0).kind());
         assertEquals(0.10, critDefinition.effects().get(0).amount(), 0.0001);
 
-        var directHitDefinition = RaidBuffLibrary.find(new BuffId(0xEEEE), "Battle Voice").orElseThrow();
-        assertEquals(RaidBuffLibrary.RaidBuffEffect.Kind.DIRECT_HIT_RATE, directHitDefinition.effects().get(0).kind());
+        var directHitDefinition = RaidBuffLibrary.find(new BuffId(0x721), "ignored").orElseThrow();
+        assertEquals(RaidBuffLibrary.RaidBuffEffect.Kind.CRIT_RATE, directHitDefinition.effects().get(0).kind());
+        assertEquals(RaidBuffLibrary.RaidBuffEffect.Kind.DIRECT_HIT_RATE, directHitDefinition.effects().get(1).kind());
         assertEquals(0.20, directHitDefinition.effects().get(0).amount(), 0.0001);
+        assertEquals(0.20, directHitDefinition.effects().get(1).amount(), 0.0001);
+
+        var battleVoice = RaidBuffLibrary.find(new BuffId(0xEEEE), "Battle Voice").orElseThrow();
+        assertEquals(RaidBuffLibrary.RaidBuffEffect.Kind.DIRECT_HIT_RATE, battleVoice.effects().get(0).kind());
+        assertEquals(0.20, battleVoice.effects().get(0).amount(), 0.0001);
     }
 
     @Test
