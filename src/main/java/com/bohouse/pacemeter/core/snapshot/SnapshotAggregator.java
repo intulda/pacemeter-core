@@ -5,6 +5,7 @@ import com.bohouse.pacemeter.core.estimator.Confidence;
 import com.bohouse.pacemeter.core.estimator.OnlineEstimator;
 import com.bohouse.pacemeter.core.estimator.PaceProfile;
 import com.bohouse.pacemeter.core.estimator.RdpsEstimate;
+import com.bohouse.pacemeter.core.model.ActionNameLibrary;
 import com.bohouse.pacemeter.core.model.ActorId;
 import com.bohouse.pacemeter.core.model.ActorStats;
 import com.bohouse.pacemeter.core.model.CombatState;
@@ -119,6 +120,9 @@ public final class SnapshotAggregator {
                     est.confidence(),
                     damagePercent,
                     stats.hitCount(),
+                    stats.deathCount(),
+                    stats.maxHitDamage(),
+                    ActionNameLibrary.resolve(stats.maxHitActionId()),
                     recentDps,
                     isCurrentPlayer,
                     individualPace,

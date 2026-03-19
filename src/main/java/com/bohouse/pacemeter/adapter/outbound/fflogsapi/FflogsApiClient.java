@@ -882,6 +882,104 @@ public class FflogsApiClient {
         }
     }
 
+    public List<DamageEventEntry> fetchDamageDoneEventsByAbility(
+            String reportCode,
+            int fightId,
+            int sourceId,
+            int abilityId
+    ) {
+        Optional<String> token = tokenStore.getToken();
+        if (token.isEmpty()) {
+            log.warn("[FFLogs] fetchDamageDoneEventsByAbility skipped - no token");
+            return List.of();
+        }
+
+        String query = """
+                query($code: String!, $fightId: Int!, $sourceId: Int!, $abilityId: Float!, $startTime: Float) {
+                  reportData {
+                    report(code: $code) {
+                      events(
+                        dataType: DamageDone
+                        fightIDs: [$fightId]
+                        sourceID: $sourceId
+                        abilityID: $abilityId
+                        startTime: $startTime
+                      ) {
+                        data
+                        nextPageTimestamp
+                      }
+                    }
+                  }
+                }
+                """;
+
+        List<DamageEventEntry> events = new ArrayList<>();
+        Double nextStartTime = null;
+        try {
+            while (true) {
+                Map<String, Object> variables = new java.util.HashMap<>();
+                variables.put("code", reportCode);
+                variables.put("fightId", fightId);
+                variables.put("sourceId", sourceId);
+                variables.put("abilityId", (double) abilityId);
+                if (nextStartTime != null) {
+                    variables.put("startTime", nextStartTime);
+                }
+                byte[] body = objectMapper.writeValueAsBytes(Map.of(
+                        "query", query,
+                        "variables", variables
+                ));
+
+                String response = restClient.post()
+                        .header("Authorization", "Bearer " + token.get())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(body)
+                        .retrieve()
+                        .body(String.class);
+
+                JsonNode root = objectMapper.readTree(response);
+                checkErrors(root, "fetchDamageDoneEventsByAbility");
+
+                JsonNode eventsNode = root.path("data").path("reportData").path("report").path("events");
+                eventsNode = parseScalarJson(eventsNode, "events");
+                JsonNode dataNode = eventsNode.path("data");
+                if (dataNode.isArray()) {
+                    for (JsonNode eventNode : dataNode) {
+                        long amount = eventNode.path("amount").asLong(0L);
+                        if (amount <= 0L) {
+                            continue;
+                        }
+                        events.add(new DamageEventEntry(
+                                eventNode.path("timestamp").asLong(0L),
+                                eventNode.path("sourceID").asInt(0),
+                                eventNode.path("targetID").asInt(0),
+                                eventNode.path("abilityGameID").asInt(0),
+                                amount,
+                                eventNode.path("hitType").isMissingNode() ? null : eventNode.path("hitType").asInt()
+                        ));
+                    }
+                }
+
+                JsonNode nextPageTimestampNode = eventsNode.path("nextPageTimestamp");
+                if (!nextPageTimestampNode.isNumber()) {
+                    break;
+                }
+                double candidate = nextPageTimestampNode.asDouble(Double.NaN);
+                if (!Double.isFinite(candidate) || candidate <= 0.0) {
+                    break;
+                }
+                if (nextStartTime != null && candidate <= nextStartTime) {
+                    break;
+                }
+                nextStartTime = candidate;
+            }
+            return events;
+        } catch (Exception e) {
+            log.error("[FFLogs] fetchDamageDoneEventsByAbility failed: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
     public record TopRanking(String reportCode, long reportStartMs, long fightStartMs, long durationMs, int sourceId, String playerName) {}
 
     public record EncounterInfo(int id, String name) {}
@@ -907,5 +1005,14 @@ public class FflogsApiClient {
             String name,
             double total,
             String type
+    ) {}
+
+    public record DamageEventEntry(
+            long timestamp,
+            int sourceId,
+            int targetId,
+            int abilityGameId,
+            long amount,
+            Integer hitType
     ) {}
 }

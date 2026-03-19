@@ -66,6 +66,18 @@
 - `DoT#0`는 parity debug skill breakdown 집계 착시가 섞여 있을 수 있다.
   - 현재 skill breakdown은 엔진의 최종 redistributed event가 아니라 raw `24`를 다시 `resolveDotActionId()`로만 집계한다.
 
+#### parity 실험 로그(중복 방지)
+- `status=0` known-source DoT에서 snapshot redistribution을 전면 차단하는 시도는 실패.
+  - 결과: heavy2/heavy4 모두 대폭 악화(`p95`가 약 `5.4% -> 12%+` 구간으로 증가).
+  - 결론: 전면 차단 방식은 재시도 금지.
+- `status=0` known-source DoT에서 tracked 근거가 있으면 source 단일 귀속 우선하는 시도도 실패.
+  - 결과: heavy2/heavy4 동시 악화(WHM/SCH 부족 + PLD 과다 확대).
+  - 결론: 단순 우선순위 전환 방식 재시도 금지.
+- 현재 유지되는 방향:
+  - 선택 fight 정합성 버그 수정(heavy2 `fightId=2`, heavy4 `fightId=2` 유지)
+  - source-only fallback(타겟 불일치) 제거
+  - type 37 신호는 증거 데이터로만 적재(직접 강제 귀속은 미적용)
+
 #### 다음 우선순위
 1. `type 37` 파서를 추가한다.
 2. `0767 / 0F2B / 0A38`만 대상으로 `21 application marker + 37 result`를 연결해 DoT lifecycle 복원을 시도한다.
@@ -100,6 +112,14 @@
       - `jobs` 롤업 추가:
         - job별 `MAPE/p95/max/outlier/within1/3/5/pass`를 계산
         - 전 직업 관점에서 어떤 직업군이 구조적으로 흔들리는지 우선순위 식별 가능
+
+#### parity 재시작 핸드오프 (중요)
+- 재시작/다른 컴퓨터 진행 기준 문서:
+  - `docs/parity-continuation-handoff-2026-03-19.md`
+- 상세 변경/측정 이력:
+  - `docs/parity-patch-notes.md`
+- 집 테스트용 실행 요약:
+  - `docs/home-test-handoff-2026-03-19.md`
 
 ### 확인 필요
 - 프론트엔드 저장소 경로: `/Users/kimbogeun/WebstormProjects/pacemeter-overlay`

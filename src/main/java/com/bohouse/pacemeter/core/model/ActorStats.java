@@ -21,6 +21,9 @@ public final class ActorStats {
     private String name;
     private long totalDamage;
     private int hitCount;
+    private int deathCount;
+    private long maxHitDamage;
+    private int maxHitActionId;
     private final List<ActiveBuff> activeBuffs;
 
     /** 최근 데미지 기록 목록. 슬라이딩 윈도우 DPS 계산에 사용된다. */
@@ -44,6 +47,9 @@ public final class ActorStats {
         this.name = name;
         this.totalDamage = 0;
         this.hitCount = 0;
+        this.deathCount = 0;
+        this.maxHitDamage = 0;
+        this.maxHitActionId = 0;
         this.activeBuffs = new ArrayList<>();
         this.recentSamples = new ArrayList<>();
         this.recentGrantedContributionSamples = new ArrayList<>();
@@ -63,6 +69,9 @@ public final class ActorStats {
         this.name = other.name;
         this.totalDamage = other.totalDamage;
         this.hitCount = other.hitCount;
+        this.deathCount = other.deathCount;
+        this.maxHitDamage = other.maxHitDamage;
+        this.maxHitActionId = other.maxHitActionId;
         this.activeBuffs = new ArrayList<>(other.activeBuffs);        // record는 불변이라 얕은 복사로 충분
         this.recentSamples = new ArrayList<>(other.recentSamples);    // record는 불변이라 얕은 복사로 충분
         this.recentGrantedContributionSamples = new ArrayList<>(other.recentGrantedContributionSamples);
@@ -78,8 +87,16 @@ public final class ActorStats {
 
     /** 데미지를 누적한다. 총 데미지 증가 + 타격 횟수 증가 + 최근 기록에 추가. */
     public void addDamage(long amount, long timestampMs) {
+        addDamage(amount, timestampMs, 0);
+    }
+
+    public void addDamage(long amount, long timestampMs, int actionId) {
         this.totalDamage += amount;
         this.hitCount++;
+        if (amount > this.maxHitDamage) {
+            this.maxHitDamage = amount;
+            this.maxHitActionId = actionId;
+        }
         this.recentSamples.add(new DamageSample(timestampMs, amount));
     }
 
@@ -172,6 +189,9 @@ public final class ActorStats {
 
     /** 캐릭터를 사망 상태로 표시한다. */
     public void markDead(long timestampMs) {
+        if (!this.isDead) {
+            this.deathCount++;
+        }
         this.isDead = true;
         this.deathTimestamp = timestampMs;
     }
@@ -189,6 +209,9 @@ public final class ActorStats {
     public void setName(String name) { this.name = name; }
     public long totalDamage() { return totalDamage; }
     public int hitCount() { return hitCount; }
+    public int deathCount() { return deathCount; }
+    public long maxHitDamage() { return maxHitDamage; }
+    public int maxHitActionId() { return maxHitActionId; }
     public List<ActiveBuff> activeBuffs() { return Collections.unmodifiableList(activeBuffs); }
     public List<DamageSample> recentSamples() { return Collections.unmodifiableList(recentSamples); }
     public double totalGrantedBuffContribution() { return totalGrantedBuffContribution; }

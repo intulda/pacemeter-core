@@ -1,5 +1,6 @@
 package com.bohouse.pacemeter.adapter.inbound.actws;
 
+import com.bohouse.pacemeter.core.model.DotAttributionCatalog;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -9,6 +10,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 @Component
@@ -24,6 +26,7 @@ public final class ActLineParser {
     private static final Pattern AMOUNT_KR = Pattern.compile("피해를\\s*(\\d+)");
     private static final Pattern TARGET_KR = Pattern.compile("(.+?)에게\\s*피해를");
     private static final Pattern SOURCE_KR = Pattern.compile("^(.+?)의\\s*공격");
+    private static final Set<Integer> DOT_SIGNAL_STATUS_IDS = DotAttributionCatalog.snapshotStatusIds();
 
     public ParsedLine parse(String line) {
         if (line == null || line.isBlank()) return null;
@@ -163,6 +166,24 @@ public final class ActLineParser {
             return new BuffRemoveRaw(ts, statusId, statusName, sourceId, sourceName, targetId, targetName);
         }
 
+        if (typeCode == 37) {
+            if (p.length < 5) return null;
+            long targetId = parseHexLong(p[2]);
+            for (int i = 16; i + 4 < p.length - 1; i++) {
+                long packedStatus = parseHexLong(p[i + 1]);
+                int statusId = (int) (packedStatus & 0xFFFFL);
+                if (!DOT_SIGNAL_STATUS_IDS.contains(statusId)) {
+                    continue;
+                }
+                long sourceId = parseHexLong(p[i + 4]);
+                if (sourceId == 0) {
+                    continue;
+                }
+                return new DotStatusSignalRaw(ts, targetId, statusId, sourceId, line);
+            }
+            return null;
+        }
+
         if (typeCode == 38) {
             if (p.length < 19) return null;
             long actorId = parseHexLong(p[2]);
@@ -222,7 +243,7 @@ public final class ActLineParser {
             long sourceId = parseHexLong(p[17]);
             String sourceName = p[18];
 
-            if (sourceId == 0 || sourceName == null || sourceName.isBlank() || damage <= 0) {
+            if (damage <= 0) {
                 return null;
             }
             return new DotTickRaw(ts, targetId, targetName, effectType, statusId, sourceId, sourceName, damage, line);
@@ -277,7 +298,7 @@ public final class ActLineParser {
         int d2 = (int) ((raw >> 16) & 0xFF);
         int d3 = (int) ((raw >> 24) & 0xFF);
 
-        if ((raw & 0x00004000L) != 0) {
+        if ((raw & 0x00004000L) != 0 && d0 <= 0x0F) {
             return ((long) d0 << 16) | ((long) d3 << 8) | d2;
         }
         return ((long) d3 << 8) | d2;

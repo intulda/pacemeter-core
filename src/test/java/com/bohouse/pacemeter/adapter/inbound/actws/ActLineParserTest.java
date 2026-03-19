@@ -95,6 +95,18 @@ class ActLineParserTest {
         assertEquals(0xEBACL, raw.damage());
     }
 
+    @Test
+    void parse_dotTick_typeCode24_withUnknownSourceStillParses() {
+        String line = "24|" + TS + "|400034E9|린드블룸|DoT|0|57D7|80500036|104593118|10000|10000|||100.00|85.00|0.00|0.00|E0000000||FFFFFFFF|||||||||||f0b2a1132a271953";
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(DotTickRaw.class, result);
+        DotTickRaw raw = (DotTickRaw) result;
+        assertEquals(0xE0000000L, raw.sourceId());
+        assertEquals("", raw.sourceName());
+        assertEquals(0x57D7L, raw.damage());
+    }
+
     // ── 데미지 디코딩 ──
 
     @Test
@@ -111,6 +123,12 @@ class ActLineParserTest {
         long dmg = ActLineParser.decodeDamage("423F400F");
         assertEquals(999999, dmg);
         assertTrue(dmg > 65535, "big damage should exceed 65535");
+    }
+
+    @Test
+    void decodeDamage_highUpperByteWithShiftFlag_fallsBackToShortDamage() {
+        long dmg = ActLineParser.decodeDamage("5BDC4016");
+        assertEquals(0x5BDCL, dmg);
     }
 
     @Test

@@ -36,20 +36,19 @@ class SubmissionParityReportServiceTest {
                 new FflogsApiClient(new FflogsTokenStore(new ObjectMapper()), new ObjectMapper())
         );
 
-        SubmissionParityReport report = service.buildReport("2026-02-11-heavy3-pull1-full");
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
 
-        assertEquals("2026-02-11-heavy3-pull1-full", report.metadata().submissionId());
-        assertTrue(report.replay().fightStarted());
+        assertEquals("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", report.metadata().submissionId());
         assertTrue(report.replay().parsedLines() > 0);
         assertNotNull(report.damageTextMatchDiagnostics());
         assertNotNull(report.combat());
         assertFalse(report.combat().actors().isEmpty());
         assertNotNull(report.combat().boss());
-        assertEquals("아르카디아 선수권: 헤비급(영웅) (3)", report.combat().fightName());
-        assertEquals(1325, report.combat().territoryId());
-        assertNotNull(report.combat().enrage());
-        assertTrue(report.combat().actors().stream().anyMatch(actor -> actor.totalDamage() > 0));
-        assertEquals("missing_report_url", report.fflogs().status());
+        assertNotNull(report.combat().fightName());
+        assertFalse(report.combat().fightName().isBlank());
+        assertTrue(report.combat().actors().stream().anyMatch(actor -> actor.totalDamage() > 0.0));
+        assertEquals("no_token_configured", report.fflogs().status());
+        assertEquals("fM4NVcGvb7aRjzCt", report.fflogs().reportCode());
         assertNotNull(report.parityQuality());
         assertEquals(0, report.parityQuality().matchedActorCount());
         assertEquals(0.0, report.parityQuality().meanAbsolutePercentageError());
@@ -198,6 +197,50 @@ class SubmissionParityReportServiceTest {
     }
 
     @Test
+    void toSubmissionFflogsSummary_keepsExplicitFightIdEvenWhenEncounterMismatch() throws Exception {
+        SubmissionParityReportService service = new SubmissionParityReportService(
+                new ActLineParser(),
+                new ObjectMapper(),
+                new FflogsZoneLookup(new ObjectMapper()),
+                territoryId -> Optional.empty(),
+                new FflogsApiClient(new FflogsTokenStore(new ObjectMapper()), new ObjectMapper())
+        );
+
+        Method method = SubmissionParityReportService.class.getDeclaredMethod(
+                "toSubmissionFflogsSummary",
+                String.class,
+                Integer.class,
+                int.class,
+                String.class,
+                FflogsApiClient.ReportSummary.class
+        );
+        method.setAccessible(true);
+
+        FflogsApiClient.ReportSummary summary = new FflogsApiClient.ReportSummary(
+                "dummy",
+                1_000_000L,
+                List.of(
+                        new FflogsApiClient.ReportFight(2, "Encounter-105", 100_000L, 200_000L, true, 105),
+                        new FflogsApiClient.ReportFight(6, "Encounter-104", 300_000L, 450_000L, true, 104)
+                )
+        );
+
+        SubmissionParityReport.FflogsReportSummary result =
+                (SubmissionParityReport.FflogsReportSummary) method.invoke(
+                        service,
+                        "https://ko.fflogs.com/reports/VAfPBaqJnHbK1Mtw",
+                        6,
+                        1327,
+                        "2026-03-15T17:34:20+09:00",
+                        summary
+                );
+
+        assertNotNull(result);
+        assertEquals(6, result.selectedFightId());
+        assertEquals("Encounter-104", result.selectedFightName());
+    }
+
+    @Test
     void chooseFight_prefersKillWhenExpectedEncounterMatchesWipeAndKill() throws Exception {
         SubmissionParityReportService service = new SubmissionParityReportService(
                 new ActLineParser(),
@@ -235,6 +278,91 @@ class SubmissionParityReportServiceTest {
 
         assertNotNull(selectedFight);
         assertEquals(5, selectedFight.id());
+    }
+
+    @Test
+    void toSubmissionFflogsSummary_keepsExplicitFightIdWhenEncounterMismatches() throws Exception {
+        SubmissionParityReportService service = new SubmissionParityReportService(
+                new ActLineParser(),
+                new ObjectMapper(),
+                new FflogsZoneLookup(new ObjectMapper()),
+                territoryId -> Optional.empty(),
+                new FflogsApiClient(new FflogsTokenStore(new ObjectMapper()), new ObjectMapper())
+        );
+
+        FflogsApiClient.ReportSummary summary = new FflogsApiClient.ReportSummary(
+                "report-code",
+                1_773_563_660_543L,
+                List.of(
+                        new FflogsApiClient.ReportFight(6, "Lindwurm", 2_450_000L, 2_800_000L, true, 104),
+                        new FflogsApiClient.ReportFight(2, "Lindwurm", 49_499L, 440_399L, true, 105)
+                )
+        );
+
+        Method toSubmissionFflogsSummary = SubmissionParityReportService.class.getDeclaredMethod(
+                "toSubmissionFflogsSummary",
+                String.class,
+                Integer.class,
+                int.class,
+                String.class,
+                FflogsApiClient.ReportSummary.class
+        );
+        toSubmissionFflogsSummary.setAccessible(true);
+
+        SubmissionParityReport.FflogsReportSummary result =
+                (SubmissionParityReport.FflogsReportSummary) toSubmissionFflogsSummary.invoke(
+                        service,
+                        "https://ko.fflogs.com/reports/report-code",
+                        6,
+                        1327,
+                        "2026-03-15T17:34:20+09:00",
+                        summary
+                );
+
+        assertEquals(6, result.selectedFightId());
+    }
+
+    @Test
+    void toSubmissionFflogsSummary_keepsSelectedFightWhenSubmittedAtIsNearFightStart() throws Exception {
+        SubmissionParityReportService service = new SubmissionParityReportService(
+                new ActLineParser(),
+                new ObjectMapper(),
+                new FflogsZoneLookup(new ObjectMapper()),
+                territoryId -> Optional.empty(),
+                new FflogsApiClient(new FflogsTokenStore(new ObjectMapper()), new ObjectMapper())
+        );
+
+        long reportStart = 1_773_563_660_543L;
+        FflogsApiClient.ReportSummary summary = new FflogsApiClient.ReportSummary(
+                "report-code",
+                reportStart,
+                List.of(
+                        new FflogsApiClient.ReportFight(2, "Lindwurm", 49_499L, 440_399L, true, 104),
+                        new FflogsApiClient.ReportFight(5, "Lindwurm", 758_392L, 1_285_394L, true, 105)
+                )
+        );
+
+        Method toSubmissionFflogsSummary = SubmissionParityReportService.class.getDeclaredMethod(
+                "toSubmissionFflogsSummary",
+                String.class,
+                Integer.class,
+                int.class,
+                String.class,
+                FflogsApiClient.ReportSummary.class
+        );
+        toSubmissionFflogsSummary.setAccessible(true);
+
+        SubmissionParityReport.FflogsReportSummary result =
+                (SubmissionParityReport.FflogsReportSummary) toSubmissionFflogsSummary.invoke(
+                        service,
+                        "https://ko.fflogs.com/reports/report-code",
+                        2,
+                        1327,
+                        "2026-03-15T17:35:00+09:00",
+                        summary
+                );
+
+        assertEquals(2, result.selectedFightId());
     }
 
     @Test

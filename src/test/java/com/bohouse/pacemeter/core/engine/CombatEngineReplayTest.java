@@ -298,6 +298,34 @@ class CombatEngineReplayTest {
     }
 
     @Test
+    void actorSnapshot_exposesHitDeathAndMaxHitSkill() {
+        CombatEngine engine = new CombatEngine();
+        ActorId actorId = new ActorId(1);
+        ActorId targetId = new ActorId(100);
+
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, actorId, "Ninja"));
+        engine.process(new CombatEvent.DamageEvent(
+                1000, actorId, "Ninja", targetId, 0x8C0, 10_000,
+                DamageType.DIRECT, false, false));
+        engine.process(new CombatEvent.DamageEvent(
+                1500, actorId, "Ninja", targetId, 0x8CF, 12_500,
+                DamageType.DIRECT, false, false));
+        engine.process(new CombatEvent.ActorDeath(1600, actorId, "Ninja"));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(2000)).snapshot().orElseThrow();
+        ActorSnapshot actor = snapshot.actors().stream()
+                .filter(entry -> entry.actorId().equals(actorId))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(2, actor.hitCount());
+        assertEquals(1, actor.deathCount());
+        assertEquals(12_500L, actor.maxHitDamage());
+        assertEquals("aeolian edge", actor.maxHitSkillName());
+    }
+
+    @Test
     void externalDamageBuff_redistributesBonusToProvider() {
         CombatEngine engine = new CombatEngine();
         engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));

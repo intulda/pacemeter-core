@@ -131,6 +131,465 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugLindwurmFight8RainbowDripWindowBoundary_printsInclusion() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(8, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        assertTrue(replayWindow.isPresent());
+        Method shouldIncludeLine = openShouldIncludeLine();
+
+        Object window = replayWindow.orElseThrow();
+        Method fightStartMs = window.getClass().getDeclaredMethod("fightStartMs");
+        Method fightEndMs = window.getClass().getDeclaredMethod("fightEndMs");
+        Method startInclusiveMs = window.getClass().getDeclaredMethod("startInclusiveMs");
+        Method endInclusiveMs = window.getClass().getDeclaredMethod("endInclusiveMs");
+        fightStartMs.setAccessible(true);
+        fightEndMs.setAccessible(true);
+        startInclusiveMs.setAccessible(true);
+        endInclusiveMs.setAccessible(true);
+
+        long fightStart = (long) fightStartMs.invoke(window);
+        long fightEnd = (long) fightEndMs.invoke(window);
+        long startInclusive = (long) startInclusiveMs.invoke(window);
+        long endInclusive = (long) endInclusiveMs.invoke(window);
+
+        System.out.println("fightStart=" + Instant.ofEpochMilli(fightStart));
+        System.out.println("fightEnd=" + Instant.ofEpochMilli(fightEnd));
+        System.out.println("startInclusive=" + Instant.ofEpochMilli(startInclusive));
+        System.out.println("endInclusive=" + Instant.ofEpochMilli(endInclusive));
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz", "combat.log");
+        long rainbowCount = 0L;
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            if (!line.startsWith("21|") || !line.contains("|8780|")) {
+                continue;
+            }
+            rainbowCount++;
+            String[] parts = line.split("\\|", 4);
+            Instant ts = parseLineInstant(parts);
+            long tsMs = ts == null ? -1L : ts.toEpochMilli();
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            System.out.printf(
+                    "rainbow ts=%s included=%s relToFightEndMs=%d line=%s%n",
+                    ts,
+                    included,
+                    tsMs - fightEnd,
+                    line
+            );
+        }
+        assertTrue(rainbowCount > 0);
+    }
+
+    @Test
+    void debugLindwurmFight8RainbowDripFflogsEvents_printsHitList() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(8, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison pctComparison = report.comparisons().stream()
+                .filter(c -> "Pictomancer".equalsIgnoreCase(c.fflogsType()) && "이끼이끼".equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<FflogsApiClient.DamageEventEntry> events = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                pctComparison.fflogsActorId(),
+                0x8780
+        );
+
+        long total = events.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        System.out.println("fflogs8780 eventCount=" + events.size() + " total=" + total);
+        for (FflogsApiClient.DamageEventEntry event : events) {
+            System.out.printf(
+                    "fflogs8780 ts=%d source=%d target=%d ability=%04X amount=%d hitType=%s%n",
+                    event.timestamp(),
+                    event.sourceId(),
+                    event.targetId(),
+                    event.abilityGameId(),
+                    event.amount(),
+                    event.hitType()
+            );
+        }
+
+        assertTrue(!events.isEmpty());
+    }
+
+    @Test
+    void debugHeavy2Fight6Parity_withConfiguredFflogsCredentials_printsActorDelta() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+
+        System.out.println("FFLogs status: " + report.fflogs().status());
+        System.out.println("Report code: " + report.fflogs().reportCode());
+        System.out.println("Selected fight: " + report.fflogs().selectedFightName());
+        System.out.println("Selected fight id: " + report.fflogs().selectedFightId());
+        System.out.println("Replay parsedLines: " + report.replay().parsedLines());
+        System.out.println("Replay fightStarted: " + report.replay().fightStarted());
+        if (report.combat() != null) {
+            System.out.println("Combat actors: " + report.combat().actors().size());
+            System.out.println("Combat skillBreakdowns: " + report.combat().skillBreakdowns().size());
+        } else {
+            System.out.println("Combat actors: <null>");
+            System.out.println("Combat skillBreakdowns: <null>");
+        }
+        System.out.println("Comparisons: " + report.comparisons().size());
+        System.out.println("Unmatched local actors: " + report.unmatchedLocalActors().size());
+        System.out.println("Unmatched fflogs actors: " + report.unmatchedFflogsActors().size());
+        System.out.println("Parity quality: " + report.parityQuality());
+
+        report.comparisons().stream()
+                .sorted((left, right) -> Double.compare(
+                        Math.abs(right.rdpsDelta()),
+                        Math.abs(left.rdpsDelta())
+                ))
+                .limit(8)
+                .forEach(comparison -> {
+                    System.out.printf(
+                            "%s job=%s localDps=%.1f localDerived=%.1f localOnline=%.1f fflogs=%.1f delta=%.1f ratio=%.3f givenDelta=%.1f takenDelta=%.1f totalDelta=%.1f warnings=%s%n",
+                            comparison.localName(),
+                            comparison.fflogsType(),
+                            comparison.localDpsPerSecond(),
+                            comparison.localDerivedRdpsPerSecond(),
+                            comparison.localOnlineRdps(),
+                            comparison.fflogsRdpsPerSecond(),
+                            comparison.rdpsDelta(),
+                            comparison.rdpsDeltaRatio(),
+                            comparison.grantedDeltaPerSecond(),
+                            comparison.receivedDeltaPerSecond(),
+                            comparison.totalDamageDelta(),
+                            comparison.warningReasons()
+                    );
+                    System.out.println("  localTopSkills=" + comparison.localTopSkills());
+                    System.out.println("  fflogsTopSkills=" + comparison.fflogsTopSkills());
+                });
+    }
+
+    @Test
+    void debugHeavy2Fight6UnknownSourceDotDiagnostics_printsWindowCounts() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertNotNull(report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+        Object window = replayWindow.orElseThrow();
+        Method fightStartMs = window.getClass().getDeclaredMethod("fightStartMs");
+        Method fightEndMs = window.getClass().getDeclaredMethod("fightEndMs");
+        fightStartMs.setAccessible(true);
+        fightEndMs.setAccessible(true);
+        long windowFightStartMs = (long) fightStartMs.invoke(window);
+        long windowFightEndMs = (long) fightEndMs.invoke(window);
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {
+                },
+                (fightName, territoryId) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ActIngestionService ingestion = new ActIngestionService(
+                combatService,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        long totalDot = 0L;
+        long totalDotUnknownSource = 0L;
+        long acceptedDotUnknownSource = 0L;
+        long totalWhmDot = 0L;
+        long acceptedWhmDot = 0L;
+        long totalWhmDiaApplicationsInFile = 0L;
+        long includedWhmDiaApplications = 0L;
+        long totalWhmDiaDotInFile = 0L;
+        long includedWhmDiaDot = 0L;
+        long whmDiaDotBeforeWindow = 0L;
+        long whmDiaDotAfterWindow = 0L;
+        Map<String, Long> rejectedWhmDotByTarget = new HashMap<>();
+        List<String> rejectedWhmDotSamples = new ArrayList<>();
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            String[] parts = line.split("\\|", -1);
+            if (parts.length > 6 && "21".equals(parts[0]) && "102884E5".equalsIgnoreCase(parts[2]) && "4094".equalsIgnoreCase(parts[4])) {
+                totalWhmDiaApplicationsInFile++;
+            }
+            if (parts.length > 18 && "24".equals(parts[0]) && "DoT".equals(parts[4]) && "102884E5".equalsIgnoreCase(parts[17])) {
+                totalWhmDiaDotInFile++;
+                try {
+                    long ts = Instant.parse(parts[1]).toEpochMilli();
+                    if (ts < windowFightStartMs) {
+                        whmDiaDotBeforeWindow++;
+                    } else if (ts > windowFightEndMs) {
+                        whmDiaDotAfterWindow++;
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            if (parts.length > 6 && "21".equals(parts[0]) && "102884E5".equalsIgnoreCase(parts[2]) && "4094".equalsIgnoreCase(parts[4])) {
+                includedWhmDiaApplications++;
+            }
+            if (parts.length > 18 && "24".equals(parts[0]) && "DoT".equals(parts[4]) && "102884E5".equalsIgnoreCase(parts[17])) {
+                includedWhmDiaDot++;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (!(parsed instanceof DotTickRaw dot) || !dot.isDot() || dot.damage() <= 0) {
+                if (parsed != null) {
+                    ingestion.onParsed(parsed);
+                }
+                continue;
+            }
+
+            totalDot++;
+            boolean accepted = ingestion.wouldEmitDotDamage(dot);
+            if (dot.sourceId() == 0L || dot.sourceId() == 0xE0000000L) {
+                totalDotUnknownSource++;
+                if (accepted) {
+                    acceptedDotUnknownSource++;
+                }
+            }
+            if (dot.sourceName().equals("백미도사") || dot.sourceId() == 0x102884E5L) {
+                totalWhmDot++;
+                if (accepted) {
+                    acceptedWhmDot++;
+                } else {
+                    rejectedWhmDotByTarget.merge(dot.targetName(), 1L, Long::sum);
+                    if (rejectedWhmDotSamples.size() < 10) {
+                        rejectedWhmDotSamples.add(String.format(
+                                "ts=%s target=%s(%s) status=%s source=%s(%s) damage=%d",
+                                dot.ts(),
+                                dot.targetName(),
+                                Long.toHexString(dot.targetId()).toUpperCase(),
+                                Integer.toHexString(dot.statusId()).toUpperCase(),
+                                dot.sourceName(),
+                                Long.toHexString(dot.sourceId()).toUpperCase(),
+                                dot.damage()
+                        ));
+                    }
+                }
+            }
+
+            ingestion.onParsed(dot);
+        }
+
+        System.out.printf(
+                "fight6Dot total=%d unknownSource=%d unknownSourceAccepted=%d whmDot=%d whmDotAccepted=%d%n",
+                totalDot,
+                totalDotUnknownSource,
+                acceptedDotUnknownSource,
+                totalWhmDot,
+                acceptedWhmDot
+        );
+        System.out.printf(
+                "fight6WhmDia file21=%d included21=%d file24=%d included24=%d%n",
+                totalWhmDiaApplicationsInFile,
+                includedWhmDiaApplications,
+                totalWhmDiaDotInFile,
+                includedWhmDiaDot
+        );
+        System.out.printf(
+                "fight6WhmDiaWindow windowStart=%s windowEnd=%s dotBefore=%d dotAfter=%d%n",
+                Instant.ofEpochMilli(windowFightStartMs),
+                Instant.ofEpochMilli(windowFightEndMs),
+                whmDiaDotBeforeWindow,
+                whmDiaDotAfterWindow
+        );
+        System.out.println("fight6WhmRejectedTargets=" + rejectedWhmDotByTarget);
+        System.out.println("fight6WhmRejectedSamples=" + rejectedWhmDotSamples);
+    }
+
+    @Test
+    void debugHeavy2Fight6FflogsAbilityEventParity_printsWhmSchHitCounts() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertNotNull(report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison whm = report.comparisons().stream()
+                .filter(c -> "WhiteMage".equalsIgnoreCase(c.fflogsType()))
+                .findFirst()
+                .orElseThrow();
+        SubmissionParityReport.ActorParityComparison sch = report.comparisons().stream()
+                .filter(c -> "Scholar".equalsIgnoreCase(c.fflogsType()) && "젤리".equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<FflogsApiClient.DamageEventEntry> whmDiaEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                whm.fflogsActorId(),
+                0x4094
+        );
+        List<FflogsApiClient.DamageEventEntry> whmDiaStatus777Events = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                whm.fflogsActorId(),
+                0x0777
+        );
+        List<FflogsApiClient.DamageEventEntry> whmDiaDotEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                whm.fflogsActorId(),
+                0x074F
+        );
+        List<FflogsApiClient.DamageEventEntry> schBioEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                sch.fflogsActorId(),
+                0x409C
+        );
+        List<FflogsApiClient.DamageEventEntry> schBioDotEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                sch.fflogsActorId(),
+                0x0767
+        );
+        List<FflogsApiClient.DamageEventEntry> schBanefulEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                sch.fflogsActorId(),
+                0x9094
+        );
+        List<FflogsApiClient.DamageEventEntry> schBanefulDotEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                sch.fflogsActorId(),
+                0x0F2B
+        );
+
+        long whmDiaTotal = whmDiaEvents.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        long whmDiaStatus777Total = whmDiaStatus777Events.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        long whmDiaDotTotal = whmDiaDotEvents.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        long schBioTotal = schBioEvents.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        long schBioDotTotal = schBioDotEvents.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        long schBanefulTotal = schBanefulEvents.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        long schBanefulDotTotal = schBanefulDotEvents.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+
+        System.out.printf(
+                "fight6FFLogsEvents WHM4094 count=%d total=%d | WHM0777 count=%d total=%d | WHM074F count=%d total=%d | SCH409C count=%d total=%d | SCH0767 count=%d total=%d | SCH9094 count=%d total=%d | SCH0F2B count=%d total=%d%n",
+                whmDiaEvents.size(), whmDiaTotal,
+                whmDiaStatus777Events.size(), whmDiaStatus777Total,
+                whmDiaDotEvents.size(), whmDiaDotTotal,
+                schBioEvents.size(), schBioTotal,
+                schBioDotEvents.size(), schBioDotTotal,
+                schBanefulEvents.size(), schBanefulTotal,
+                schBanefulDotEvents.size(), schBanefulDotTotal
+        );
+
+        // 로컬 skill breakdown(이미 selected fight window replay 결과)
+        report.comparisons().stream()
+                .filter(c -> c.localName().equals("백미도사") || c.localName().equals("젤리"))
+                .forEach(c -> System.out.println(
+                        "fight6LocalTopSkills " + c.localName() + " -> " + c.localTopSkills()
+                ));
+    }
+
+    @Test
+    void debugHeavy2Fight6FflogsAbilityGuids_printsWhmSchTopAbilities() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertNotNull(report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison whm = report.comparisons().stream()
+                .filter(c -> "WhiteMage".equalsIgnoreCase(c.fflogsType()))
+                .findFirst()
+                .orElseThrow();
+        SubmissionParityReport.ActorParityComparison sch = report.comparisons().stream()
+                .filter(c -> "Scholar".equalsIgnoreCase(c.fflogsType()) && "젤리".equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<FflogsApiClient.AbilityDamageEntry> whmAbilities = apiClient.fetchDamageDoneAbilities(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                whm.fflogsActorId()
+        );
+        List<FflogsApiClient.AbilityDamageEntry> schAbilities = apiClient.fetchDamageDoneAbilities(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                sch.fflogsActorId()
+        );
+
+        System.out.println("fight6WHMAbilities:");
+        whmAbilities.stream()
+                .sorted((a, b) -> Double.compare(b.total(), a.total()))
+                .limit(20)
+                .forEach(entry -> System.out.printf(
+                        "  name=%s guid=%s total=%.0f type=%s%n",
+                        entry.name(),
+                        entry.guid(),
+                        entry.total(),
+                        entry.type()
+                ));
+
+        System.out.println("fight6SCHAbilities:");
+        schAbilities.stream()
+                .sorted((a, b) -> Double.compare(b.total(), a.total()))
+                .limit(20)
+                .forEach(entry -> System.out.printf(
+                        "  name=%s guid=%s total=%.0f type=%s%n",
+                        entry.name(),
+                        entry.guid(),
+                        entry.total(),
+                        entry.type()
+                ));
+    }
+
+    @Test
+    void debugHeavy2Fight6FflogsFightsAndDiaTotals_printsAbsoluteWindows() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+
+        SubmissionParityReport.ActorParityComparison whm = report.comparisons().stream()
+                .filter(c -> "WhiteMage".equalsIgnoreCase(c.fflogsType()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        System.out.println("reportStart=" + Instant.ofEpochMilli(report.fflogs().reportStartTime()));
+        for (SubmissionParityReport.FflogsFightSummary fight : report.fflogs().fights()) {
+            long absStart = report.fflogs().reportStartTime() + fight.startTime();
+            long absEnd = report.fflogs().reportStartTime() + fight.endTime();
+            List<FflogsApiClient.AbilityDamageEntry> abilities = apiClient.fetchDamageDoneAbilities(
+                    report.fflogs().reportCode(),
+                    fight.id(),
+                    whm.fflogsActorId()
+            );
+            double diaTotal = abilities.stream()
+                    .filter(a -> "Dia".equalsIgnoreCase(a.name()) || Integer.valueOf(0x4094).equals(a.guid()))
+                    .mapToDouble(FflogsApiClient.AbilityDamageEntry::total)
+                    .sum();
+            System.out.printf(
+                    "fight id=%d name=%s encounter=%d kill=%s absStart=%s absEnd=%s diaTotal=%.0f%n",
+                    fight.id(),
+                    fight.name(),
+                    fight.encounterId(),
+                    fight.kill(),
+                    Instant.ofEpochMilli(absStart),
+                    Instant.ofEpochMilli(absEnd),
+                    diaTotal
+            );
+        }
+    }
+
+    @Test
     void debugParityQualityRollup_withConfiguredFflogsCredentials_printsGateAndWorstActors() throws Exception {
         SubmissionParityReportService reportService = buildConfiguredHeavy4Service();
         SubmissionParityQualityService qualityService = new SubmissionParityQualityService(reportService);
@@ -896,6 +1355,478 @@ class SubmissionParityReportDiagnostics {
         }
     }
 
+    @Test
+    void debugHeavy2Fight6WorstActorLineTypeEvidence_printsUnknownSkillCorrelations() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        Set<String> targetJobs = Set.of("Samurai", "Scholar", "WhiteMage", "Pictomancer");
+        List<String> targetActors = report.comparisons().stream()
+                .filter(c -> targetJobs.contains(c.fflogsType()))
+                .sorted((a, b) -> Double.compare(Math.abs(b.rdpsDeltaRatio()), Math.abs(a.rdpsDeltaRatio())))
+                .limit(4)
+                .map(SubmissionParityReport.ActorParityComparison::localName)
+                .toList();
+        assertTrue(!targetActors.isEmpty());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActLineParser parser = new ActLineParser();
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {
+                },
+                (fightName, territoryId) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ActIngestionService ingestion = new ActIngestionService(
+                combatService,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Map<Long, String> actorNamesById = new HashMap<>();
+        for (CombatDebugSnapshot.ActorDebugEntry actor : report.combat().actors()) {
+            actorNamesById.put(actor.actorId().value(), actor.name());
+        }
+
+        List<ParsedReplayLine> includedLines = new ArrayList<>();
+        List<UnknownEvent> unknownEvents = new ArrayList<>();
+        Map<String, Map<String, Long>> actorSourceTypeCounts = new HashMap<>();
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+
+        int includedIndex = 0;
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+
+            ParsedLine parsed = parser.parse(line);
+            String[] parts = line.split("\\|", -1);
+            String type = parts.length > 0 ? parts[0] : "";
+            Instant ts = parseLineInstant(parts);
+            includedLines.add(new ParsedReplayLine(includedIndex, ts, type, line, parsed));
+
+            long sourceId = extractSourceId(type, parts);
+            if (sourceId != 0L) {
+                String actorName = actorNamesById.get(sourceId);
+                if (actorName != null && targetActors.contains(actorName)) {
+                    actorSourceTypeCounts.computeIfAbsent(actorName, ignored -> new HashMap<>())
+                            .merge(type, 1L, Long::sum);
+                }
+            }
+
+            if (parsed instanceof NetworkAbilityRaw ability
+                    && ability.damage() > 0
+                    && ingestion.wouldEmitDamage(ability)) {
+                String actorName = actorNamesById.getOrDefault(ability.actorId(), ability.actorName());
+                if (targetActors.contains(actorName)) {
+                    String resolved = skillKey(ability.skillName(), ability.skillId());
+                    if (isUnknownSkillName(resolved)) {
+                        unknownEvents.add(new UnknownEvent(actorName, resolved, ability.damage(), includedIndex));
+                    }
+                }
+            } else if (parsed instanceof DotTickRaw dot
+                    && dot.damage() > 0
+                    && dot.isDot()
+                    && ingestion.wouldEmitDotDamage(dot)) {
+                String actorName = actorNamesById.getOrDefault(dot.sourceId(), dot.sourceName());
+                if (targetActors.contains(actorName)) {
+                    String resolved = "DoT#" + Integer.toHexString(ingestion.resolveDotActionId(dot)).toUpperCase();
+                    if (isUnknownSkillName(resolved)) {
+                        unknownEvents.add(new UnknownEvent(actorName, resolved, dot.damage(), includedIndex));
+                    }
+                }
+            }
+
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+            includedIndex++;
+        }
+
+        Map<String, List<UnknownEvent>> unknownByActor = new HashMap<>();
+        for (UnknownEvent event : unknownEvents) {
+            unknownByActor.computeIfAbsent(event.actorName(), ignored -> new ArrayList<>()).add(event);
+        }
+
+        List<String> interestingTypes = List.of("20", "37", "38", "39", "261", "264", "270");
+        System.out.println("heavy2.targetActors=" + targetActors);
+        for (String actorName : targetActors) {
+            List<UnknownEvent> actorUnknownEvents = unknownByActor.getOrDefault(actorName, List.of());
+            Map<String, Long> nearbyTypeCounts = new HashMap<>();
+            for (UnknownEvent event : actorUnknownEvents) {
+                for (int offset = -6; offset <= 6; offset++) {
+                    if (offset == 0) {
+                        continue;
+                    }
+                    int neighborIndex = event.lineIndex() + offset;
+                    if (neighborIndex < 0 || neighborIndex >= includedLines.size()) {
+                        continue;
+                    }
+                    ParsedReplayLine neighbor = includedLines.get(neighborIndex);
+                    if (!interestingTypes.contains(neighbor.type())) {
+                        continue;
+                    }
+                    nearbyTypeCounts.merge(neighbor.type(), 1L, Long::sum);
+                }
+            }
+
+            long unknownDamage = actorUnknownEvents.stream().mapToLong(UnknownEvent::damage).sum();
+            System.out.printf(
+                    "heavy2.actor=%s sourceTypes=%s unknownEvents=%d unknownDamage=%d unknownNearbyTypes=%s%n",
+                    actorName,
+                    actorSourceTypeCounts.getOrDefault(actorName, Map.of()),
+                    actorUnknownEvents.size(),
+                    unknownDamage,
+                    nearbyTypeCounts
+            );
+        }
+    }
+
+    @Test
+    void debugHeavy2Fight6PctUnknownEvents_printsRawToFflogsCandidates() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison pct = report.comparisons().stream()
+                .filter(c -> "Pictomancer".equalsIgnoreCase(c.fflogsType()) && "바나바나".equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActLineParser parser = new ActLineParser();
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {
+                },
+                (fightName, territoryId) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ActIngestionService ingestion = new ActIngestionService(
+                combatService,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Map<Long, String> actorNamesById = new HashMap<>();
+        for (CombatDebugSnapshot.ActorDebugEntry actor : report.combat().actors()) {
+            actorNamesById.put(actor.actorId().value(), actor.name());
+        }
+
+        List<ParsedReplayLine> includedLines = new ArrayList<>();
+        List<UnknownEvent> pctUnknownEvents = new ArrayList<>();
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        int includedIndex = 0;
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            String[] parts = line.split("\\|", -1);
+            String type = parts.length > 0 ? parts[0] : "";
+            Instant ts = parseLineInstant(parts);
+            includedLines.add(new ParsedReplayLine(includedIndex, ts, type, line, parsed));
+
+            if (parsed instanceof NetworkAbilityRaw ability
+                    && ability.damage() > 0
+                    && ingestion.wouldEmitDamage(ability)) {
+                String actorName = actorNamesById.getOrDefault(ability.actorId(), ability.actorName());
+                if ("바나바나".equals(actorName)) {
+                    String skill = skillKey(ability.skillName(), ability.skillId());
+                    if (isUnknownSkillName(skill)) {
+                        pctUnknownEvents.add(new UnknownEvent(actorName, skill, ability.damage(), includedIndex));
+                    }
+                }
+            } else if (parsed instanceof DotTickRaw dot
+                    && dot.damage() > 0
+                    && dot.isDot()
+                    && ingestion.wouldEmitDotDamage(dot)) {
+                String actorName = actorNamesById.getOrDefault(dot.sourceId(), dot.sourceName());
+                if ("바나바나".equals(actorName)) {
+                    String skill = "DoT#" + Integer.toHexString(ingestion.resolveDotActionId(dot)).toUpperCase();
+                    if (isUnknownSkillName(skill)) {
+                        pctUnknownEvents.add(new UnknownEvent(actorName, skill, dot.damage(), includedIndex));
+                    }
+                }
+            }
+
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+            includedIndex++;
+        }
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<FflogsApiClient.AbilityDamageEntry> fflogsAbilities = apiClient.fetchDamageDoneAbilities(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                pct.fflogsActorId()
+        );
+
+        System.out.println("heavy2.pctUnknownEventCount=" + pctUnknownEvents.size());
+        System.out.println("heavy2.pctLocalTopSkills=" + pct.localTopSkills());
+        System.out.println("heavy2.pctFflogsTopSkills=" + pct.fflogsTopSkills());
+        System.out.println("heavy2.pctFflogsAbilitiesTop20="
+                + fflogsAbilities.stream()
+                .sorted((a, b) -> Double.compare(b.total(), a.total()))
+                .limit(20)
+                .map(a -> a.name() + "(" + formatGuid(a.guid()) + "):" + Math.round(a.total()))
+                .toList());
+
+        for (UnknownEvent event : pctUnknownEvents) {
+            ParsedReplayLine raw = includedLines.get(event.lineIndex());
+            List<String> neighbors = new ArrayList<>();
+            for (int offset = -4; offset <= 4; offset++) {
+                if (offset == 0) {
+                    continue;
+                }
+                int idx = event.lineIndex() + offset;
+                if (idx < 0 || idx >= includedLines.size()) {
+                    continue;
+                }
+                ParsedReplayLine neighbor = includedLines.get(idx);
+                if (List.of("20", "37", "38", "39", "261", "264", "270").contains(neighbor.type())) {
+                    neighbors.add("type=" + neighbor.type() + " ts=" + neighbor.timestamp());
+                }
+            }
+            Integer localSkillId = extractLocalSkillId(event.skillName());
+            List<String> matchedFflogsByGuid = localSkillId == null
+                    ? List.of()
+                    : fflogsAbilities.stream()
+                    .filter(a -> a.guid() != null && a.guid().equals(localSkillId))
+                    .map(a -> a.name() + "(" + formatGuid(a.guid()) + "):" + Math.round(a.total()))
+                    .toList();
+
+            System.out.printf(
+                    "heavy2.pctUnknown skill=%s damage=%d lineType=%s ts=%s localSkillId=%s matchedFflogsByGuid=%s%n",
+                    event.skillName(),
+                    event.damage(),
+                    raw.type(),
+                    raw.timestamp(),
+                    localSkillId == null ? "null" : formatGuid(localSkillId),
+                    matchedFflogsByGuid
+            );
+            System.out.println("  raw=" + raw.rawLine());
+            System.out.println("  nearbyInterestingTypes=" + neighbors);
+        }
+
+        assertTrue(!pctUnknownEvents.isEmpty());
+    }
+
+    @Test
+    void debugHeavy2Fight6WorstActorGuidSkillDelta_printsActionLevelMismatch() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        Set<String> targetJobs = Set.of("Samurai", "Scholar", "WhiteMage", "Pictomancer");
+        List<SubmissionParityReport.ActorParityComparison> targets = report.comparisons().stream()
+                .filter(c -> targetJobs.contains(c.fflogsType()))
+                .sorted((a, b) -> Double.compare(Math.abs(b.rdpsDeltaRatio()), Math.abs(a.rdpsDeltaRatio())))
+                .limit(4)
+                .toList();
+        assertTrue(!targets.isEmpty());
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        Map<String, CombatDebugSnapshot.ActorDebugEntry> combatByName = new HashMap<>();
+        for (CombatDebugSnapshot.ActorDebugEntry actor : report.combat().actors()) {
+            combatByName.put(actor.name(), actor);
+        }
+        Map<ActorId, List<CombatDebugSnapshot.SkillDebugEntry>> skillsByActorId = new HashMap<>();
+        for (CombatDebugSnapshot.ActorSkillBreakdown breakdown : report.combat().skillBreakdowns()) {
+            skillsByActorId.put(breakdown.actorId(), breakdown.skills());
+        }
+
+        for (SubmissionParityReport.ActorParityComparison actor : targets) {
+            List<FflogsApiClient.AbilityDamageEntry> abilities = apiClient.fetchDamageDoneAbilities(
+                    report.fflogs().reportCode(),
+                    report.fflogs().selectedFightId(),
+                    actor.fflogsActorId()
+            );
+
+            Map<Integer, FflogsApiClient.AbilityDamageEntry> fflogsByGuid = new HashMap<>();
+            for (FflogsApiClient.AbilityDamageEntry ability : abilities) {
+                if (ability.guid() != null) {
+                    fflogsByGuid.put(ability.guid(), ability);
+                }
+            }
+
+            CombatDebugSnapshot.ActorDebugEntry combatActor = combatByName.get(actor.localName());
+            List<CombatDebugSnapshot.SkillDebugEntry> fullLocalSkills = combatActor == null
+                    ? List.of()
+                    : skillsByActorId.getOrDefault(combatActor.actorId(), List.of());
+
+            System.out.printf(
+                    "heavy2.guidDelta actor=%s job=%s rdpsDelta=%.1f ratio=%.3f%n",
+                    actor.localName(),
+                    actor.fflogsType(),
+                    actor.rdpsDelta(),
+                    actor.rdpsDeltaRatio()
+            );
+
+            Map<Integer, Long> localByGuid = new HashMap<>();
+            for (CombatDebugSnapshot.SkillDebugEntry localSkill : fullLocalSkills) {
+                Integer localSkillId = extractLocalSkillId(localSkill.skillName());
+                if (localSkillId == null || localSkillId <= 0) {
+                    continue;
+                }
+                localByGuid.merge(localSkillId, localSkill.totalDamage(), Long::sum);
+            }
+
+            localByGuid.entrySet().stream()
+                    .sorted((a, b) -> Long.compare(b.getValue(), a.getValue()))
+                    .forEach(entry -> {
+                Integer localSkillId = entry.getKey();
+                long localTotal = entry.getValue();
+                FflogsApiClient.AbilityDamageEntry matched = fflogsByGuid.get(localSkillId);
+                long fflogsTotal = matched == null ? 0L : Math.round(matched.total());
+                long delta = localTotal - fflogsTotal;
+                System.out.printf(
+                        "  guid=%s local=%d fflogs=%d delta=%d%n",
+                        formatGuid(localSkillId),
+                        localTotal,
+                        fflogsTotal,
+                        delta
+                );
+            });
+
+            Set<Integer> localIds = localByGuid.keySet();
+            List<String> missingHigh = abilities.stream()
+                    .filter(a -> a.guid() != null && !localIds.contains(a.guid()))
+                    .sorted((a, b) -> Double.compare(b.total(), a.total()))
+                    .limit(10)
+                    .map(a -> a.name() + "(" + formatGuid(a.guid()) + "):" + Math.round(a.total()))
+                    .toList();
+            System.out.println("  fflogsMissingInLocalTop=" + missingHigh);
+        }
+    }
+
+    @Test
+    void debugHeavy2Fight6GuidParityFromIngestion_printsEmitVsFflogsTotals() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> capturedDamageEvents = new ArrayList<>();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        if (event instanceof com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent damageEvent) {
+                            capturedDamageEvents.add(damageEvent);
+                        }
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Integer> targetGuidByActor = Map.of(
+                "재탄", 0x1D41,
+                "젤리", 0x409C,
+                "백미도사", 0x4094,
+                "바나바나", 0x8780
+        );
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        for (Map.Entry<String, Integer> entry : targetGuidByActor.entrySet()) {
+            String actorName = entry.getKey();
+            int guid = entry.getValue();
+
+            long localTotal = capturedDamageEvents.stream()
+                    .filter(e -> actorName.equals(e.sourceName()) && e.actionId() == guid)
+                    .mapToLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::amount)
+                    .sum();
+            long localHits = capturedDamageEvents.stream()
+                    .filter(e -> actorName.equals(e.sourceName()) && e.actionId() == guid)
+                    .count();
+
+            SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                    .filter(c -> actorName.equals(c.localName()))
+                    .findFirst()
+                    .orElse(null);
+            assertNotNull(comparison);
+            List<FflogsApiClient.AbilityDamageEntry> fflogsAbilities = apiClient.fetchDamageDoneAbilities(
+                    report.fflogs().reportCode(),
+                    report.fflogs().selectedFightId(),
+                    comparison.fflogsActorId()
+            );
+            long fflogsAbilityTotal = fflogsAbilities.stream()
+                    .filter(a -> a.guid() != null && a.guid() == guid)
+                    .mapToLong(a -> Math.round(a.total()))
+                    .sum();
+            List<FflogsApiClient.DamageEventEntry> fflogsEvents = apiClient.fetchDamageDoneEventsByAbility(
+                    report.fflogs().reportCode(),
+                    report.fflogs().selectedFightId(),
+                    comparison.fflogsActorId(),
+                    guid
+            );
+            long fflogsTotal = fflogsEvents.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+
+            System.out.printf(
+                    "heavy2.emitVsFflogs actor=%s guid=%s localTotal=%d localHits=%d fflogsEventTotal=%d fflogsEventHits=%d fflogsAbilityTotal=%d deltaVsAbility=%d%n",
+                    actorName,
+                    formatGuid(guid),
+                    localTotal,
+                    localHits,
+                    fflogsTotal,
+                    fflogsEvents.size(),
+                    fflogsAbilityTotal,
+                    localTotal - fflogsAbilityTotal
+            );
+        }
+    }
+
     private static String envOrProperty(String envKey, String propertyKey) {
         String envValue = System.getenv(envKey);
         if (envValue != null && !envValue.isBlank()) {
@@ -1056,6 +1987,23 @@ class SubmissionParityReportDiagnostics {
 
     private static String formatGuid(Integer guid) {
         return guid == null ? "null" : Integer.toHexString(guid).toUpperCase();
+    }
+
+    private static long extractSourceId(String type, String[] parts) {
+        try {
+            if (("21".equals(type) || "22".equals(type)) && parts.length > 2) {
+                return Long.parseUnsignedLong(parts[2], 16);
+            }
+            if ("24".equals(type) && parts.length > 17) {
+                return Long.parseUnsignedLong(parts[17], 16);
+            }
+            if (("26".equals(type) || "30".equals(type)) && parts.length > 5) {
+                return Long.parseUnsignedLong(parts[5], 16);
+            }
+        } catch (Exception ignored) {
+            return 0L;
+        }
+        return 0L;
     }
 
     private static String skillKey(String skillName, int skillId) {

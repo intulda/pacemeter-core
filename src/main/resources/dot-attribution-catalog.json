@@ -1,0 +1,135 @@
+[
+  {
+    "job_id": 19,
+    "application_action_ids": [
+      23
+    ],
+    "status_ids": [
+      248
+    ],
+    "status_to_action": [
+      {
+        "status_id": 248,
+        "action_id": 23
+      }
+    ]
+  },
+  {
+    "job_id": 22,
+    "application_action_ids": [
+      25772
+    ],
+    "status_ids": [
+      2719
+    ],
+    "status_to_action": [
+      {
+        "status_id": 2719,
+        "action_id": 25772
+      }
+    ]
+  },
+  {
+    "job_id": 24,
+    "application_action_ids": [
+      16532
+    ],
+    "status_ids": [
+      1871
+    ],
+    "status_to_action": [
+      {
+        "status_id": 1871,
+        "action_id": 16532
+      }
+    ]
+  },
+  {
+    "job_id": 28,
+    "application_action_ids": [
+      16540,
+      37012
+    ],
+    "status_ids": [
+      1895,
+      3883
+    ],
+    "status_to_action": [
+      {
+        "status_id": 1895,
+        "action_id": 16540
+      },
+      {
+        "status_id": 3883,
+        "action_id": 37012
+      }
+    ]
+  },
+  {
+    "job_id": 30,
+    "application_action_ids": [
+      4243
+    ],
+    "status_ids": [
+      2479
+    ],
+    "status_to_action": [
+      {
+        "status_id": 2479,
+        "action_id": 4243
+      }
+    ]
+  },
+  {
+    "job_id": 33,
+    "application_action_ids": [
+      16554
+    ],
+    "status_ids": [
+      1881
+    ],
+    "status_to_action": [
+      {
+        "status_id": 1881,
+        "action_id": 16554
+      }
+    ]
+  },
+  {
+    "job_id": 34,
+    "application_action_ids": [
+      7489
+    ],
+    "status_ids": [
+      1228
+    ],
+    "status_to_action": [
+      {
+        "status_id": 1228,
+        "action_id": 7489
+      }
+    ]
+  },
+  {
+    "job_id": 37,
+    "application_action_ids": [],
+    "status_ids": [],
+    "status_to_action": []
+  },
+  {
+    "job_id": 40,
+    "application_action_ids": [
+      24314,
+      24312
+    ],
+    "status_ids": [
+      2616
+    ],
+    "status_to_action": [
+      {
+        "status_id": 2616,
+        "action_id": 24314
+      }
+    ]
+  }
+]

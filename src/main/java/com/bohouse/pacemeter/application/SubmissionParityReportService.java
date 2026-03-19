@@ -8,9 +8,11 @@ import com.bohouse.pacemeter.adapter.inbound.actws.ParsedLine;
 import com.bohouse.pacemeter.adapter.inbound.actws.ZoneChanged;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsApiClient;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
+import com.bohouse.pacemeter.application.port.inbound.CombatEventPort;
 import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider;
 import com.bohouse.pacemeter.core.engine.CombatEngine;
 import com.bohouse.pacemeter.core.event.CombatEvent;
+import com.bohouse.pacemeter.core.model.ActionNameLibrary;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
@@ -26,9 +28,11 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -45,6 +49,11 @@ public class SubmissionParityReportService {
     private static final double SEVERE_PARITY_GAP_RATIO = 0.50;
     private static final double MODERATE_PARITY_GAP_RATIO = 0.30;
     private static final int UNKNOWN_SKILL_WARNING_COUNT = 3;
+    private static final long SUBMITTED_AT_FIGHT_START_NEAR_WINDOW_MS = 15 * 60 * 1000L;
+    // 일부 스킬은 21 damage candidate가 실제 확정 hit보다 많다. (37 sequence result로 확정 여부 판별)
+    private static final Set<Integer> RESULT_CONFIRMED_SKILL_IDS = Set.of(
+            0x8780 // PCT Rainbow Drip
+    );
     private static final Map<Integer, Integer> TERRITORY_ENCOUNTER_ID_OVERRIDES = Map.of(
             1327, 105
     );
@@ -305,6 +314,20 @@ public class SubmissionParityReportService {
                     summary.startTime(),
                     submittedAt
             );
+        } else if (selectedFightId == null
+                && expectedEncounterId != null
+                && selectedFight.encounterId() != expectedEncounterId) {
+            Long submittedAtMs = parseSubmittedAtMs(submittedAt);
+            if (submittedAtMs == null || !isNearSubmittedAt(summary.startTime(), selectedFight, submittedAtMs)) {
+                selectedFight = chooseFight(
+                        summary.fights(),
+                        reportUrl,
+                        null,
+                        expectedEncounterId,
+                        summary.startTime(),
+                        submittedAt
+                );
+            }
         }
 
         List<SubmissionParityReport.FflogsFightSummary> fights = summary.fights().stream()
@@ -445,6 +468,11 @@ public class SubmissionParityReportService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private boolean isNearSubmittedAt(long reportStartTime, FflogsApiClient.ReportFight fight, long submittedAtMs) {
+        long fightStartAbsMs = reportStartTime + fight.startTime();
+        return Math.abs(fightStartAbsMs - submittedAtMs) <= SUBMITTED_AT_FIGHT_START_NEAR_WINDOW_MS;
     }
 
     private FflogsApiClient.ReportFight chooseNearestFightToSubmittedAt(
@@ -975,6 +1003,7 @@ public class SubmissionParityReportService {
             Map<String, String> aliasToOriginal
     ) throws IOException {
         CombatEngine engine = new CombatEngine();
+        Map<Long, SkillAccumulator> skillAccumulators = new HashMap<>();
         CombatService combatService = new CombatService(
                 engine,
                 snapshot -> {
@@ -982,8 +1011,27 @@ public class SubmissionParityReportService {
                 (fightName, actTerritoryId) -> Optional.empty(),
                 this.enrageTimeProvider
         );
+        CombatEventPort forwardingPort = new CombatEventPort() {
+            @Override
+            public com.bohouse.pacemeter.core.engine.EngineResult onEvent(CombatEvent event) {
+                if (event instanceof CombatEvent.DamageEvent damageEvent) {
+                    accumulateEmittedSkillDamage(damageEvent, skillAccumulators);
+                }
+                return combatService.onEvent(event);
+            }
+
+            @Override
+            public void setCurrentPlayerId(com.bohouse.pacemeter.core.model.ActorId playerId) {
+                combatService.setCurrentPlayerId(playerId);
+            }
+
+            @Override
+            public void setJobId(com.bohouse.pacemeter.core.model.ActorId actorId, int jobId) {
+                combatService.setJobId(actorId, jobId);
+            }
+        };
         ActIngestionService ingestion = new ActIngestionService(
-                combatService,
+                forwardingPort,
                 combatService,
                 fflogsZoneLookup
         );
@@ -996,8 +1044,8 @@ public class SubmissionParityReportService {
 
         long totalLines = 0L;
         long parsedLines = 0L;
-        Map<Long, SkillAccumulator> skillAccumulators = new HashMap<>();
         CombatDebugSnapshot lastMeaningfulSnapshot = null;
+        Set<String> confirmedActionSequences = collectConfirmedActionSequences(combatLogPath, replayWindow);
 
         try (BufferedReader reader = Files.newBufferedReader(combatLogPath, StandardCharsets.UTF_8)) {
             String line;
@@ -1008,13 +1056,15 @@ public class SubmissionParityReportService {
                 if (!shouldIncludeLine(line, replayWindow)) {
                     continue;
                 }
+                if (shouldSkipUnconfirmedResultDamage(line, confirmedActionSequences)) {
+                    continue;
+                }
                 totalLines++;
                 ParsedLine parsed = parser.parse(deanonymizeLine(line, aliasToOriginal));
                 if (parsed == null) {
                     continue;
                 }
                 parsedLines++;
-                accumulateSkillDamage(parsed, skillAccumulators, ingestion);
                 ingestion.onParsed(parsed);
                 CombatDebugSnapshot snapshot = combatService.debugSnapshot();
                 if (isMeaningfulSnapshot(snapshot)) {
@@ -1048,6 +1098,85 @@ public class SubmissionParityReportService {
                         skillAccumulators
                 )
         );
+    }
+
+    private void accumulateEmittedSkillDamage(
+            CombatEvent.DamageEvent damageEvent,
+            Map<Long, SkillAccumulator> accumulators
+    ) {
+        long actorId = damageEvent.sourceId().value();
+        SkillAccumulator accumulator = accumulators.computeIfAbsent(actorId, ignored -> new SkillAccumulator());
+        String skillName = toDebugSkillName(damageEvent);
+        accumulator.add(skillName, damageEvent.amount());
+    }
+
+    private String toDebugSkillName(CombatEvent.DamageEvent damageEvent) {
+        int actionId = damageEvent.actionId();
+        if (damageEvent.damageType() == com.bohouse.pacemeter.core.model.DamageType.DOT) {
+            return "DoT#" + Integer.toHexString(actionId).toUpperCase();
+        }
+        String resolved = ActionNameLibrary.resolveKnown(actionId);
+        if (resolved != null && !resolved.isBlank()) {
+            return resolved + " (" + Integer.toHexString(actionId).toUpperCase() + ")";
+        }
+        return "Skill#" + Integer.toHexString(actionId).toUpperCase();
+    }
+
+    private Set<String> collectConfirmedActionSequences(
+            Path combatLogPath,
+            Optional<ReplayWindow> replayWindow
+    ) throws IOException {
+        if (RESULT_CONFIRMED_SKILL_IDS.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> sequences = new HashSet<>();
+        try (BufferedReader reader = Files.newBufferedReader(combatLogPath, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isBlank() || !shouldIncludeLine(line, replayWindow)) {
+                    continue;
+                }
+                String[] parts = line.split("\\|", -1);
+                if (parts.length > 4 && "37".equals(parts[0])) {
+                    String sequence = parts[4];
+                    if (!sequence.isBlank()) {
+                        sequences.add(sequence);
+                    }
+                }
+            }
+        }
+        return sequences;
+    }
+
+    private boolean shouldSkipUnconfirmedResultDamage(String line, Set<String> confirmedActionSequences) {
+        if (confirmedActionSequences.isEmpty()) {
+            return false;
+        }
+        String[] parts = line.split("\\|", -1);
+        if (parts.length <= 44 || !"21".equals(parts[0])) {
+            return false;
+        }
+        String rawDamage = parts[9];
+        if (rawDamage == null || rawDamage.isBlank() || "0".equals(rawDamage)) {
+            return false;
+        }
+        int skillId = parseHexInt(parts[4]);
+        if (!RESULT_CONFIRMED_SKILL_IDS.contains(skillId)) {
+            return false;
+        }
+        String sequence = parts[44];
+        return sequence != null && !sequence.isBlank() && !confirmedActionSequences.contains(sequence);
+    }
+
+    private int parseHexInt(String value) {
+        if (value == null || value.isBlank()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(value, 16);
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     private SubmissionParityReport.DamageTextMatchDiagnostics diagnoseDamageTextMatching(
@@ -1187,40 +1316,6 @@ public class SubmissionParityReportService {
                 snapshot.enrage(),
                 skillBreakdowns
         );
-    }
-
-    private void accumulateSkillDamage(
-            ParsedLine parsed,
-            Map<Long, SkillAccumulator> accumulators,
-            ActIngestionService ingestion
-    ) {
-        if (parsed instanceof NetworkAbilityRaw ability
-                && ability.damage() > 0
-                && ingestion.wouldEmitDamage(ability)) {
-            SkillAccumulator accumulator = accumulators.computeIfAbsent(
-                    ability.actorId(),
-                    ignored -> new SkillAccumulator()
-            );
-            accumulator.add(skillKey(ability.skillName(), ability.skillId()), ability.damage());
-            return;
-        }
-        if (parsed instanceof DotTickRaw dot
-                && dot.damage() > 0
-                && dot.isDot()
-                && ingestion.wouldEmitDotDamage(dot)) {
-            SkillAccumulator accumulator = accumulators.computeIfAbsent(
-                    dot.sourceId(),
-                    ignored -> new SkillAccumulator()
-            );
-            accumulator.add("DoT#" + Integer.toHexString(ingestion.resolveDotActionId(dot)).toUpperCase(), dot.damage());
-        }
-    }
-
-    private String skillKey(String skillName, int skillId) {
-        if (skillName == null || skillName.isBlank()) {
-            return "Skill#" + Integer.toHexString(skillId).toUpperCase();
-        }
-        return skillName + " (" + Integer.toHexString(skillId).toUpperCase() + ")";
     }
 
     private String deanonymizeLine(String line, Map<String, String> aliasToOriginal) {

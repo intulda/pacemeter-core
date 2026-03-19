@@ -1,6 +1,7 @@
 package com.bohouse.pacemeter.core.model;
 
 import com.bohouse.pacemeter.core.event.CombatEvent;
+import com.bohouse.pacemeter.core.model.DamageType;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -64,5 +65,30 @@ class CombatStateTest {
         assertEquals(1, targetStats.activeBuffs().size());
         assertEquals(5_000L, targetStats.activeBuffs().get(0).appliedAtMs());
         assertEquals(60_000L, targetStats.activeBuffs().get(0).durationMs());
+    }
+
+    @Test
+    void damageAndDeath_trackingUpdatesHitDeathAndMaxHit() {
+        CombatState state = new CombatState();
+        ActorId actorId = new ActorId(0x10000001L);
+        ActorId targetId = new ActorId(0x40000001L);
+
+        state.reduce(new CombatEvent.FightStart(0L, "test", 1327, 42));
+        state.reduce(new CombatEvent.ActorJoined(0L, actorId, "dealer"));
+        state.reduce(new CombatEvent.DamageEvent(
+                1_000L, actorId, "dealer", targetId, 0x8C0, 9_000L, DamageType.DIRECT, false, false
+        ));
+        state.reduce(new CombatEvent.DamageEvent(
+                2_000L, actorId, "dealer", targetId, 0x8CF, 12_345L, DamageType.DIRECT, false, false
+        ));
+        state.reduce(new CombatEvent.ActorDeath(2_500L, actorId, "dealer"));
+        state.reduce(new CombatEvent.ActorDeath(2_600L, actorId, "dealer"));
+
+        ActorStats actorStats = state.actors().get(actorId);
+        assertNotNull(actorStats);
+        assertEquals(2, actorStats.hitCount());
+        assertEquals(1, actorStats.deathCount());
+        assertEquals(12_345L, actorStats.maxHitDamage());
+        assertEquals(0x8CF, actorStats.maxHitActionId());
     }
 }
