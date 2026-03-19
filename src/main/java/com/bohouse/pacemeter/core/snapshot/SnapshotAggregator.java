@@ -122,7 +122,7 @@ public final class SnapshotAggregator {
                     stats.hitCount(),
                     stats.deathCount(),
                     stats.maxHitDamage(),
-                    ActionNameLibrary.resolve(stats.maxHitActionId()),
+                    ActionNameLibrary.resolveDisplay(stats.maxHitActionId()),
                     recentDps,
                     isCurrentPlayer,
                     individualPace,

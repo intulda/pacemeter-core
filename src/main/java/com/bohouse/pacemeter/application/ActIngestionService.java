@@ -358,6 +358,9 @@ public final class ActIngestionService {
         if (shouldAcceptDot(dot) && isPartyMember(dot.sourceId())) {
             return fightStarted || isValidCombatZone(dot.targetName());
         }
+        if (!resolveTrackedSourceDots(dot).isEmpty()) {
+            return fightStarted || isValidCombatZone(dot.targetName());
+        }
         if (resolveKnownStatusUnknownSourceAttribution(dot).isPresent()) {
             return fightStarted || isValidCombatZone(dot.targetName());
         }
@@ -528,11 +531,15 @@ public final class ActIngestionService {
             if (!DOT_ATTRIBUTION_RULES.snapshotStatusIds().contains(entry.statusId())) {
                 continue;
             }
+            int trackedActionId = toTrackedDotActionId(entry.statusId());
+            if (trackedActionId == 0) {
+                continue;
+            }
             double value = decodeSnapshotFloat(entry.rawValueHex());
             if (value <= 0.0) {
                 continue;
             }
-            weights.put(new TrackedDotKey(entry.sourceId(), entry.statusId()), value);
+            weights.put(new TrackedDotKey(entry.sourceId(), trackedActionId), value);
         }
         if (weights.isEmpty()) {
             return;
@@ -555,6 +562,24 @@ public final class ActIngestionService {
                 .toList();
     }
 
+    private List<TrackedDotState> resolveTrackedSourceDots(DotTickRaw dot) {
+        if (dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
+            return List.of();
+        }
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return List.of();
+        }
+        pruneExpiredTrackedDots(dot.ts());
+        Map<TrackedDotKey, TrackedDotState> targetDots = activeTargetDots.get(dot.targetId());
+        if (targetDots == null || targetDots.isEmpty()) {
+            return List.of();
+        }
+        return targetDots.values().stream()
+                .filter(dotState -> dotState.sourceId() == dot.sourceId())
+                .sorted(Comparator.comparingInt(TrackedDotState::actionId))
+                .toList();
+    }
+
     private List<SnapshotRedistributedDot> resolveSnapshotRedistribution(DotTickRaw dot) {
         if (dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
             return List.of();
@@ -567,9 +592,8 @@ public final class ActIngestionService {
             return List.of();
         }
 
-        double denominator = snapshot.weights().entrySet().stream()
-                .filter(entry -> DOT_ATTRIBUTION_RULES.snapshotStatusIds().contains(entry.getKey().actionId()))
-                .mapToDouble(Map.Entry::getValue)
+        double denominator = snapshot.weights().values().stream()
+                .mapToDouble(Double::doubleValue)
                 .sum();
         if (denominator <= 0.0) {
             return List.of();
@@ -578,9 +602,6 @@ public final class ActIngestionService {
         List<SnapshotRedistributedDot> redistributedDots = new ArrayList<>();
         for (Map.Entry<TrackedDotKey, Double> entry : snapshot.weights().entrySet()) {
             TrackedDotKey key = entry.getKey();
-            if (!DOT_ATTRIBUTION_RULES.snapshotStatusIds().contains(key.actionId())) {
-                continue;
-            }
             long amount = Math.round(dot.damage() * (entry.getValue() / denominator));
             if (amount <= 0) {
                 continue;
@@ -612,13 +633,28 @@ public final class ActIngestionService {
 
     int resolveDotActionId(DotTickRaw dot) {
         if (dot.hasKnownStatus()) {
-            return dot.statusId();
+            int trackedActionId = toTrackedDotActionId(dot.statusId());
+            return trackedActionId != 0 ? trackedActionId : dot.statusId();
         }
-        Integer actionId = resolveTrackedUnknownStatusDotStatusId(dot);
+        Integer actionId = resolveCorroboratedTrackedUnknownStatusDotActionId(dot);
+        if (actionId == null) {
+            actionId = resolveTrackedUnknownStatusDotStatusId(dot);
+        }
         if (actionId == null) {
             actionId = resolveTrackedUnknownStatusDotActionId(dot);
         }
         return actionId != null ? actionId : dot.statusId();
+    }
+
+    private Integer resolveCorroboratedTrackedUnknownStatusDotActionId(DotTickRaw dot) {
+        pruneExpiredUnknownStatusDotApplications(dot.ts());
+        return unknownStatusDotAttributionResolver.resolveCorroboratedActionId(
+                dot,
+                unknownStatusDotApplications,
+                unknownStatusDotStatusApplications,
+                UNKNOWN_STATUS_DOT_WINDOW_MS,
+                this::toTrackedDotActionId
+        );
     }
 
     private Integer resolveTrackedUnknownStatusDotStatusId(DotTickRaw dot) {
@@ -903,50 +939,74 @@ public final class ActIngestionService {
         }
 
         if (unknownStatusDot) {
-            List<SnapshotRedistributedDot> redistributedDots = resolveSnapshotRedistribution(dot);
-            if (!redistributedDots.isEmpty()) {
-                long remaining = dot.damage();
-                for (int i = 0; i < redistributedDots.size(); i++) {
-                    SnapshotRedistributedDot redistributedDot = redistributedDots.get(i);
-                    long allocated = i == redistributedDots.size() - 1
-                            ? remaining
-                            : Math.min(remaining, redistributedDot.amount());
-                    remaining -= allocated;
-                    combatEventPort.onEvent(new CombatEvent.DamageEvent(
-                            tsMs,
-                            new ActorId(redistributedDot.sourceId()),
-                            actorNameById.getOrDefault(redistributedDot.sourceId(), dot.sourceName()),
-                            new ActorId(dot.targetId()),
-                            redistributedDot.actionId(),
-                            allocated,
-                            DamageType.DOT,
-                            false,
-                            false
-                    ));
+            if (!acceptedBySource) {
+                List<TrackedDotState> trackedSourceDots = resolveTrackedSourceDots(dot);
+                if (!trackedSourceDots.isEmpty()) {
+                    long remaining = dot.damage();
+                    for (int i = 0; i < trackedSourceDots.size(); i++) {
+                        TrackedDotState trackedDot = trackedSourceDots.get(i);
+                        long allocated = remaining / (trackedSourceDots.size() - i);
+                        remaining -= allocated;
+                        combatEventPort.onEvent(new CombatEvent.DamageEvent(
+                                tsMs,
+                                new ActorId(trackedDot.sourceId()),
+                                trackedDot.sourceName(),
+                                new ActorId(dot.targetId()),
+                                trackedDot.actionId(),
+                                allocated,
+                                DamageType.DOT,
+                                false,
+                                false
+                        ));
+                    }
+                    return;
                 }
-                return;
-            }
 
-            List<TrackedDotState> trackedDots = resolveTrackedTargetDots(dot);
-            if (!trackedDots.isEmpty()) {
-                long remaining = dot.damage();
-                for (int i = 0; i < trackedDots.size(); i++) {
-                    TrackedDotState trackedDot = trackedDots.get(i);
-                    long allocated = remaining / (trackedDots.size() - i);
-                    remaining -= allocated;
-                    combatEventPort.onEvent(new CombatEvent.DamageEvent(
-                            tsMs,
-                            new ActorId(trackedDot.sourceId()),
-                            trackedDot.sourceName(),
-                            new ActorId(dot.targetId()),
-                            trackedDot.actionId(),
-                            allocated,
-                            DamageType.DOT,
-                            false,
-                            false
-                    ));
+                List<SnapshotRedistributedDot> redistributedDots = resolveSnapshotRedistribution(dot);
+                if (!redistributedDots.isEmpty()) {
+                    long remaining = dot.damage();
+                    for (int i = 0; i < redistributedDots.size(); i++) {
+                        SnapshotRedistributedDot redistributedDot = redistributedDots.get(i);
+                        long allocated = i == redistributedDots.size() - 1
+                                ? remaining
+                                : Math.min(remaining, redistributedDot.amount());
+                        remaining -= allocated;
+                        combatEventPort.onEvent(new CombatEvent.DamageEvent(
+                                tsMs,
+                                new ActorId(redistributedDot.sourceId()),
+                                actorNameById.getOrDefault(redistributedDot.sourceId(), dot.sourceName()),
+                                new ActorId(dot.targetId()),
+                                redistributedDot.actionId(),
+                                allocated,
+                                DamageType.DOT,
+                                false,
+                                false
+                        ));
+                    }
+                    return;
                 }
-                return;
+
+                List<TrackedDotState> trackedDots = resolveTrackedTargetDots(dot);
+                if (!trackedDots.isEmpty()) {
+                    long remaining = dot.damage();
+                    for (int i = 0; i < trackedDots.size(); i++) {
+                        TrackedDotState trackedDot = trackedDots.get(i);
+                        long allocated = remaining / (trackedDots.size() - i);
+                        remaining -= allocated;
+                        combatEventPort.onEvent(new CombatEvent.DamageEvent(
+                                tsMs,
+                                new ActorId(trackedDot.sourceId()),
+                                trackedDot.sourceName(),
+                                new ActorId(dot.targetId()),
+                                trackedDot.actionId(),
+                                allocated,
+                                DamageType.DOT,
+                                false,
+                                false
+                        ));
+                    }
+                    return;
+                }
             }
         }
 

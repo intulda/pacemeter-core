@@ -6,8 +6,8 @@ spring:
 
 pacemeter:
   fflogs:
-    client-id: ""
-    client-secret: ""
+    client-id: "a136248c-d78d-49e7-946b-2a0ee4b84dd6"
+    client-secret: "rneeibBKs0uFSpZ5hakN4xXD15bFObLgt1IYAl2b"
     partition: ""
   act:
     direct-enabled: false

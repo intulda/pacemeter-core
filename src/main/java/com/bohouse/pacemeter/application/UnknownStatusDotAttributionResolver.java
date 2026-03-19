@@ -13,6 +13,26 @@ import java.util.function.LongPredicate;
 
 final class UnknownStatusDotAttributionResolver {
 
+    Integer resolveCorroboratedActionId(
+            DotTickRaw dot,
+            Map<DotKey, DotApplication> actionApplications,
+            Map<DotKey, DotApplication> statusApplications,
+            long windowMs,
+            IntUnaryOperator toTrackedDotActionId
+    ) {
+        DotApplication actionApplication = resolveEvidence(actionApplications, dot, windowMs);
+        DotApplication statusApplication = resolveEvidence(statusApplications, dot, windowMs);
+        if (actionApplication == null || statusApplication == null) {
+            return null;
+        }
+
+        int mappedStatusActionId = toTrackedDotActionId.applyAsInt(statusApplication.actionId());
+        if (mappedStatusActionId == 0) {
+            return null;
+        }
+        return mappedStatusActionId == actionApplication.actionId() ? mappedStatusActionId : null;
+    }
+
     Integer resolveTrackedStatusActionId(
             DotTickRaw dot,
             Map<DotKey, DotApplication> statusApplications,
@@ -62,7 +82,8 @@ final class UnknownStatusDotAttributionResolver {
             return Optional.empty();
         }
         UnknownSourceCandidate selected = candidatesBySource.values().stream()
-                .max(Comparator.comparing(UnknownSourceCandidate::appliedAt)
+                .max(Comparator.comparing(UnknownSourceCandidate::corroborated)
+                        .thenComparing(UnknownSourceCandidate::appliedAt)
                         .thenComparingLong(UnknownSourceCandidate::sourceId))
                 .orElse(null);
         if (selected == null) {
@@ -107,13 +128,14 @@ final class UnknownStatusDotAttributionResolver {
             if (!isPartyMember.test(key.sourceId())) {
                 continue;
             }
-            candidatesBySource.compute(key.sourceId(), (ignored, existing) -> pickNewer(
+            candidatesBySource.compute(key.sourceId(), (ignored, existing) -> mergeCandidate(
                     existing,
                     new UnknownSourceCandidate(
                             key.sourceId(),
                             application.actionId(),
                             sourceNameResolver.apply(key.sourceId()),
-                            application.appliedAt()
+                            application.appliedAt(),
+                            false
                     )
             ));
         }
@@ -141,24 +163,34 @@ final class UnknownStatusDotAttributionResolver {
             if (mappedAction == 0) {
                 continue;
             }
-            candidatesBySource.compute(key.sourceId(), (ignored, existing) -> pickNewer(
+            candidatesBySource.compute(key.sourceId(), (ignored, existing) -> mergeCandidate(
                     existing,
                     new UnknownSourceCandidate(
                             key.sourceId(),
                             mappedAction,
                             sourceNameResolver.apply(key.sourceId()),
-                            application.appliedAt()
+                            application.appliedAt(),
+                            false
                     )
             ));
         }
     }
 
-    private UnknownSourceCandidate pickNewer(
+    private UnknownSourceCandidate mergeCandidate(
             UnknownSourceCandidate existing,
             UnknownSourceCandidate candidate
     ) {
         if (existing == null) {
             return candidate;
+        }
+        if (existing.actionId() == candidate.actionId()) {
+            return new UnknownSourceCandidate(
+                    existing.sourceId(),
+                    existing.actionId(),
+                    existing.sourceName(),
+                    candidate.appliedAt().isAfter(existing.appliedAt()) ? candidate.appliedAt() : existing.appliedAt(),
+                    true
+            );
         }
         return candidate.appliedAt().isAfter(existing.appliedAt()) ? candidate : existing;
     }
@@ -169,5 +201,11 @@ final class UnknownStatusDotAttributionResolver {
 
     record UnknownSourceAttribution(long sourceId, int actionId, String sourceName) {}
 
-    private record UnknownSourceCandidate(long sourceId, int actionId, String sourceName, Instant appliedAt) {}
+    private record UnknownSourceCandidate(
+            long sourceId,
+            int actionId,
+            String sourceName,
+            Instant appliedAt,
+            boolean corroborated
+    ) {}
 }

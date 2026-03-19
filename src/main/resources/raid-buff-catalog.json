@@ -303,7 +303,7 @@
     "effects": [
       {
         "kind": "PERCENT_DAMAGE",
-        "amount": 0.06
+        "amount": 0.05
       }
     ],
     "aliases": [

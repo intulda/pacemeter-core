@@ -91,4 +91,43 @@ class CombatStateTest {
         assertEquals(12_345L, actorStats.maxHitDamage());
         assertEquals(0x8CF, actorStats.maxHitActionId());
     }
+
+    @Test
+    void ownerBuffOnOwnedPet_isNotAttributedAsExternalRdps() {
+        CombatState state = new CombatState();
+        ActorId ownerId = new ActorId(0x10000001L);
+        ActorId petId = new ActorId(0x40000010L);
+        ActorId targetId = new ActorId(0x40000020L);
+
+        state.reduce(new CombatEvent.FightStart(0L, "test", 1327, 42));
+        state.reduce(new CombatEvent.ActorJoined(0L, ownerId, "owner"));
+        state.reduce(new CombatEvent.ActorJoined(0L, petId, "pet"));
+        state.setOwner(petId, ownerId);
+        state.reduce(new CombatEvent.BuffApply(
+                1_000L,
+                ownerId,
+                petId,
+                new BuffId(3685),
+                "Starry Muse",
+                20_000L
+        ));
+        state.reduce(new CombatEvent.DamageEvent(
+                2_000L,
+                petId,
+                "pet",
+                targetId,
+                0x8771,
+                100_000L,
+                DamageType.DIRECT,
+                false,
+                false
+        ));
+
+        ActorStats ownerStats = state.actors().get(ownerId);
+        ActorStats petStats = state.actors().get(petId);
+        assertNotNull(ownerStats);
+        assertNotNull(petStats);
+        assertEquals(0.0, ownerStats.totalGrantedBuffContribution(), 0.001);
+        assertEquals(0.0, petStats.totalReceivedBuffContribution(), 0.001);
+    }
 }

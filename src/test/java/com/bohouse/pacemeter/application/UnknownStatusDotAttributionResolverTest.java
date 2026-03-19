@@ -30,6 +30,28 @@ class UnknownStatusDotAttributionResolverTest {
     }
 
     @Test
+    void resolveCorroboratedActionId_returnsActionWhenMarkerAndStatusAgree() {
+        Instant now = Instant.parse("2026-03-19T00:00:10Z");
+        DotTickRaw dot = new DotTickRaw(now, 0x40000001L, "Boss", "DoT", 0, 0x10000001L, "Actor", 1000, "24|...");
+        Map<UnknownStatusDotAttributionResolver.DotKey, UnknownStatusDotAttributionResolver.DotApplication> actionApps = new HashMap<>();
+        Map<UnknownStatusDotAttributionResolver.DotKey, UnknownStatusDotAttributionResolver.DotApplication> statusApps = new HashMap<>();
+        UnknownStatusDotAttributionResolver.DotKey key =
+                new UnknownStatusDotAttributionResolver.DotKey(0x10000001L, 0x40000001L);
+        actionApps.put(key, new UnknownStatusDotAttributionResolver.DotApplication(0x409C, now.minusMillis(1500)));
+        statusApps.put(key, new UnknownStatusDotAttributionResolver.DotApplication(0x0767, now.minusMillis(1000)));
+
+        Integer actionId = resolver.resolveCorroboratedActionId(
+                dot,
+                actionApps,
+                statusApps,
+                90_000L,
+                statusId -> statusId == 0x0767 ? 0x409C : 0
+        );
+
+        assertEquals(0x409C, actionId);
+    }
+
+    @Test
     void resolveUnknownSourceAttribution_picksMostRecentCandidateForTarget() {
         Instant now = Instant.parse("2026-03-19T00:01:00Z");
         DotTickRaw dot = new DotTickRaw(now, 0x40000001L, "Boss", "DoT", 0, 0xE0000000L, "", 1200, "24|...");
@@ -58,6 +80,41 @@ class UnknownStatusDotAttributionResolverTest {
 
         assertTrue(attribution.isPresent());
         assertEquals(0x10000002L, attribution.orElseThrow().sourceId());
+        assertEquals(0x409C, attribution.orElseThrow().actionId());
+    }
+
+    @Test
+    void resolveUnknownSourceAttribution_prefersCorroboratedCandidateOverNewerSingleEvidence() {
+        Instant now = Instant.parse("2026-03-19T00:01:00Z");
+        DotTickRaw dot = new DotTickRaw(now, 0x40000001L, "Boss", "DoT", 0, 0xE0000000L, "", 1200, "24|...");
+
+        Map<UnknownStatusDotAttributionResolver.DotKey, UnknownStatusDotAttributionResolver.DotApplication> actionApps = new HashMap<>();
+        Map<UnknownStatusDotAttributionResolver.DotKey, UnknownStatusDotAttributionResolver.DotApplication> statusApps = new HashMap<>();
+
+        UnknownStatusDotAttributionResolver.DotKey corroboratedKey =
+                new UnknownStatusDotAttributionResolver.DotKey(0x10000001L, 0x40000001L);
+        actionApps.put(corroboratedKey, new UnknownStatusDotAttributionResolver.DotApplication(0x409C, now.minusMillis(4000)));
+        statusApps.put(corroboratedKey, new UnknownStatusDotAttributionResolver.DotApplication(0x0767, now.minusMillis(3500)));
+
+        actionApps.put(
+                new UnknownStatusDotAttributionResolver.DotKey(0x10000002L, 0x40000001L),
+                new UnknownStatusDotAttributionResolver.DotApplication(0x4094, now.minusMillis(1000))
+        );
+
+        Optional<UnknownStatusDotAttributionResolver.UnknownSourceAttribution> attribution =
+                resolver.resolveUnknownSourceAttribution(
+                        dot,
+                        actionApps,
+                        statusApps,
+                        0xE0000000L,
+                        90_000L,
+                        sourceId -> true,
+                        sourceId -> "S" + sourceId,
+                        statusId -> statusId == 0x0767 ? 0x409C : 0
+                );
+
+        assertTrue(attribution.isPresent());
+        assertEquals(0x10000001L, attribution.orElseThrow().sourceId());
         assertEquals(0x409C, attribution.orElseThrow().actionId());
     }
 

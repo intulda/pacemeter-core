@@ -95,6 +95,11 @@ class CombatServiceDebugTest {
                 },
                 new PaceProfileProvider() {
                     @Override
+                    public Optional<PaceProfile> findProfile(String fightName, int actTerritoryId) {
+                        return Optional.of(topProfile);
+                    }
+
+                    @Override
                     public Optional<PaceProfile> findProfile(String fightName, int actTerritoryId, int playerJobId) {
                         try {
                             Thread.sleep(100);
@@ -127,7 +132,7 @@ class CombatServiceDebugTest {
 
         OverlaySnapshot refreshed = snapshots.get(snapshots.size() - 1);
         assertNotNull(refreshed.partyPace());
-        assertEquals("FFLogs #1 rDPS: Test", refreshed.partyPace().label());
+        assertEquals("FFLogs #1 rDPS: Test", refreshed.partyPace().profileLabel());
         assertNull(refreshed.clearability());
     }
 }

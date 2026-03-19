@@ -27,6 +27,7 @@ public final class DotAttributionCatalog {
     private static final Map<Integer, Set<Integer>> APPLICATION_ACTIONS_BY_JOB = buildApplicationActionsByJob();
     private static final Map<Integer, Set<Integer>> STATUS_IDS_BY_JOB = buildStatusIdsByJob();
     private static final Map<Integer, Integer> STATUS_TO_ACTION = buildStatusToAction();
+    private static final Map<Integer, Set<Integer>> ACTION_TO_STATUSES = buildActionToStatuses();
     private static final Set<Integer> SNAPSHOT_STATUS_IDS = STATUS_TO_ACTION.keySet();
 
     private DotAttributionCatalog() {
@@ -46,6 +47,10 @@ public final class DotAttributionCatalog {
 
     public static Map<Integer, Integer> statusToAction() {
         return STATUS_TO_ACTION;
+    }
+
+    public static Set<Integer> statusIdsForAction(int actionId) {
+        return ACTION_TO_STATUSES.getOrDefault(actionId, Set.of());
     }
 
     public static Set<Integer> snapshotStatusIds() {
@@ -103,6 +108,18 @@ public final class DotAttributionCatalog {
             }
         }
         return Collections.unmodifiableMap(map);
+    }
+
+    private static Map<Integer, Set<Integer>> buildActionToStatuses() {
+        Map<Integer, Set<Integer>> map = new HashMap<>();
+        for (Entry entry : ENTRIES) {
+            for (StatusActionMapping mapping : entry.statusToAction()) {
+                map.computeIfAbsent(mapping.actionId(), ignored -> new java.util.HashSet<>())
+                        .add(mapping.statusId());
+            }
+        }
+        return map.entrySet().stream()
+                .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> Set.copyOf(entry.getValue())));
     }
 
     private record CatalogEntry(

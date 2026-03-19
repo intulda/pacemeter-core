@@ -10,6 +10,7 @@ import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsTokenStore;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
 import com.bohouse.pacemeter.core.engine.CombatEngine;
 import com.bohouse.pacemeter.core.model.ActorId;
+import com.bohouse.pacemeter.core.model.DamageType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -218,6 +219,102 @@ class SubmissionParityReportDiagnostics {
         }
 
         assertTrue(!events.isEmpty());
+    }
+
+    @Test
+    void debugLindwurmFight8PetContributionByOwner_printsAggregatedPetBuffTotals() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(8, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        assertTrue(replayWindow.isPresent());
+        Method shouldIncludeLine = openShouldIncludeLine();
+
+        CombatEngine engine = new CombatEngine();
+        CombatService combatService = new CombatService(
+                engine,
+                snapshot -> { },
+                (fightName, territoryId) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort forwardingPort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(com.bohouse.pacemeter.core.event.CombatEvent event) {
+                        return combatService.onEvent(event);
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                        combatService.setCurrentPlayerId(playerId);
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                        combatService.setJobId(actorId, jobId);
+                    }
+                };
+        ActIngestionService ingestion = new ActIngestionService(
+                forwardingPort,
+                combatService,
+                new FflogsZoneLookup(new ObjectMapper())
+        );
+        ingestion.onParsed(new com.bohouse.pacemeter.adapter.inbound.actws.ZoneChanged(
+                Instant.ofEpochMilli(0L),
+                report.metadata().zoneId(),
+                ""
+        ));
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz", "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = new ActLineParser().parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        com.bohouse.pacemeter.core.model.CombatState state = engine.currentState();
+        Map<ActorId, PetContributionSummary> byOwner = new HashMap<>();
+        for (Map.Entry<ActorId, ActorId> entry : state.ownerMap().entrySet()) {
+            com.bohouse.pacemeter.core.model.ActorStats petStats = state.actors().get(entry.getKey());
+            if (petStats == null) {
+                continue;
+            }
+            PetContributionSummary current = byOwner.get(entry.getValue());
+            PetContributionSummary updated = current == null
+                    ? new PetContributionSummary(1, petStats.totalDamage(), petStats.totalGrantedBuffContribution(), petStats.totalReceivedBuffContribution())
+                    : new PetContributionSummary(
+                            current.petCount() + 1,
+                            current.totalDamage() + petStats.totalDamage(),
+                            current.granted() + petStats.totalGrantedBuffContribution(),
+                            current.received() + petStats.totalReceivedBuffContribution()
+                    );
+            byOwner.put(entry.getValue(), updated);
+        }
+
+        byOwner.entrySet().stream()
+                .sorted((left, right) -> Double.compare(right.getValue().granted(), left.getValue().granted()))
+                .forEach(entry -> {
+                    com.bohouse.pacemeter.core.model.ActorStats ownerStats = state.actors().get(entry.getKey());
+                    String ownerName = ownerStats == null ? Long.toHexString(entry.getKey().value()) : ownerStats.name();
+                    PetContributionSummary summary = entry.getValue();
+                    System.out.printf(
+                            "lindwurm.petAgg owner=%s petCount=%d petDamage=%d petGranted=%.1f petReceived=%.1f%n",
+                            ownerName,
+                            summary.petCount(),
+                            summary.totalDamage(),
+                            summary.granted(),
+                            summary.received()
+                    );
+                });
+
+        assertTrue(!byOwner.isEmpty());
     }
 
     @Test
@@ -548,6 +645,184 @@ class SubmissionParityReportDiagnostics {
                         entry.guid(),
                         entry.total(),
                         entry.type()
+                ));
+    }
+
+    @Test
+    void debugHeavy2Fight6FflogsStatusAndActionPairs_printsSamWhmSchPairs() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(2, report.fflogs().selectedFightId());
+
+        Map<String, Integer[]> targets = Map.of(
+                "WhiteMage", new Integer[]{0x4094, 0x074F},
+                "Scholar", new Integer[]{0x409C, 0x0767, 0x9094, 0x0F2B},
+                "Samurai", new Integer[]{0x1D41, 0x04CC}
+        );
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        for (SubmissionParityReport.ActorParityComparison comparison : report.comparisons()) {
+            Integer[] guids = targets.get(comparison.fflogsType());
+            if (guids == null) {
+                continue;
+            }
+            List<FflogsApiClient.AbilityDamageEntry> abilities = apiClient.fetchDamageDoneAbilities(
+                    report.fflogs().reportCode(),
+                    report.fflogs().selectedFightId(),
+                    comparison.fflogsActorId()
+            );
+            System.out.printf(
+                    "heavy2.fflogsPairs actor=%s job=%s matched=%s%n",
+                    comparison.localName(),
+                    comparison.fflogsType(),
+                    abilities.stream()
+                            .filter(a -> a.guid() != null && java.util.Arrays.asList(guids).contains(a.guid()))
+                            .sorted((a, b) -> Integer.compare(a.guid(), b.guid()))
+                            .map(a -> a.name() + "(" + formatGuid(a.guid()) + "):" + Math.round(a.total()))
+                            .toList()
+            );
+        }
+    }
+
+    @Test
+    void debugHeavy2Fight6RawDotWindow_printsSamWhmSchDotBuckets() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(2, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        Map<Long, String> targetActors = Map.of(
+                0x102B1904L, "Samurai",
+                0x102884E5L, "WhiteMage",
+                0x1029CA55L, "Scholar"
+        );
+
+        Map<String, long[]> buckets = new HashMap<>();
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (!(parsed instanceof DotTickRaw dot) || !dot.isDot()) {
+                continue;
+            }
+            String actorJob = targetActors.get(dot.sourceId());
+            if (actorJob == null) {
+                continue;
+            }
+            String key = actorJob
+                    + " status=" + formatGuid(dot.statusId())
+                    + " target=" + dot.targetName()
+                    + "(" + Long.toHexString(dot.targetId()).toUpperCase() + ")";
+            long[] totals = buckets.computeIfAbsent(key, ignored -> new long[2]);
+            totals[0] += 1;
+            totals[1] += dot.damage();
+        }
+
+        buckets.entrySet().stream()
+                .sorted((a, b) -> Long.compare(b.getValue()[1], a.getValue()[1]))
+                .forEach(entry -> System.out.printf(
+                        "heavy2.rawDotBucket %s count=%d total=%d%n",
+                        entry.getKey(),
+                        entry.getValue()[0],
+                        entry.getValue()[1]
+                ));
+    }
+
+    @Test
+    void debugHeavy2Fight6EmittedDotBuckets_printsSamWhmSchActionTargets() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(2, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> capturedDamageEvents = new ArrayList<>();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        if (event instanceof com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent damageEvent) {
+                            capturedDamageEvents.add(damageEvent);
+                        }
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Integer> targetGuidByActor = Map.of(
+                "재탄", 0x1D41,
+                "젤리", 0x409C,
+                "백미도사", 0x4094
+        );
+
+        Map<String, long[]> buckets = new HashMap<>();
+        for (com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent event : capturedDamageEvents) {
+            Integer targetActionId = targetGuidByActor.get(event.sourceName());
+            if (targetActionId == null || targetActionId != event.actionId()) {
+                continue;
+            }
+            if (event.damageType() != DamageType.DOT) {
+                continue;
+            }
+            String key = event.sourceName()
+                    + " action=" + formatGuid(event.actionId())
+                    + " target=" + Long.toHexString(event.targetId().value()).toUpperCase();
+            long[] totals = buckets.computeIfAbsent(key, ignored -> new long[2]);
+            totals[0] += 1;
+            totals[1] += event.amount();
+        }
+
+        buckets.entrySet().stream()
+                .sorted((a, b) -> Long.compare(b.getValue()[1], a.getValue()[1]))
+                .forEach(entry -> System.out.printf(
+                        "heavy2.emittedDotBucket %s count=%d total=%d%n",
+                        entry.getKey(),
+                        entry.getValue()[0],
+                        entry.getValue()[1]
                 ));
     }
 
@@ -1360,7 +1635,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(6, report.fflogs().selectedFightId());
+        assertEquals(2, report.fflogs().selectedFightId());
 
         Set<String> targetJobs = Set.of("Samurai", "Scholar", "WhiteMage", "Pictomancer");
         List<String> targetActors = report.comparisons().stream()
@@ -1494,7 +1769,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(6, report.fflogs().selectedFightId());
+        assertEquals(2, report.fflogs().selectedFightId());
 
         SubmissionParityReport.ActorParityComparison pct = report.comparisons().stream()
                 .filter(c -> "Pictomancer".equalsIgnoreCase(c.fflogsType()) && "바나바나".equals(c.localName()))
@@ -1630,7 +1905,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(6, report.fflogs().selectedFightId());
+        assertEquals(2, report.fflogs().selectedFightId());
 
         Set<String> targetJobs = Set.of("Samurai", "Scholar", "WhiteMage", "Pictomancer");
         List<SubmissionParityReport.ActorParityComparison> targets = report.comparisons().stream()
@@ -1719,7 +1994,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(6, report.fflogs().selectedFightId());
+        assertEquals(2, report.fflogs().selectedFightId());
 
         Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
         Method shouldIncludeLine = openShouldIncludeLine();
@@ -2063,6 +2338,14 @@ class SubmissionParityReportDiagnostics {
             String skillName,
             long totalDamage,
             long hitCount
+    ) {
+    }
+
+    private record PetContributionSummary(
+            int petCount,
+            long totalDamage,
+            double granted,
+            double received
     ) {
     }
 }

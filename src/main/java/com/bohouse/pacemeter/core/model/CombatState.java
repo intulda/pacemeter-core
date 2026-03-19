@@ -273,6 +273,14 @@ public final class CombatState {
         DotSnapshot dotSnapshot = null;
         if (event.actionId() > 0) {
             dotSnapshot = dotSnapshots.get(new DotKey(event.sourceId(), event.targetId(), new BuffId(event.actionId())));
+            if (dotSnapshot == null) {
+                for (Integer statusId : DotAttributionCatalog.statusIdsForAction(event.actionId())) {
+                    dotSnapshot = dotSnapshots.get(new DotKey(event.sourceId(), event.targetId(), new BuffId(statusId)));
+                    if (dotSnapshot != null) {
+                        break;
+                    }
+                }
+            }
         }
         if (dotSnapshot == null) {
             dotSnapshot = findFallbackDotSnapshot(event.sourceId(), event.targetId());
@@ -306,7 +314,7 @@ public final class CombatState {
         ActorStats sourceStats = actors.get(sourceId);
         if (sourceStats != null) {
             for (ActiveBuff buff : sourceStats.activeBuffs()) {
-                if (buff.sourceId().equals(sourceId)) {
+                if (sharesOwnershipGroup(buff.sourceId(), sourceId)) {
                     continue;
                 }
                 applyBuffEffects(buff, totalMultiplier, providerMultiplierLogWeight, providerCritRate, providerDirectHitRate);
@@ -316,7 +324,7 @@ public final class CombatState {
         ActorStats targetStats = actors.get(targetId);
         if (targetStats != null) {
             for (ActiveBuff buff : targetStats.activeBuffs()) {
-                if (buff.sourceId().equals(sourceId)) {
+                if (sharesOwnershipGroup(buff.sourceId(), sourceId)) {
                     continue;
                 }
                 applyBuffEffects(buff, totalMultiplier, providerMultiplierLogWeight, providerCritRate, providerDirectHitRate);
@@ -372,6 +380,22 @@ public final class CombatState {
 
     private double clampRate(double rate) {
         return Math.max(0.0, Math.min(1.0, rate));
+    }
+
+    private boolean sharesOwnershipGroup(ActorId left, ActorId right) {
+        return resolveRootOwner(left).equals(resolveRootOwner(right));
+    }
+
+    private ActorId resolveRootOwner(ActorId actorId) {
+        ActorId current = actorId;
+        while (current != null) {
+            ActorId owner = ownerMap.get(current);
+            if (owner == null || owner.equals(current)) {
+                return current;
+            }
+            current = owner;
+        }
+        return actorId;
     }
 
     private void applyBuffEffects(

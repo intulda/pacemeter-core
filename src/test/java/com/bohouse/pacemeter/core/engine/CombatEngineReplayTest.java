@@ -322,7 +322,7 @@ class CombatEngineReplayTest {
         assertEquals(2, actor.hitCount());
         assertEquals(1, actor.deathCount());
         assertEquals(12_500L, actor.maxHitDamage());
-        assertEquals("aeolian edge", actor.maxHitSkillName());
+        assertEquals("에올리안 엣지", actor.maxHitSkillName());
     }
 
     @Test

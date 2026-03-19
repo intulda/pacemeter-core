@@ -116,6 +116,118 @@ public final class ActionNameLibrary {
             Map.entry(0x9098, "accession")
     );
 
+    private static final Map<Integer, String> ACTION_DISPLAY_NAMES = Map.ofEntries(
+            Map.entry(0x8C0, "스피닝 엣지"),
+            Map.entry(0x8C2, "거스트 슬래시"),
+            Map.entry(0x8C6, "어새시네이트"),
+            Map.entry(0x8C7, "투척 단검"),
+            Map.entry(0x8C8, "훔쳐보기"),
+            Map.entry(0x8CE, "데스 블로섬"),
+            Map.entry(0x8CF, "에올리안 엣지"),
+            Map.entry(0x8D2, "트릭 어택"),
+            Map.entry(0x8D9, "풍마수리검"),
+            Map.entry(0x8DA, "화둔"),
+            Map.entry(0x8DB, "뇌둔"),
+            Map.entry(0x8DC, "빙둔"),
+            Map.entry(0x8DD, "풍둔"),
+            Map.entry(0x8DF, "수둔"),
+            Map.entry(0xDEB, "갑쇄 베기"),
+            Map.entry(0xDEE, "몽환삼단"),
+            Map.entry(0x1CE9, "생사여탈"),
+            Map.entry(0x1CEA, "나찰충격"),
+            Map.entry(0x4068, "팔괘무인살"),
+            Map.entry(0x406B, "겁화멸각"),
+            Map.entry(0x406C, "효쇼 란류"),
+            Map.entry(0x64AE, "환영 가마이타치"),
+            Map.entry(0x64B0, "허영 노즈치"),
+            Map.entry(0x64B1, "갈래 뇌수"),
+            Map.entry(0x64B2, "성긴 뇌수"),
+            Map.entry(0x905D, "독무리"),
+            Map.entry(0x905E, "쿠나이즈 베인"),
+            Map.entry(0x905F, "데스프로그 미디엄"),
+            Map.entry(0x9060, "제쇼 멧포"),
+            Map.entry(0x9061, "천리지도"),
+            Map.entry(0x5EDB, "도시스"),
+            Map.entry(0x5EDC, "진단"),
+            Map.entry(0x5EDE, "예후"),
+            Map.entry(0x5EE1, "플레그마"),
+            Map.entry(0x5EE3, "유크라시아 진단"),
+            Map.entry(0x5EE4, "유크라시아 예후"),
+            Map.entry(0x5EE5, "유크라시아 도시스"),
+            Map.entry(0x5EE8, "드루오콜"),
+            Map.entry(0x5EE9, "디스크라시아"),
+            Map.entry(0x5EEB, "익소콜"),
+            Map.entry(0x5EED, "펩시스"),
+            Map.entry(0x5EEF, "타우로콜"),
+            Map.entry(0x5EF0, "톡시콘"),
+            Map.entry(0x5EF2, "도시스 II"),
+            Map.entry(0x5EF3, "플레그마 II"),
+            Map.entry(0x53F4, "유크라시아 도시스 II"),
+            Map.entry(0x5EF6, "홀로스"),
+            Map.entry(0x5EF8, "도시스 III"),
+            Map.entry(0x5EF9, "플레그마 III"),
+            Map.entry(0x5EFA, "유크라시아 도시스 III"),
+            Map.entry(0x5EFB, "디스크라시아 II"),
+            Map.entry(0x5EFC, "톡시콘 II"),
+            Map.entry(0x5EFE, "프뉴마 공격"),
+            Map.entry(0x6B84, "프뉴마 회복"),
+            Map.entry(0x90A8, "유크라시아 디스크라시아"),
+            Map.entry(0x90A9, "프시케"),
+            Map.entry(0x90AA, "유크라시아 예후 II"),
+            Map.entry(0x004B, "정권 지르기"),
+            Map.entry(0x004E, "몸통 가르기"),
+            Map.entry(0x0054, "올려 찌르기"),
+            Map.entry(0x0056, "둠 스파이크"),
+            Map.entry(0x0057, "이음새 찌르기"),
+            Map.entry(0x0058, "카오스 쓰러스트"),
+            Map.entry(0x005A, "관통탄"),
+            Map.entry(0x005C, "점프"),
+            Map.entry(0x0060, "용염쇄"),
+            Map.entry(0x0DE2, "송곳니와 발톱"),
+            Map.entry(0x0DE3, "게이르스코굴"),
+            Map.entry(0x0DE4, "몸통 회전 찌르기"),
+            Map.entry(0x1CE5, "소닉 쓰러스트"),
+            Map.entry(0x1CE7, "미라지 다이브"),
+            Map.entry(0x1CE8, "나스트론드"),
+            Map.entry(0x405D, "코어선 토멘트"),
+            Map.entry(0x405E, "하이 점프"),
+            Map.entry(0x405F, "라이덴 스러스트"),
+            Map.entry(0x4060, "스타다이버"),
+            Map.entry(0x64AA, "드라코니안 퓨리"),
+            Map.entry(0x64AB, "헤븐스 스러스트"),
+            Map.entry(0x64AC, "카오틱 스프링"),
+            Map.entry(0x64AD, "웜윈드 스러스트"),
+            Map.entry(0x9058, "드레이크베인"),
+            Map.entry(0x9059, "라이즈 오브 더 드래곤"),
+            Map.entry(0x905A, "랜스 배러지"),
+            Map.entry(0x905B, "스파이럴 블로우"),
+            Map.entry(0x905C, "스타크로스"),
+            Map.entry(0x00A7, "에너지 드레인"),
+            Map.entry(0x00B9, "고무격려책"),
+            Map.entry(0x00BA, "사기고양책"),
+            Map.entry(0x00BD, "생명활성술"),
+            Map.entry(0x00BE, "물리 치료"),
+            Map.entry(0x0322, "포옹"),
+            Map.entry(0x0DFF, "불굴의 의지"),
+            Map.entry(0x0E00, "브로일"),
+            Map.entry(0x1D0B, "브로일 II"),
+            Map.entry(0x409B, "아트 오브 워"),
+            Map.entry(0x409D, "브로일 III"),
+            Map.entry(0x409F, "페이 블레싱"),
+            Map.entry(0x40A0, "페이 블레싱"),
+            Map.entry(0x40A2, "위안"),
+            Map.entry(0x40A3, "위안"),
+            Map.entry(0x40A4, "세라픽 베일"),
+            Map.entry(0x45CD, "루인"),
+            Map.entry(0x45CE, "루인 II"),
+            Map.entry(0x6509, "브로일 IV"),
+            Map.entry(0x650A, "아트 오브 워 II"),
+            Map.entry(0x650B, "전개전술"),
+            Map.entry(0x9095, "콘시테이션"),
+            Map.entry(0x9097, "매니페스테이션"),
+            Map.entry(0x9098, "액세션")
+    );
+
     private ActionNameLibrary() {
     }
 
@@ -135,5 +247,16 @@ public final class ActionNameLibrary {
             return "";
         }
         return ACTION_NAMES.getOrDefault(actionId, "");
+    }
+
+    public static String resolveDisplay(int actionId) {
+        if (actionId <= 0) {
+            return "";
+        }
+        String display = ACTION_DISPLAY_NAMES.get(actionId);
+        if (display != null && !display.isBlank()) {
+            return display;
+        }
+        return resolve(actionId);
     }
 }

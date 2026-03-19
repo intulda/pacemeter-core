@@ -714,6 +714,86 @@ class ActIngestionServiceTest {
     }
 
     @Test
+    void unknownStatusDot_prefersCorroboratedMarkerAndType37SignalOverNewerMismatchedMarker() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        long scholarId = 0x1000000BL;
+        long whiteMageId = 0x1000000CL;
+        long bossId = 0x40000011L;
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, scholarId, whiteMageId)));
+        service.onParsed(new CombatantAdded(
+                base(),
+                scholarId,
+                "Scholar",
+                0x1C,
+                0L,
+                190000,
+                190000,
+                "03|...|raw"
+        ));
+        service.onParsed(new CombatantAdded(
+                base(),
+                whiteMageId,
+                "WhiteMage",
+                0x18,
+                0L,
+                190000,
+                190000,
+                "03|...|raw"
+        ));
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(100),
+                21,
+                scholarId,
+                "Scholar",
+                0x409C,
+                "Biolysis",
+                bossId,
+                "Boss",
+                false,
+                false,
+                1200,
+                "21|...|raw"
+        ));
+        service.onParsed(new DotStatusSignalRaw(
+                base().plusMillis(200),
+                bossId,
+                0x0767,
+                scholarId,
+                "37|...|raw"
+        ));
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(900),
+                21,
+                whiteMageId,
+                "WhiteMage",
+                0x4094,
+                "Dia",
+                bossId,
+                "Boss",
+                false,
+                false,
+                900,
+                "21|...|raw"
+        ));
+
+        DotTickRaw dot = new DotTickRaw(
+                base().plusMillis(2_000),
+                bossId,
+                "Boss",
+                "DoT",
+                0,
+                scholarId,
+                "Scholar",
+                12_345,
+                "24|...|raw"
+        );
+
+        assertEquals(0x409C, service.resolveDotActionId(dot));
+    }
+
+    @Test
     void dotTick_emitsDotDamageEvent() {
         service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
@@ -745,6 +825,23 @@ class ActIngestionServiceTest {
         assertEquals(0xEBACL, event.amount());
         assertFalse(event.criticalHit());
         assertFalse(event.directHit());
+    }
+
+    @Test
+    void dotTick_withKnownTrackedStatus_emitsMappedActionId() {
+        DotTickRaw dot = new DotTickRaw(
+                base().plusMillis(200),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0x74F,
+                0x102884E5L,
+                "WhiteMage",
+                0xEBACL,
+                "24|...|raw"
+        );
+
+        assertEquals(0x4094, service.resolveDotActionId(dot));
     }
 
     @Test
@@ -940,10 +1037,9 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertEquals(2, events.size());
+        assertEquals(1, events.size());
         assertEquals(9_001L, events.stream().mapToLong(CombatEvent.DamageEvent::amount).sum());
         assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000AL)) && event.actionId() == 0x5EFA));
-        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x409C));
     }
 
     @Test
@@ -1026,10 +1122,10 @@ class ActIngestionServiceTest {
 
         assertEquals(4, events.size());
         assertEquals(10_000L, events.stream().mapToLong(CombatEvent.DamageEvent::amount).sum());
-        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000AL)) && event.actionId() == 0x0A38));
-        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x0767));
-        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x0F2B));
-        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000CL)) && event.actionId() == 0x0A9F));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000AL)) && event.actionId() == 0x5EFA));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x409C));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x9094));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000CL)) && event.actionId() == 0x64AC));
     }
 
     @Test
