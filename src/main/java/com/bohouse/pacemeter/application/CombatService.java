@@ -318,6 +318,7 @@ public class CombatService implements CombatEventPort {
                 .orElse(PaceProfile.NONE);
         PaceProfile individualProfile = paceProfileProvider.findIndividualProfile(fightName, territoryId, playerJobId)
                 .orElse(PaceProfile.NONE);
+        EngineResult refreshResult = null;
 
         synchronized (lock) {
             if (generation != profileLoadGeneration.get()) {
@@ -328,7 +329,10 @@ public class CombatService implements CombatEventPort {
                 return;
             }
             engine.setProfiles(partyProfile, individualProfile);
+            refreshResult = EngineResult.withSnapshot(engine.snapshotCurrent(false));
         }
+
+        refreshResult.snapshot().ifPresent(snapshotPublisher::publish);
     }
 
     private static final class ProfileLoaderThreadFactory implements ThreadFactory {

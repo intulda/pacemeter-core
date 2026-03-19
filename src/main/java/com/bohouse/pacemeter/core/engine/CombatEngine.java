@@ -77,13 +77,15 @@ public final class CombatEngine {
         boolean shouldSnapshot = state.reduce(event);
 
         if (shouldSnapshot) {
-            boolean isFinal = event instanceof CombatEvent.FightEnd;
-            OverlaySnapshot snapshot = aggregator.aggregate(
-                    state, partyProfile, individualProfile, currentPlayerId, isFinal, jobIdMap, enrageInfo);
-            return EngineResult.withSnapshot(snapshot);
+            return EngineResult.withSnapshot(snapshotCurrent(event instanceof CombatEvent.FightEnd));
         }
 
         return EngineResult.empty();
+    }
+
+    public OverlaySnapshot snapshotCurrent(boolean isFinal) {
+        return aggregator.aggregate(
+                state, partyProfile, individualProfile, currentPlayerId, isFinal, jobIdMap, enrageInfo);
     }
 
     /**

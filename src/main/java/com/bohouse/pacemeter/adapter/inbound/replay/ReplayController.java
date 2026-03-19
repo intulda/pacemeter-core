@@ -42,7 +42,7 @@ public class ReplayController {
             @RequestParam(defaultValue = "heavy3_pull1_full.log") String fileName) {
         executor.submit(() -> {
             try {
-                log.info("[Replay] starting replay from {} (delay={}ms, ='{}')", fileName, delayMs, playerName);
+                log.info("[Replay] starting replay from {} (delay={}ms, player='{}')", fileName, delayMs, playerName);
                 var resource = new ClassPathResource(fileName);
                 try (var reader = new BufferedReader(
                         new InputStreamReader(resource.getInputStream(), StandardCharsets.UTF_8))) {
@@ -53,7 +53,9 @@ public class ReplayController {
                     boolean primaryPlayerSeenInLog = false;
 
                     while ((line = reader.readLine()) != null) {
-                        if (line.isBlank()) continue;
+                        if (line.isBlank()) {
+                            continue;
+                        }
 
                         ParsedLine parsed = parser.parse(line);
                         if (parsed != null) {
