@@ -3,7 +3,9 @@ package com.bohouse.pacemeter.application;
 import com.bohouse.pacemeter.adapter.inbound.actws.ActLineParser;
 import com.bohouse.pacemeter.adapter.inbound.actws.BuffApplyRaw;
 import com.bohouse.pacemeter.adapter.inbound.actws.DotTickRaw;
+import com.bohouse.pacemeter.adapter.inbound.actws.DotStatusSignalRaw;
 import com.bohouse.pacemeter.adapter.inbound.actws.NetworkAbilityRaw;
+import com.bohouse.pacemeter.adapter.inbound.actws.PartyList;
 import com.bohouse.pacemeter.adapter.inbound.actws.ParsedLine;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsApiClient;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsTokenStore;
@@ -11,6 +13,7 @@ import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
 import com.bohouse.pacemeter.core.engine.CombatEngine;
 import com.bohouse.pacemeter.core.model.ActorId;
 import com.bohouse.pacemeter.core.model.DamageType;
+import com.bohouse.pacemeter.core.model.DotAttributionRules;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
@@ -20,6 +23,7 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -29,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -53,13 +58,10 @@ class SubmissionParityReportDiagnostics {
         System.out.println("Parity quality: " + report.parityQuality());
 
         report.comparisons().stream()
-                .filter(comparison -> {
-                    String name = comparison.localName();
-                    return "생쥐".equals(name)
-                            || "나성".equals(name)
-                            || "후엔".equals(name)
-                            || "치삐".equals(name);
-                })
+                .sorted((left, right) -> Double.compare(
+                        Math.abs(right.rdpsDelta()),
+                        Math.abs(left.rdpsDelta())
+                ))
                 .forEach(comparison -> {
                     System.out.printf(
                             "%s job=%s localDps=%.1f localDerived=%.1f localOnline=%.1f fflogs=%.1f delta=%.1f ratio=%.3f givenDelta=%.1f takenDelta=%.1f totalDelta=%.1f warnings=%s%n",
@@ -129,6 +131,429 @@ class SubmissionParityReportDiagnostics {
                     System.out.println("  localTopSkills=" + comparison.localTopSkills());
                     System.out.println("  fflogsTopSkills=" + comparison.fflogsTopSkills());
                 });
+    }
+
+    @Test
+    void debugAllFightsParity_forHeavy2Report_printsFightByFightQuality() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport baseline = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", baseline.fflogs().status());
+
+        List<SubmissionParityReport.FflogsFightSummary> fights = baseline.fflogs().fights().stream()
+                .filter(fight -> fight.encounterId() > 0)
+                .filter(fight -> fight.name() != null && !fight.name().isBlank())
+                .toList();
+
+        System.out.printf(
+                "allFightsParity submission=%s reportCode=%s fightCount=%d%n",
+                baseline.metadata().submissionId(),
+                baseline.fflogs().reportCode(),
+                fights.size()
+        );
+
+        for (SubmissionParityReport.FflogsFightSummary fight : fights) {
+            SubmissionParityReport report = service.buildReportForFight(
+                    "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                    fight.id()
+            );
+            SubmissionParityReport.ParityQualitySummary quality = report.parityQuality();
+            System.out.printf(
+                    "  fight=%d name=%s matched=%d mape=%.6f p95=%.6f max=%.6f outliers=%d within1=%.3f within3=%.3f within5=%.3f%n",
+                    fight.id(),
+                    fight.name(),
+                    quality.matchedActorCount(),
+                    quality.meanAbsolutePercentageError(),
+                    quality.p95AbsolutePercentageError(),
+                    quality.maxAbsolutePercentageError(),
+                    quality.outlierActorCount(),
+                    quality.withinOnePercentRatio(),
+                    quality.withinThreePercentRatio(),
+                    quality.withinFivePercentRatio()
+            );
+        }
+    }
+
+    @Test
+    void debugAllFightsParity_forHeavy2Report_printsTopActorAndSkillDeltas() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport baseline = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", baseline.fflogs().status());
+
+        List<SubmissionParityReport.FflogsFightSummary> fights = baseline.fflogs().fights().stream()
+                .filter(fight -> fight.encounterId() > 0)
+                .filter(fight -> fight.name() != null && !fight.name().isBlank())
+                .toList();
+
+        for (SubmissionParityReport.FflogsFightSummary fight : fights) {
+            SubmissionParityReport report = service.buildReportForFight(
+                    "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                    fight.id()
+            );
+            System.out.printf(
+                    "allFightsTopDelta fight=%d name=%s p95=%.6f max=%.6f%n",
+                    fight.id(),
+                    fight.name(),
+                    report.parityQuality().p95AbsolutePercentageError(),
+                    report.parityQuality().maxAbsolutePercentageError()
+            );
+
+            report.comparisons().stream()
+                    .sorted((left, right) -> Double.compare(
+                            Math.abs(right.rdpsDelta()),
+                            Math.abs(left.rdpsDelta())
+                    ))
+                    .limit(3)
+                    .forEach(comparison -> {
+                        System.out.printf(
+                                "  actor=%s job=%s delta=%.1f ratio=%.4f totalDelta=%.1f warnings=%s%n",
+                                comparison.localName(),
+                                comparison.fflogsType(),
+                                comparison.rdpsDelta(),
+                                comparison.rdpsDeltaRatio(),
+                                comparison.totalDamageDelta(),
+                                comparison.warningReasons()
+                        );
+                        comparison.localTopSkills().stream().limit(5).forEach(skill -> System.out.printf(
+                                "    localSkill guid=%s name=%s amount=%d hits=%d%n",
+                                skill.skillGuid() == null ? "null" : Integer.toHexString(skill.skillGuid()).toUpperCase(),
+                                skill.skillName(),
+                                skill.totalDamage(),
+                                skill.hitCount()
+                        ));
+                        comparison.fflogsTopSkills().stream().limit(5).forEach(skill -> System.out.printf(
+                                "    fflogsSkill guid=%s name=%s amount=%d hits=%d%n",
+                                skill.skillGuid() == null ? "null" : Integer.toHexString(skill.skillGuid()).toUpperCase(),
+                                skill.skillName(),
+                                skill.totalDamage(),
+                                skill.hitCount()
+                        ));
+                    });
+        }
+    }
+
+    @Test
+    void debugDotAttributionModes_acrossSubmissions_printsCountsAndTopDeltas() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        List<String> submissions = List.of(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt"
+        );
+
+        for (String submissionId : submissions) {
+            SubmissionParityReport report = service.buildReport(submissionId);
+            assertEquals("ok", report.fflogs().status());
+            Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+            Method shouldIncludeLine = openShouldIncludeLine();
+
+            ActLineParser parser = new ActLineParser();
+            CombatService combatService = new CombatService(
+                    new CombatEngine(),
+                    snapshot -> {},
+                    (name, zone) -> Optional.empty(),
+                    territoryId -> Optional.empty()
+            );
+            com.bohouse.pacemeter.application.port.inbound.CombatEventPort forwardingPort =
+                    new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                        @Override
+                        public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                                com.bohouse.pacemeter.core.event.CombatEvent event
+                        ) {
+                            return combatService.onEvent(event);
+                        }
+
+                        @Override
+                        public void setCurrentPlayerId(ActorId playerId) {
+                            combatService.setCurrentPlayerId(playerId);
+                        }
+
+                        @Override
+                        public void setJobId(ActorId actorId, int jobId) {
+                            combatService.setJobId(actorId, jobId);
+                        }
+                    };
+            ActIngestionService ingestion = new ActIngestionService(
+                    forwardingPort,
+                    combatService,
+                    new FflogsZoneLookup(new ObjectMapper())
+            );
+
+            Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+            for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+                boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+                if (!included) {
+                    continue;
+                }
+                ParsedLine parsed = parser.parse(line);
+                if (parsed != null) {
+                    ingestion.onParsed(parsed);
+                }
+            }
+
+            Map<String, Long> modeCounts = ingestion.debugDotAttributionModeCounts();
+            String modeSummary = modeCounts.entrySet().stream()
+                    .sorted(Map.Entry.comparingByKey())
+                    .map(entry -> entry.getKey() + "=" + entry.getValue())
+                    .collect(Collectors.joining(", "));
+            System.out.printf(
+                    "dotMode submission=%s selectedFight=%s modeCounts={%s}%n",
+                    submissionId,
+                    report.fflogs().selectedFightId(),
+                    modeSummary
+            );
+
+            Map<String, Long> assignedAmounts = ingestion.debugDotAttributionAssignedAmounts();
+            Map<String, Long> assignedHits = ingestion.debugDotAttributionAssignedHitCounts();
+            assignedAmounts.entrySet().stream()
+                    .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                    .limit(8)
+                    .forEach(entry -> System.out.printf(
+                            "  dotAssign key=%s amount=%d hits=%d%n",
+                            entry.getKey(),
+                            entry.getValue(),
+                            assignedHits.getOrDefault(entry.getKey(), 0L)
+                    ));
+
+            report.comparisons().stream()
+                    .sorted((left, right) -> Double.compare(Math.abs(right.rdpsDelta()), Math.abs(left.rdpsDelta())))
+                    .limit(3)
+                    .forEach(comparison -> System.out.printf(
+                            "  topDelta actor=%s job=%s delta=%.1f ratio=%.3f warnings=%s%n",
+                            comparison.localName(),
+                            comparison.fflogsType(),
+                            comparison.rdpsDelta(),
+                            comparison.rdpsDeltaRatio(),
+                            comparison.warningReasons()
+                    ));
+        }
+    }
+
+    @Test
+    void debugStatus0ExpectedVsAssigned_bySourceAction_printsTopGaps() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        Method shouldIncludeLine = openShouldIncludeLine();
+        DotAttributionRules rules = DotAttributionRules.fromCatalog();
+        Map<Integer, Integer> statusToAction = rules.statusToAction();
+        List<String> submissions = List.of(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt"
+        );
+
+        for (String submissionId : submissions) {
+            SubmissionParityReport report = service.buildReport(submissionId);
+            assertEquals("ok", report.fflogs().status());
+            Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+
+            ActLineParser parser = new ActLineParser();
+            CombatService combatService = new CombatService(
+                    new CombatEngine(),
+                    snapshot -> {},
+                    (name, zone) -> Optional.empty(),
+                    territoryId -> Optional.empty()
+            );
+            com.bohouse.pacemeter.application.port.inbound.CombatEventPort forwardingPort =
+                    new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                        @Override
+                        public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                                com.bohouse.pacemeter.core.event.CombatEvent event
+                        ) {
+                            return combatService.onEvent(event);
+                        }
+
+                        @Override
+                        public void setCurrentPlayerId(ActorId playerId) {
+                            combatService.setCurrentPlayerId(playerId);
+                        }
+
+                        @Override
+                        public void setJobId(ActorId actorId, int jobId) {
+                            combatService.setJobId(actorId, jobId);
+                        }
+                    };
+            ActIngestionService ingestion = new ActIngestionService(
+                    forwardingPort,
+                    combatService,
+                    new FflogsZoneLookup(new ObjectMapper())
+            );
+
+            Set<Long> partyMembers = new HashSet<>();
+            Map<SourceTargetKey, DotEvidence> actionEvidenceBySourceTarget = new HashMap<>();
+            Map<SourceTargetKey, DotEvidence> statusEvidenceBySourceTarget = new HashMap<>();
+            Map<SourceActionKey, Long> expectedBySourceAction = new HashMap<>();
+            long totalStatus0KnownSourceDamage = 0L;
+            long matchedExpectedDamage = 0L;
+
+            Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+            for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+                boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+                if (!included) {
+                    continue;
+                }
+                ParsedLine parsed = parser.parse(line);
+                if (parsed == null) {
+                    continue;
+                }
+                ingestion.onParsed(parsed);
+
+                if (parsed instanceof PartyList partyList) {
+                    partyMembers.clear();
+                    partyMembers.addAll(partyList.partyMemberIds());
+                    continue;
+                }
+                if (parsed instanceof NetworkAbilityRaw ability) {
+                    if (partyMembers.contains(ability.actorId())) {
+                        actionEvidenceBySourceTarget.put(
+                                new SourceTargetKey(ability.actorId(), ability.targetId()),
+                                new DotEvidence(ability.skillId(), ability.ts())
+                        );
+                    }
+                    continue;
+                }
+                if (parsed instanceof BuffApplyRaw buffApply) {
+                    if (partyMembers.contains(buffApply.sourceId())) {
+                        statusEvidenceBySourceTarget.put(
+                                new SourceTargetKey(buffApply.sourceId(), buffApply.targetId()),
+                                new DotEvidence(buffApply.statusId(), buffApply.ts())
+                        );
+                    }
+                    continue;
+                }
+                if (parsed instanceof DotStatusSignalRaw signal) {
+                    for (DotStatusSignalRaw.StatusSignal statusSignal : signal.signals()) {
+                        if (!partyMembers.contains(statusSignal.sourceId())) {
+                            continue;
+                        }
+                        statusEvidenceBySourceTarget.put(
+                                new SourceTargetKey(statusSignal.sourceId(), signal.targetId()),
+                                new DotEvidence(statusSignal.statusId(), signal.ts())
+                        );
+                    }
+                    continue;
+                }
+                if (!(parsed instanceof DotTickRaw dot)) {
+                    continue;
+                }
+                if (dot.statusId() != 0 || dot.sourceId() == 0L || !partyMembers.contains(dot.sourceId())) {
+                    continue;
+                }
+
+                totalStatus0KnownSourceDamage += dot.damage();
+                SourceTargetKey key = new SourceTargetKey(dot.sourceId(), dot.targetId());
+                DotEvidence actionEvidence = actionEvidenceBySourceTarget.get(key);
+                DotEvidence statusEvidence = statusEvidenceBySourceTarget.get(key);
+                Integer expectedAction = resolveExpectedActionFromExactEvidence(
+                        dot.ts(),
+                        actionEvidence,
+                        statusEvidence,
+                        statusToAction
+                );
+                if (expectedAction == null || expectedAction == 0) {
+                    continue;
+                }
+                matchedExpectedDamage += dot.damage();
+                expectedBySourceAction.merge(new SourceActionKey(dot.sourceId(), expectedAction), dot.damage(), Long::sum);
+            }
+
+            Map<SourceActionKey, Long> assignedBySourceAction = aggregateAssignedStatus0BySourceAction(
+                    ingestion.debugDotAttributionAssignedAmounts()
+            );
+            System.out.printf(
+                    "status0Expected submission=%s selectedFight=%s totalDamage=%d matchedDamage=%d matchedRatio=%.3f%n",
+                    submissionId,
+                    report.fflogs().selectedFightId(),
+                    totalStatus0KnownSourceDamage,
+                    matchedExpectedDamage,
+                    totalStatus0KnownSourceDamage > 0
+                            ? matchedExpectedDamage / (double) totalStatus0KnownSourceDamage
+                            : 0.0
+            );
+            expectedBySourceAction.entrySet().stream()
+                    .map(entry -> {
+                        long assigned = assignedBySourceAction.getOrDefault(entry.getKey(), 0L);
+                        long delta = assigned - entry.getValue();
+                        return new SourceActionDelta(entry.getKey().sourceId(), entry.getKey().actionId(), entry.getValue(), assigned, delta);
+                    })
+                    .sorted((left, right) -> Long.compare(Math.abs(right.delta()), Math.abs(left.delta())))
+                    .limit(10)
+                    .forEach(delta -> System.out.printf(
+                            "  expectedVsAssigned source=%s action=%s expected=%d assigned=%d delta=%d%n",
+                            Long.toHexString(delta.sourceId()).toUpperCase(),
+                            Integer.toHexString(delta.actionId()).toUpperCase(),
+                            delta.expected(),
+                            delta.assigned(),
+                            delta.delta()
+                    ));
+        }
+    }
+
+    @Test
+    void debugType37SignalCoverage_acrossSubmissions_printsSelectedFightCounts() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        Method shouldIncludeLine = openShouldIncludeLine();
+        Set<Integer> trackedStatusIds = Set.of(0x0767, 0x0F2B, 0x0A38, 0x0A9F, 0x0907, 0x04CC, 0x04AB);
+        List<String> submissions = List.of(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz"
+        );
+
+        for (String submissionId : submissions) {
+            SubmissionParityReport report = service.buildReport(submissionId);
+            assertEquals("ok", report.fflogs().status());
+            Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+            assertTrue(replayWindow.isPresent());
+
+            long type37Total = 0L;
+            long type37WindowIncluded = 0L;
+            long dotSignalParsedLines = 0L;
+            long dotSignalParsedSlots = 0L;
+            long trackedSignalSlots = 0L;
+            Map<Integer, Long> trackedByStatus = new HashMap<>();
+
+            Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+            for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+                if (line.startsWith("37|")) {
+                    type37Total++;
+                }
+                boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+                if (!included) {
+                    continue;
+                }
+                if (line.startsWith("37|")) {
+                    type37WindowIncluded++;
+                }
+                ParsedLine parsed = new ActLineParser().parse(line);
+                if (!(parsed instanceof DotStatusSignalRaw signal)) {
+                    continue;
+                }
+                dotSignalParsedLines++;
+                dotSignalParsedSlots += signal.signals().size();
+                for (DotStatusSignalRaw.StatusSignal statusSignal : signal.signals()) {
+                    if (!trackedStatusIds.contains(statusSignal.statusId())) {
+                        continue;
+                    }
+                    trackedSignalSlots++;
+                    trackedByStatus.merge(statusSignal.statusId(), 1L, Long::sum);
+                }
+            }
+
+            String trackedSummary = trackedByStatus.entrySet().stream()
+                    .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                    .map(entry -> Integer.toHexString(entry.getKey()).toUpperCase() + "=" + entry.getValue())
+                    .collect(Collectors.joining(", "));
+
+            System.out.printf(
+                    "type37Coverage submission=%s selectedFight=%s total37=%d included37=%d parsedLines=%d parsedSlots=%d trackedSlots=%d trackedByStatus={%s}%n",
+                    submissionId,
+                    report.fflogs().selectedFightId(),
+                    type37Total,
+                    type37WindowIncluded,
+                    dotSignalParsedLines,
+                    dotSignalParsedSlots,
+                    trackedSignalSlots,
+                    trackedSummary
+            );
+        }
     }
 
     @Test
@@ -653,7 +1078,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(2, report.fflogs().selectedFightId());
+        assertEquals(6, report.fflogs().selectedFightId());
 
         Map<String, Integer[]> targets = Map.of(
                 "WhiteMage", new Integer[]{0x4094, 0x074F},
@@ -690,7 +1115,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(2, report.fflogs().selectedFightId());
+        assertEquals(6, report.fflogs().selectedFightId());
 
         Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
         Method shouldIncludeLine = openShouldIncludeLine();
@@ -741,7 +1166,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(2, report.fflogs().selectedFightId());
+        assertEquals(6, report.fflogs().selectedFightId());
 
         Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
         Method shouldIncludeLine = openShouldIncludeLine();
@@ -885,6 +1310,118 @@ class SubmissionParityReportDiagnostics {
 
         assertNotNull(rollup);
         assertTrue(rollup.submissionsScanned() >= 1);
+    }
+
+    @Test
+    void debugStatus0DotEvidenceCoverage_acrossSubmissions_printsTargetMismatchRates() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        Method shouldIncludeLine = openShouldIncludeLine();
+        Set<Integer> trackedStatusIds = DotAttributionRules.fromCatalog().snapshotStatusIds();
+        Duration evidenceWindow = Duration.ofMillis(90_000L);
+        List<String> submissionIds = List.of(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt"
+        );
+
+        for (String submissionId : submissionIds) {
+            SubmissionParityReport report = service.buildReport(submissionId);
+            Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+
+            Map<SourceTargetKey, RecentDotEvidence> evidenceBySourceTarget = new HashMap<>();
+            Map<Long, RecentDotEvidence> evidenceBySource = new HashMap<>();
+            Set<Long> partyMembers = new HashSet<>();
+            long status0KnownSourceDots = 0L;
+            long exactEvidenceMatch = 0L;
+            long sourceOnlyEvidenceMatch = 0L;
+            long sourceOnlyTargetMismatch = 0L;
+            long sourceOnlySameTargetName = 0L;
+            long noRecentEvidence = 0L;
+
+            Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+            for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+                boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+                if (!included) {
+                    continue;
+                }
+                ParsedLine parsed = new ActLineParser().parse(line);
+                if (parsed == null) {
+                    continue;
+                }
+                if (parsed instanceof PartyList partyList) {
+                    partyMembers.clear();
+                    partyMembers.addAll(partyList.partyMemberIds());
+                    continue;
+                }
+                if (parsed instanceof BuffApplyRaw buffApply) {
+                    if (trackedStatusIds.contains(buffApply.statusId()) && partyMembers.contains(buffApply.sourceId())) {
+                        RecentDotEvidence evidence = new RecentDotEvidence(
+                                buffApply.ts(),
+                                buffApply.targetId(),
+                                buffApply.statusId(),
+                                buffApply.targetName()
+                        );
+                        evidenceBySourceTarget.put(new SourceTargetKey(buffApply.sourceId(), buffApply.targetId()), evidence);
+                        evidenceBySource.put(buffApply.sourceId(), evidence);
+                    }
+                    continue;
+                }
+                if (parsed instanceof DotStatusSignalRaw signal) {
+                    for (DotStatusSignalRaw.StatusSignal statusSignal : signal.signals()) {
+                        if (!trackedStatusIds.contains(statusSignal.statusId()) || !partyMembers.contains(statusSignal.sourceId())) {
+                            continue;
+                        }
+                        RecentDotEvidence evidence = new RecentDotEvidence(
+                                signal.ts(),
+                                signal.targetId(),
+                                statusSignal.statusId(),
+                                ""
+                        );
+                        evidenceBySourceTarget.put(new SourceTargetKey(statusSignal.sourceId(), signal.targetId()), evidence);
+                        evidenceBySource.put(statusSignal.sourceId(), evidence);
+                    }
+                    continue;
+                }
+                if (!(parsed instanceof DotTickRaw dot)) {
+                    continue;
+                }
+                if (dot.statusId() != 0 || dot.sourceId() == 0L || !partyMembers.contains(dot.sourceId())) {
+                    continue;
+                }
+
+                status0KnownSourceDots++;
+                SourceTargetKey key = new SourceTargetKey(dot.sourceId(), dot.targetId());
+                RecentDotEvidence exact = evidenceBySourceTarget.get(key);
+                if (isRecent(dot.ts(), exact, evidenceWindow)) {
+                    exactEvidenceMatch++;
+                    continue;
+                }
+                RecentDotEvidence sourceOnly = evidenceBySource.get(dot.sourceId());
+                if (isRecent(dot.ts(), sourceOnly, evidenceWindow)) {
+                    sourceOnlyEvidenceMatch++;
+                    if (sourceOnly != null && sourceOnly.targetId() != dot.targetId()) {
+                        sourceOnlyTargetMismatch++;
+                        if (normalizeName(sourceOnly.targetName()).equals(normalizeName(dot.targetName()))) {
+                            sourceOnlySameTargetName++;
+                        }
+                    }
+                } else {
+                    noRecentEvidence++;
+                }
+            }
+
+            System.out.printf(
+                    "status0Evidence submission=%s selectedFight=%s total=%d exact=%d sourceOnly=%d sourceOnlyTargetMismatch=%d sourceOnlySameTargetName=%d noEvidence=%d%n",
+                    submissionId,
+                    report.fflogs().selectedFightId(),
+                    status0KnownSourceDots,
+                    exactEvidenceMatch,
+                    sourceOnlyEvidenceMatch,
+                    sourceOnlyTargetMismatch,
+                    sourceOnlySameTargetName,
+                    noRecentEvidence
+            );
+        }
     }
 
     @Test
@@ -1635,7 +2172,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(2, report.fflogs().selectedFightId());
+        assertEquals(6, report.fflogs().selectedFightId());
 
         Set<String> targetJobs = Set.of("Samurai", "Scholar", "WhiteMage", "Pictomancer");
         List<String> targetActors = report.comparisons().stream()
@@ -1769,7 +2306,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(2, report.fflogs().selectedFightId());
+        assertEquals(6, report.fflogs().selectedFightId());
 
         SubmissionParityReport.ActorParityComparison pct = report.comparisons().stream()
                 .filter(c -> "Pictomancer".equalsIgnoreCase(c.fflogsType()) && "바나바나".equals(c.localName()))
@@ -1905,7 +2442,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(2, report.fflogs().selectedFightId());
+        assertEquals(6, report.fflogs().selectedFightId());
 
         Set<String> targetJobs = Set.of("Samurai", "Scholar", "WhiteMage", "Pictomancer");
         List<SubmissionParityReport.ActorParityComparison> targets = report.comparisons().stream()
@@ -1994,7 +2531,7 @@ class SubmissionParityReportDiagnostics {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
         assertEquals("ok", report.fflogs().status());
-        assertEquals(2, report.fflogs().selectedFightId());
+        assertEquals(6, report.fflogs().selectedFightId());
 
         Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
         Method shouldIncludeLine = openShouldIncludeLine();
@@ -2100,6 +2637,533 @@ class SubmissionParityReportDiagnostics {
                     localTotal - fflogsAbilityTotal
             );
         }
+    }
+
+    @Test
+    void debugHeavy2Fight6ActorAbilityTargetParity_printsSamSchWhmTargetDeltas() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> capturedDamageEvents = new ArrayList<>();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        if (event instanceof com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent damageEvent) {
+                            capturedDamageEvents.add(damageEvent);
+                        }
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        Map<Long, String> targetNameById = new HashMap<>();
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed == null) {
+                continue;
+            }
+            if (parsed instanceof NetworkAbilityRaw ability) {
+                targetNameById.putIfAbsent(ability.targetId(), ability.targetName());
+            } else if (parsed instanceof DotTickRaw dot) {
+                targetNameById.putIfAbsent(dot.targetId(), dot.targetName());
+            }
+            ingestion.onParsed(parsed);
+        }
+
+        Map<String, SubmissionParityReport.ActorParityComparison> actors = new HashMap<>();
+        for (SubmissionParityReport.ActorParityComparison comparison : report.comparisons()) {
+            if (Set.of("재탄", "젤리", "백미도사").contains(comparison.localName())) {
+                actors.put(comparison.localName(), comparison);
+            }
+        }
+        assertEquals(3, actors.size());
+        Map<String, Long> localActorIdByName = report.combat().actors().stream()
+                .collect(Collectors.toMap(
+                        CombatDebugSnapshot.ActorDebugEntry::name,
+                        actor -> actor.actorId().value(),
+                        (left, right) -> left
+                ));
+
+        Map<String, Integer> primaryAbilityByActor = Map.of(
+                "재탄", 0x1D41,
+                "젤리", 0x409C,
+                "백미도사", 0x4094
+        );
+        Map<String, Integer> fallbackAbilityByActor = Map.of(
+                "재탄", 0x4CC,
+                "젤리", 0x767,
+                "백미도사", 0x74F
+        );
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        for (Map.Entry<String, SubmissionParityReport.ActorParityComparison> entry : actors.entrySet()) {
+            String actorName = entry.getKey();
+            SubmissionParityReport.ActorParityComparison actor = entry.getValue();
+            int primaryGuid = primaryAbilityByActor.get(actorName);
+            int fallbackGuid = fallbackAbilityByActor.get(actorName);
+            long localActorId = localActorIdByName.getOrDefault(actorName, 0L);
+
+            Map<Integer, Long> localByTarget = capturedDamageEvents.stream()
+                    .filter(e -> e.sourceId().value() == localActorId)
+                    .filter(e -> e.actionId() == primaryGuid || e.actionId() == fallbackGuid)
+                    .collect(Collectors.groupingBy(
+                            e -> (int) e.targetId().value(),
+                            Collectors.summingLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::amount)
+                    ));
+
+            List<FflogsApiClient.DamageEventEntry> primaryEvents = apiClient.fetchDamageDoneEventsByAbility(
+                    report.fflogs().reportCode(),
+                    report.fflogs().selectedFightId(),
+                    actor.fflogsActorId(),
+                    primaryGuid
+            );
+            List<FflogsApiClient.DamageEventEntry> fallbackEvents = apiClient.fetchDamageDoneEventsByAbility(
+                    report.fflogs().reportCode(),
+                    report.fflogs().selectedFightId(),
+                    actor.fflogsActorId(),
+                    fallbackGuid
+            );
+
+            Map<Integer, Long> fflogsByTarget = primaryEvents.stream()
+                    .collect(Collectors.groupingBy(
+                            FflogsApiClient.DamageEventEntry::targetId,
+                            Collectors.summingLong(FflogsApiClient.DamageEventEntry::amount)
+                    ));
+            fallbackEvents.forEach(event -> fflogsByTarget.merge(event.targetId(), event.amount(), Long::sum));
+
+            Map<Integer, Long> fflogsPrimaryByTarget = primaryEvents.stream()
+                    .collect(Collectors.groupingBy(
+                            FflogsApiClient.DamageEventEntry::targetId,
+                            Collectors.summingLong(FflogsApiClient.DamageEventEntry::amount)
+                    ));
+            Map<Integer, Long> fflogsFallbackByTarget = fallbackEvents.stream()
+                    .collect(Collectors.groupingBy(
+                            FflogsApiClient.DamageEventEntry::targetId,
+                            Collectors.summingLong(FflogsApiClient.DamageEventEntry::amount)
+                    ));
+
+            long localTotal = localByTarget.values().stream().mapToLong(Long::longValue).sum();
+            long fflogsTotal = fflogsByTarget.values().stream().mapToLong(Long::longValue).sum();
+            System.out.printf(
+                    "heavy2.targetParity actor=%s primary=%s fallback=%s localTotal=%d fflogsTotal=%d%n",
+                    actorName,
+                    formatGuid(primaryGuid),
+                    formatGuid(fallbackGuid),
+                    localTotal,
+                    fflogsTotal
+            );
+            System.out.printf(
+                    "  fflogsPrimaryTotal=%d fflogsFallbackTotal=%d primaryEventCount=%d fallbackEventCount=%d%n",
+                    fflogsPrimaryByTarget.values().stream().mapToLong(Long::longValue).sum(),
+                    fflogsFallbackByTarget.values().stream().mapToLong(Long::longValue).sum(),
+                    primaryEvents.size(),
+                    fallbackEvents.size()
+            );
+
+            Set<Integer> targetIds = new HashSet<>();
+            targetIds.addAll(localByTarget.keySet());
+            targetIds.addAll(fflogsByTarget.keySet());
+            List<Integer> sortedTargets = targetIds.stream().sorted().toList();
+            for (Integer targetId : sortedTargets) {
+                long local = localByTarget.getOrDefault(targetId, 0L);
+                long fflogs = fflogsByTarget.getOrDefault(targetId, 0L);
+                if (local == 0L && fflogs == 0L) {
+                    continue;
+                }
+                String targetName = targetNameById.getOrDefault(targetId.longValue(), "?");
+                System.out.printf(
+                        "  target=%s(%s) local=%d fflogs=%d delta=%d%n",
+                        Integer.toHexString(targetId).toUpperCase(),
+                        targetName,
+                        local,
+                        fflogs,
+                        local - fflogs
+                );
+            }
+        }
+    }
+
+    @Test
+    void debugHeavy2Fight6SnapshotWeightVsAbilityTotals_printsSamSchWhmShares() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        Map<Integer, Integer> statusToGuid = Map.of(
+                0x04CC, 0x1D41, // SAM
+                0x0767, 0x409C, // SCH biolysis
+                0x0F2B, 0x9094, // SCH baneful impaction
+                0x074F, 0x4094  // WHM dia
+        );
+        Map<Integer, String> guidToActor = Map.of(
+                0x1D41, "재탄",
+                0x409C, "젤리",
+                0x9094, "젤리",
+                0x4094, "백미도사"
+        );
+
+        Map<Long, Map<String, Long>> rawDotByTargetActor = new HashMap<>();
+        Map<Long, Map<Integer, Double>> snapshotWeightsByTargetGuid = new HashMap<>();
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed instanceof DotTickRaw dot) {
+                if (dot.statusId() == 0 && Set.of("재탄", "젤리", "백미도사").contains(dot.sourceName())) {
+                    rawDotByTargetActor
+                            .computeIfAbsent(dot.targetId(), ignored -> new HashMap<>())
+                            .merge(dot.sourceName(), dot.damage(), Long::sum);
+                }
+            } else if (parsed instanceof com.bohouse.pacemeter.adapter.inbound.actws.StatusSnapshotRaw snapshot) {
+                for (com.bohouse.pacemeter.adapter.inbound.actws.StatusSnapshotRaw.StatusEntry status : snapshot.statuses()) {
+                    Integer guid = statusToGuid.get(status.statusId());
+                    if (guid == null) {
+                        continue;
+                    }
+                    double weight = decodeSnapshotFloat(status.rawValueHex());
+                    if (weight <= 0) {
+                        continue;
+                    }
+                    snapshotWeightsByTargetGuid
+                            .computeIfAbsent(snapshot.actorId(), ignored -> new HashMap<>())
+                            .merge(guid, weight, Double::sum);
+                }
+            }
+        }
+
+        long primaryTarget = rawDotByTargetActor.entrySet().stream()
+                .max((left, right) -> Long.compare(
+                        left.getValue().values().stream().mapToLong(Long::longValue).sum(),
+                        right.getValue().values().stream().mapToLong(Long::longValue).sum()
+                ))
+                .map(Map.Entry::getKey)
+                .orElse(0L);
+        assertTrue(primaryTarget != 0L);
+
+        Map<String, Long> rawByActor = rawDotByTargetActor.getOrDefault(primaryTarget, Map.of());
+        Map<Integer, Double> weightByGuid = snapshotWeightsByTargetGuid.getOrDefault(primaryTarget, Map.of());
+        double totalTrackedWeight = weightByGuid.values().stream().mapToDouble(Double::doubleValue).sum();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> capturedDamageEvents = new ArrayList<>();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        if (event instanceof com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent damageEvent) {
+                            capturedDamageEvents.add(damageEvent);
+                        }
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Integer> actorPrimaryGuid = Map.of(
+                "재탄", 0x1D41,
+                "젤리", 0x409C,
+                "백미도사", 0x4094
+        );
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+
+        System.out.printf(
+                "heavy2.snapshotShare primaryTarget=%s rawDotByActor=%s totalTrackedWeight=%.4f%n",
+                Long.toHexString(primaryTarget).toUpperCase(),
+                rawByActor,
+                totalTrackedWeight
+        );
+
+        for (Map.Entry<String, Integer> entry : actorPrimaryGuid.entrySet()) {
+            String actorName = entry.getKey();
+            int guid = entry.getValue();
+            SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                    .filter(c -> actorName.equals(c.localName()))
+                    .findFirst()
+                    .orElseThrow();
+
+            long localTotal = capturedDamageEvents.stream()
+                    .filter(e -> actorName.equals(e.sourceName()) && e.actionId() == guid)
+                    .mapToLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::amount)
+                    .sum();
+            long fflogsAbilityTotal = apiClient.fetchDamageDoneAbilities(
+                            report.fflogs().reportCode(),
+                            report.fflogs().selectedFightId(),
+                            comparison.fflogsActorId()
+                    ).stream()
+                    .filter(a -> a.guid() != null && a.guid() == guid)
+                    .mapToLong(a -> Math.round(a.total()))
+                    .sum();
+            double snapshotShare = totalTrackedWeight <= 0.0
+                    ? 0.0
+                    : weightByGuid.getOrDefault(guid, 0.0) / totalTrackedWeight;
+
+            System.out.printf(
+                    "  actor=%s guid=%s localTotal=%d fflogsAbilityTotal=%d delta=%d snapshotShare=%.4f rawSourceDot=%d%n",
+                    actorName,
+                    formatGuid(guid),
+                    localTotal,
+                    fflogsAbilityTotal,
+                    localTotal - fflogsAbilityTotal,
+                    snapshotShare,
+                    rawByActor.getOrDefault(guidToActor.get(guid), 0L)
+            );
+        }
+    }
+
+    @Test
+    void debugHeavy2Fight6GuidDirectVsDotInferred_printsSamSchWhmDecomposition() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> capturedDamageEvents = new ArrayList<>();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        if (event instanceof com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent damageEvent) {
+                            capturedDamageEvents.add(damageEvent);
+                        }
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        List<String> lines = Files.readAllLines(combatLog, StandardCharsets.UTF_8);
+        for (String line : lines) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Integer> targetGuidByActor = Map.of(
+                "재탄", 0x1D41,
+                "젤리", 0x409C,
+                "백미도사", 0x4094
+        );
+
+        Map<String, Long> rawDirectTotals = new HashMap<>();
+        Map<String, Long> rawDirectHits = new HashMap<>();
+        for (String line : lines) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (!(parsed instanceof NetworkAbilityRaw ability)) {
+                continue;
+            }
+            for (Map.Entry<String, Integer> entry : targetGuidByActor.entrySet()) {
+                if (!entry.getKey().equals(ability.actorName()) || ability.skillId() != entry.getValue()) {
+                    continue;
+                }
+                String key = entry.getKey() + "#" + Integer.toHexString(entry.getValue()).toUpperCase();
+                rawDirectTotals.merge(key, ability.damage(), Long::sum);
+                rawDirectHits.merge(key, 1L, Long::sum);
+            }
+        }
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        for (Map.Entry<String, Integer> entry : targetGuidByActor.entrySet()) {
+            String actorName = entry.getKey();
+            int guid = entry.getValue();
+            String key = actorName + "#" + Integer.toHexString(guid).toUpperCase();
+
+            long emittedTotal = capturedDamageEvents.stream()
+                    .filter(e -> actorName.equals(e.sourceName()) && e.actionId() == guid)
+                    .mapToLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::amount)
+                    .sum();
+            long emittedHits = capturedDamageEvents.stream()
+                    .filter(e -> actorName.equals(e.sourceName()) && e.actionId() == guid)
+                    .count();
+            long rawDirectTotal = rawDirectTotals.getOrDefault(key, 0L);
+            long rawDirectHit = rawDirectHits.getOrDefault(key, 0L);
+            long inferredDotTotal = emittedTotal - rawDirectTotal;
+            long inferredDotHit = emittedHits - rawDirectHit;
+
+            SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                    .filter(c -> actorName.equals(c.localName()))
+                    .findFirst()
+                    .orElseThrow();
+            long fflogsAbilityTotal = apiClient.fetchDamageDoneAbilities(
+                            report.fflogs().reportCode(),
+                            report.fflogs().selectedFightId(),
+                            comparison.fflogsActorId()
+                    ).stream()
+                    .filter(a -> a.guid() != null && a.guid() == guid)
+                    .mapToLong(a -> Math.round(a.total()))
+                    .sum();
+
+            System.out.printf(
+                    "heavy2.directVsDot actor=%s guid=%s emittedTotal=%d emittedHits=%d raw21Total=%d raw21Hits=%d inferredDotTotal=%d inferredDotHits=%d fflogsAbilityTotal=%d delta=%d%n",
+                    actorName,
+                    formatGuid(guid),
+                    emittedTotal,
+                    emittedHits,
+                    rawDirectTotal,
+                    rawDirectHit,
+                    inferredDotTotal,
+                    inferredDotHit,
+                    fflogsAbilityTotal,
+                    emittedTotal - fflogsAbilityTotal
+            );
+        }
+    }
+
+    @Test
+    void debugHeavy2Fight6RawStatus0DotSourceBreakdown_printsTopSources() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        Map<Long, Integer> jobByActorId = new HashMap<>();
+        Map<String, Long> totalBySource = new HashMap<>();
+        Map<String, Long> countBySource = new HashMap<>();
+
+        Path combatLog = Path.of("data", "submissions", "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed instanceof com.bohouse.pacemeter.adapter.inbound.actws.CombatantAdded added) {
+                if (added.jobId() != 0) {
+                    jobByActorId.put(added.id(), added.jobId());
+                }
+                continue;
+            }
+            if (!(parsed instanceof DotTickRaw dot)) {
+                continue;
+            }
+            if (!dot.isDot() || dot.statusId() != 0) {
+                continue;
+            }
+
+            int sourceJobId = jobByActorId.getOrDefault(dot.sourceId(), 0);
+            String sourceKey = dot.sourceName() + "(job=" + Integer.toHexString(sourceJobId).toUpperCase() + ")";
+            totalBySource.merge(sourceKey, dot.damage(), Long::sum);
+            countBySource.merge(sourceKey, 1L, Long::sum);
+        }
+
+        System.out.println("heavy2.rawStatus0DotSources top by totalDamage:");
+        totalBySource.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(12)
+                .forEach(entry -> System.out.printf(
+                        "  source=%s total=%d count=%d%n",
+                        entry.getKey(),
+                        entry.getValue(),
+                        countBySource.getOrDefault(entry.getKey(), 0L)
+                ));
     }
 
     private static String envOrProperty(String envKey, String propertyKey) {
@@ -2226,6 +3290,14 @@ class SubmissionParityReportDiagnostics {
         if (skillName == null || skillName.isBlank()) {
             return null;
         }
+        if (skillName.startsWith("Skill#")) {
+            String hex = skillName.substring("Skill#".length());
+            try {
+                return Integer.parseInt(hex, 16);
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
         if (skillName.startsWith("DoT#")) {
             String hex = skillName.substring("DoT#".length());
             try {
@@ -2264,6 +3336,18 @@ class SubmissionParityReportDiagnostics {
         return guid == null ? "null" : Integer.toHexString(guid).toUpperCase();
     }
 
+    private static double decodeSnapshotFloat(String rawValueHex) {
+        if (rawValueHex == null || rawValueHex.isBlank()) {
+            return 0.0;
+        }
+        try {
+            int bits = (int) Long.parseUnsignedLong(rawValueHex, 16);
+            return Float.intBitsToFloat(bits);
+        } catch (NumberFormatException ignored) {
+            return 0.0;
+        }
+    }
+
     private static long extractSourceId(String type, String[] parts) {
         try {
             if (("21".equals(type) || "22".equals(type)) && parts.length > 2) {
@@ -2292,6 +3376,65 @@ class SubmissionParityReportDiagnostics {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    private static boolean isRecent(Instant ts, RecentDotEvidence evidence, Duration window) {
+        if (evidence == null) {
+            return false;
+        }
+        long deltaMs = Math.abs(Duration.between(evidence.ts(), ts).toMillis());
+        return deltaMs <= window.toMillis();
+    }
+
+    private static Integer resolveExpectedActionFromExactEvidence(
+            Instant tickTs,
+            DotEvidence actionEvidence,
+            DotEvidence statusEvidence,
+            Map<Integer, Integer> statusToAction
+    ) {
+        Instant cutoff = tickTs.minusMillis(90_000L);
+        Integer actionCandidate = null;
+        if (actionEvidence != null && !actionEvidence.ts().isBefore(cutoff)) {
+            actionCandidate = actionEvidence.id();
+        }
+        Integer statusMapped = null;
+        if (statusEvidence != null && !statusEvidence.ts().isBefore(cutoff)) {
+            statusMapped = statusToAction.get(statusEvidence.id());
+            if (statusMapped == null) {
+                statusMapped = statusEvidence.id();
+            }
+        }
+        if (actionCandidate != null && statusMapped != null) {
+            return actionCandidate.equals(statusMapped) ? actionCandidate : null;
+        }
+        return statusMapped != null ? statusMapped : actionCandidate;
+    }
+
+    private static Map<SourceActionKey, Long> aggregateAssignedStatus0BySourceAction(Map<String, Long> assignedAmounts) {
+        Map<SourceActionKey, Long> result = new HashMap<>();
+        for (Map.Entry<String, Long> entry : assignedAmounts.entrySet()) {
+            String key = entry.getKey();
+            String[] parts = key.split("\\|");
+            if (parts.length < 3 || !parts[0].startsWith("status0_")) {
+                continue;
+            }
+            String sourceHex = parts[1].replace("source=", "");
+            String actionHex = parts[2].replace("action=", "");
+            try {
+                long sourceId = Long.parseUnsignedLong(sourceHex, 16);
+                int actionId = Integer.parseInt(actionHex, 16);
+                result.merge(new SourceActionKey(sourceId, actionId), entry.getValue(), Long::sum);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return result;
+    }
+
+    private static String normalizeName(String name) {
+        if (name == null) {
+            return "";
+        }
+        return name.trim().toLowerCase();
     }
 
     private record ParsedReplayLine(
@@ -2341,6 +3484,26 @@ class SubmissionParityReportDiagnostics {
     ) {
     }
 
+    private record SourceTargetKey(long sourceId, long targetId) {
+    }
+
+    private record RecentDotEvidence(
+            Instant ts,
+            long targetId,
+            int statusId,
+            String targetName
+    ) {
+    }
+
+    private record DotEvidence(int id, Instant ts) {
+    }
+
+    private record SourceActionKey(long sourceId, int actionId) {
+    }
+
+    private record SourceActionDelta(long sourceId, int actionId, long expected, long assigned, long delta) {
+    }
+
     private record PetContributionSummary(
             int petCount,
             long totalDamage,
@@ -2348,4 +3511,5 @@ class SubmissionParityReportDiagnostics {
             double received
     ) {
     }
+
 }

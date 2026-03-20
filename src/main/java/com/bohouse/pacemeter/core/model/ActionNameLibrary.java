@@ -1,8 +1,15 @@
 package com.bohouse.pacemeter.core.model;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.io.InputStream;
+import java.util.HashMap;
 import java.util.Map;
 
 public final class ActionNameLibrary {
+    private static final String ACTION_NAME_CATALOG_RESOURCE = "action-name-catalog.json";
+    private static final Map<Integer, String> GENERATED_ACTION_NAMES = loadGeneratedActionNames();
 
     private static final Map<Integer, String> ACTION_NAMES = Map.ofEntries(
             Map.entry(0x8C0, "spinning edge"),
@@ -246,7 +253,11 @@ public final class ActionNameLibrary {
         if (actionId <= 0) {
             return "";
         }
-        return ACTION_NAMES.getOrDefault(actionId, "");
+        String known = ACTION_NAMES.get(actionId);
+        if (known != null && !known.isBlank()) {
+            return known;
+        }
+        return GENERATED_ACTION_NAMES.getOrDefault(actionId, "");
     }
 
     public static String resolveDisplay(int actionId) {
@@ -258,5 +269,29 @@ public final class ActionNameLibrary {
             return display;
         }
         return resolve(actionId);
+    }
+
+    private static Map<Integer, String> loadGeneratedActionNames() {
+        try (InputStream is = ActionNameLibrary.class.getClassLoader()
+                .getResourceAsStream(ACTION_NAME_CATALOG_RESOURCE)) {
+            if (is == null) {
+                return Map.of();
+            }
+            Map<String, String> raw = new ObjectMapper().readValue(is, new TypeReference<>() {});
+            Map<Integer, String> parsed = new HashMap<>();
+            for (Map.Entry<String, String> entry : raw.entrySet()) {
+                try {
+                    int actionId = Integer.parseInt(entry.getKey(), 16);
+                    String name = entry.getValue();
+                    if (name != null && !name.isBlank()) {
+                        parsed.put(actionId, name);
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            return Map.copyOf(parsed);
+        } catch (Exception e) {
+            return Map.of();
+        }
     }
 }

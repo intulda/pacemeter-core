@@ -130,6 +130,9 @@
 - OverlayPlugin: https://github.com/OverlayPlugin/OverlayPlugin
 - Cactbot: https://github.com/OverlayPlugin/cactbot
 - ACT_Plugin: https://github.com/ravahn/FFXIV_ACT_Plugin
+- XIV.dev Actions/Game Internals: https://xiv.dev/game-internals/actions?q=
+- Advanced Combat Tracker API Docs: https://advancedcombattracker.com/apidoc/html/N_Advanced_Combat_Tracker.htm
+- ACTWebSocket: https://github.com/zcube/ACTWebSocket
 
 ## LogLine 참고
 - LogLine = 0,

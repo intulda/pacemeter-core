@@ -1,18 +1,9 @@
 [
   {
     "job_id": 19,
-    "application_action_ids": [
-      23
-    ],
-    "status_ids": [
-      248
-    ],
-    "status_to_action": [
-      {
-        "status_id": 248,
-        "action_id": 23
-      }
-    ]
+    "application_action_ids": [],
+    "status_ids": [],
+    "status_to_action": []
   },
   {
     "job_id": 22,

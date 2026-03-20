@@ -136,6 +136,7 @@ public record SubmissionParityReport(
     }
 
     public record SkillBreakdownEntry(
+            Integer skillGuid,
             String skillName,
             long totalDamage,
             long hitCount

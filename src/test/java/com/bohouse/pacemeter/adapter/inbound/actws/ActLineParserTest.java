@@ -212,6 +212,31 @@ class ActLineParserTest {
         assertTrue(raw.statuses().stream().anyMatch(status -> status.statusId() == 0x0E65 && status.sourceId() == 0x1008B280L));
     }
 
+    @Test
+    void parse_dotStatusSignal_typeCode37_readsAlignedEffectSlots() {
+        String line = "37|" + TS + "|102B1904|재탄|000000D0|226588|226588|10000|10000|0||99.50|110.31|0.00|3.14|2202|0|0|03|1E000767|03|C1A00000|102B1904|1F000A38|0|C1F00000|102B1904|200004AF|14|41F00000|101F2C6F|hash";
+
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(DotStatusSignalRaw.class, result);
+        DotStatusSignalRaw signal = (DotStatusSignalRaw) result;
+        assertEquals(0x102B1904L, signal.targetId());
+        assertTrue(signal.signals().size() >= 2);
+        assertEquals(0x0767, signal.signals().get(0).statusId());
+        assertEquals(0x102B1904L, signal.signals().get(0).sourceId());
+        assertEquals(0x0A38, signal.signals().get(1).statusId());
+        assertEquals(0x102B1904L, signal.signals().get(1).sourceId());
+    }
+
+    @Test
+    void parse_dotStatusSignal_typeCode37_ignoresMalformedOverlappingSlots() {
+        String line = "37|" + TS + "|101F2C6F|도리도리|000000CC|207706|207706|10000|10000|0||99.41|112.70|0.00|3.11|2600|0|0|01|071F|0|42700000|101F2C6F|hash";
+
+        ParsedLine result = parser.parse(line);
+
+        assertNull(result);
+    }
+
     // ── 무시 대상 ──
 
     @Test

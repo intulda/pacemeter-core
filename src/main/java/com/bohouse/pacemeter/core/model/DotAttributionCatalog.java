@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 
 import java.io.InputStream;
+import java.util.HashSet;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -22,6 +23,7 @@ import java.util.stream.Collectors;
 public final class DotAttributionCatalog {
 
     private static final String RESOURCE = "dot-attribution-catalog.json";
+    private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);
     private static final List<Entry> ENTRIES = loadEntries();
     private static final Set<Integer> JOB_WHITELIST = buildJobWhitelist();
     private static final Map<Integer, Set<Integer>> APPLICATION_ACTIONS_BY_JOB = buildApplicationActionsByJob();
@@ -83,8 +85,15 @@ public final class DotAttributionCatalog {
     private static Map<Integer, Set<Integer>> buildApplicationActionsByJob() {
         Map<Integer, Set<Integer>> map = new HashMap<>();
         for (Entry entry : ENTRIES) {
-            if (!entry.applicationActionIds().isEmpty()) {
-                map.put(entry.jobId(), entry.applicationActionIds());
+            Set<Integer> actionIds = entry.statusToAction().stream()
+                    .map(StatusActionMapping::actionId)
+                    .filter(actionId -> !isInvalidDotActionId(actionId))
+                    .collect(Collectors.toSet());
+            actionIds.addAll(entry.applicationActionIds().stream()
+                    .filter(actionId -> !isInvalidDotActionId(actionId))
+                    .collect(Collectors.toSet()));
+            if (!actionIds.isEmpty()) {
+                map.put(entry.jobId(), Set.copyOf(actionIds));
             }
         }
         return Collections.unmodifiableMap(map);
@@ -93,8 +102,12 @@ public final class DotAttributionCatalog {
     private static Map<Integer, Set<Integer>> buildStatusIdsByJob() {
         Map<Integer, Set<Integer>> map = new HashMap<>();
         for (Entry entry : ENTRIES) {
-            if (!entry.statusIds().isEmpty()) {
-                map.put(entry.jobId(), entry.statusIds());
+            Set<Integer> statusIds = entry.statusToAction().stream()
+                    .filter(mapping -> !isInvalidDotActionId(mapping.actionId()))
+                    .map(StatusActionMapping::statusId)
+                    .collect(Collectors.toSet());
+            if (!statusIds.isEmpty()) {
+                map.put(entry.jobId(), Set.copyOf(statusIds));
             }
         }
         return Collections.unmodifiableMap(map);
@@ -104,6 +117,9 @@ public final class DotAttributionCatalog {
         Map<Integer, Integer> map = new HashMap<>();
         for (Entry entry : ENTRIES) {
             for (StatusActionMapping mapping : entry.statusToAction()) {
+                if (isInvalidDotActionId(mapping.actionId())) {
+                    continue;
+                }
                 map.put(mapping.statusId(), mapping.actionId());
             }
         }
@@ -114,12 +130,19 @@ public final class DotAttributionCatalog {
         Map<Integer, Set<Integer>> map = new HashMap<>();
         for (Entry entry : ENTRIES) {
             for (StatusActionMapping mapping : entry.statusToAction()) {
-                map.computeIfAbsent(mapping.actionId(), ignored -> new java.util.HashSet<>())
+                if (isInvalidDotActionId(mapping.actionId())) {
+                    continue;
+                }
+                map.computeIfAbsent(mapping.actionId(), ignored -> new HashSet<>())
                         .add(mapping.statusId());
             }
         }
         return map.entrySet().stream()
                 .collect(Collectors.toUnmodifiableMap(Map.Entry::getKey, entry -> Set.copyOf(entry.getValue())));
+    }
+
+    private static boolean isInvalidDotActionId(int actionId) {
+        return INVALID_DOT_ACTION_IDS.contains(actionId);
     }
 
     private record CatalogEntry(

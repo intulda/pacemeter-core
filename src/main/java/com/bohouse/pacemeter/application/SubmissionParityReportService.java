@@ -73,6 +73,14 @@ public class SubmissionParityReportService {
     }
 
     public SubmissionParityReport buildReport(String submissionId) throws IOException {
+        return buildReportInternal(submissionId, null);
+    }
+
+    public SubmissionParityReport buildReportForFight(String submissionId, int fightId) throws IOException {
+        return buildReportInternal(submissionId, fightId);
+    }
+
+    private SubmissionParityReport buildReportInternal(String submissionId, Integer forcedFightId) throws IOException {
         Path submissionDir = Path.of("data", "submissions", submissionId);
         Path metadataPath = submissionDir.resolve("metadata.json");
         Path combatLogPath = submissionDir.resolve("combat.log");
@@ -91,13 +99,14 @@ public class SubmissionParityReportService {
 
         Map<String, String> originalToAlias = loadOriginalToAlias(submissionDir.resolve("mapping.json"));
         Map<String, String> aliasToOriginal = invertAliasMapping(originalToAlias);
-        SubmissionParityReport.FflogsReportSummary fflogsSummary = buildFflogsSummary(metadata);
+        SubmissionParityReport.FflogsReportSummary fflogsSummary = buildFflogsSummary(metadata, forcedFightId);
         fflogsSummary = maybeRefineFightSelection(
                 combatLogPath,
                 metadata,
                 fflogsSummary,
                 originalToAlias,
-                aliasToOriginal
+                aliasToOriginal,
+                forcedFightId
         );
         Optional<ReplayWindow> replayWindow = deriveReplayWindow(fflogsSummary);
         ReplayRunResult replayResult = runReplay(
@@ -213,15 +222,19 @@ public class SubmissionParityReportService {
     }
 
     private SubmissionParityReport.FflogsReportSummary buildFflogsSummary(
-            SubmissionParityReport.SubmissionMetadata metadata
+            SubmissionParityReport.SubmissionMetadata metadata,
+            Integer forcedFightId
     ) {
         String reportUrl = metadata.fflogsReportUrl();
+        Integer selectedFightId = forcedFightId != null ? forcedFightId : metadata.fflogsFightId();
+        boolean ignoreFightIdInUrl = forcedFightId != null;
+
         if (reportUrl == null || reportUrl.isBlank()) {
             return new SubmissionParityReport.FflogsReportSummary(
                     "missing_report_url",
                     reportUrl,
                     null,
-                    metadata.fflogsFightId(),
+                    selectedFightId,
                     null,
                     null,
                     null,
@@ -238,7 +251,7 @@ public class SubmissionParityReportService {
                     "invalid_report_url",
                     reportUrl,
                     null,
-                    metadata.fflogsFightId(),
+                    selectedFightId,
                     null,
                     null,
                     null,
@@ -254,7 +267,7 @@ public class SubmissionParityReportService {
                     "no_token_configured",
                     reportUrl,
                     reportCode,
-                    metadata.fflogsFightId(),
+                    selectedFightId,
                     null,
                     null,
                     null,
@@ -268,16 +281,17 @@ public class SubmissionParityReportService {
         return fflogsApiClient.fetchReportSummary(reportCode)
                 .map(summary -> toSubmissionFflogsSummary(
                         reportUrl,
-                        metadata.fflogsFightId(),
+                        selectedFightId,
                         metadata.zoneId(),
                         metadata.submittedAt(),
-                        summary
+                        summary,
+                        ignoreFightIdInUrl
                 ))
                 .orElseGet(() -> new SubmissionParityReport.FflogsReportSummary(
                         "fetch_failed",
                         reportUrl,
                         reportCode,
-                        metadata.fflogsFightId(),
+                        selectedFightId,
                         null,
                         null,
                         null,
@@ -293,7 +307,8 @@ public class SubmissionParityReportService {
             Integer selectedFightId,
             int actZoneId,
             String submittedAt,
-            FflogsApiClient.ReportSummary summary
+            FflogsApiClient.ReportSummary summary,
+            boolean ignoreFightIdInUrl
     ) {
         Integer expectedEncounterId = resolveExpectedEncounterId(actZoneId);
         FflogsApiClient.ReportFight selectedFight = null;
@@ -312,7 +327,8 @@ public class SubmissionParityReportService {
                     selectedFightId,
                     expectedEncounterId,
                     summary.startTime(),
-                    submittedAt
+                    submittedAt,
+                    ignoreFightIdInUrl
             );
         } else if (selectedFightId == null
                 && expectedEncounterId != null
@@ -325,7 +341,8 @@ public class SubmissionParityReportService {
                         null,
                         expectedEncounterId,
                         summary.startTime(),
-                        submittedAt
+                        submittedAt,
+                        ignoreFightIdInUrl
                 );
             }
         }
@@ -385,21 +402,24 @@ public class SubmissionParityReportService {
             Integer selectedFightId,
             Integer expectedEncounterId,
             long reportStartTime,
-            String submittedAt
+            String submittedAt,
+            boolean ignoreFightIdInUrl
     ) {
         if (fights.isEmpty()) {
             return null;
         }
-        String fightIdFromUrl = extractFightIdFromUrl(reportUrl);
-        if (fightIdFromUrl != null) {
-            try {
-                int fightId = Integer.parseInt(fightIdFromUrl);
-                for (FflogsApiClient.ReportFight fight : fights) {
-                    if (fight.id() == fightId) {
-                        return fight;
+        if (!ignoreFightIdInUrl) {
+            String fightIdFromUrl = extractFightIdFromUrl(reportUrl);
+            if (fightIdFromUrl != null) {
+                try {
+                    int fightId = Integer.parseInt(fightIdFromUrl);
+                    for (FflogsApiClient.ReportFight fight : fights) {
+                        if (fight.id() == fightId) {
+                            return fight;
+                        }
                     }
+                } catch (NumberFormatException ignored) {
                 }
-            } catch (NumberFormatException ignored) {
             }
         }
         if (selectedFightId != null) {
@@ -604,7 +624,8 @@ public class SubmissionParityReportService {
             SubmissionParityReport.SubmissionMetadata metadata,
             SubmissionParityReport.FflogsReportSummary initialSummary,
             Map<String, String> originalToAlias,
-            Map<String, String> aliasToOriginal
+            Map<String, String> aliasToOriginal,
+            Integer forcedFightId
     ) throws IOException {
         if (initialSummary == null
                 || !"ok".equals(initialSummary.status())
@@ -612,6 +633,7 @@ public class SubmissionParityReportService {
                 || initialSummary.reportStartTime() == null
                 || initialSummary.fights() == null
                 || initialSummary.fights().size() <= 1
+                || forcedFightId != null
                 || metadata.fflogsFightId() != null
                 || extractFightIdFromUrl(metadata.fflogsReportUrl()) != null) {
             return initialSummary;
@@ -816,6 +838,7 @@ public class SubmissionParityReportService {
                     .stream()
                     .limit(TOP_SKILLS_PER_ACTOR)
                     .map(skill -> new SubmissionParityReport.SkillBreakdownEntry(
+                            extractLocalSkillGuid(skill.skillName()),
                             skill.skillName(),
                             skill.totalDamage(),
                             skill.hitCount()
@@ -831,6 +854,7 @@ public class SubmissionParityReportService {
                         .sorted((left, right) -> Double.compare(right.total(), left.total()))
                         .limit(TOP_SKILLS_PER_ACTOR)
                         .map(skill -> new SubmissionParityReport.SkillBreakdownEntry(
+                                skill.guid(),
                                 skill.name(),
                                 Math.round(skill.total()),
                                 0L
@@ -966,6 +990,32 @@ public class SubmissionParityReportService {
         }
         return skillName.startsWith("Player")
                 || skillName.startsWith("DoT#0");
+    }
+
+    private Integer extractLocalSkillGuid(String skillName) {
+        if (skillName == null || skillName.isBlank()) {
+            return null;
+        }
+        if (skillName.startsWith("DoT#")) {
+            return parseHexSuffix(skillName.substring("DoT#".length()));
+        }
+        if (skillName.startsWith("Skill#")) {
+            return parseHexSuffix(skillName.substring("Skill#".length()));
+        }
+        int start = skillName.lastIndexOf('(');
+        int end = skillName.lastIndexOf(')');
+        if (start >= 0 && end > start + 1) {
+            return parseHexSuffix(skillName.substring(start + 1, end));
+        }
+        return null;
+    }
+
+    private Integer parseHexSuffix(String value) {
+        try {
+            return Integer.parseInt(value, 16);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     private Map<String, String> loadOriginalToAlias(Path mappingPath) {

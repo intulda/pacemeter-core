@@ -8,7 +8,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.util.Optional;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -17,6 +21,11 @@ class SubmissionParityRegressionGateTest {
     private static final double MAX_ALLOWED_P95_APE = 0.05;
     private static final double MAX_ALLOWED_ACTOR_APE = 0.05;
     private static final double MAX_ALLOWED_OUTLIER_RATIO = 0.0;
+    private static final String HEAVY4_SUBMISSION = "2026-03-15-heavy4-vafpbaqjnhbk1mtw";
+    private static final String LINDWURM_SUBMISSION = "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz";
+    private static final String HEAVY2_SUBMISSION = "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt";
+    private static final double MAX_ALLOWED_HEAVY2_ALL_FIGHTS_P95_APE = 0.055;
+    private static final double MAX_ALLOWED_HEAVY2_ALL_FIGHTS_MAX_APE = 0.060;
 
     @Test
     void parityQualityRollup_staysWithinRegressionGate() throws Exception {
@@ -35,6 +44,87 @@ class SubmissionParityRegressionGateTest {
         assertTrue(
                 rollup.gate().actualOutlierRatio() <= MAX_ALLOWED_OUTLIER_RATIO,
                 "outlier ratio gate failed: " + rollup.gate().actualOutlierRatio()
+        );
+
+        var bySubmissionId = rollup.submissions().stream()
+                .collect(Collectors.toMap(
+                        SubmissionParityQualityService.SubmissionQualityEntry::submissionId,
+                        Function.identity()
+                ));
+
+        assertSubmissionQuality(
+                bySubmissionId,
+                HEAVY4_SUBMISSION,
+                8,
+                0.03,
+                0.04
+        );
+        assertSubmissionQuality(
+                bySubmissionId,
+                LINDWURM_SUBMISSION,
+                8,
+                0.02,
+                0.02
+        );
+        assertSubmissionQuality(
+                bySubmissionId,
+                HEAVY2_SUBMISSION,
+                8,
+                0.03,
+                0.04
+        );
+    }
+
+    @Test
+    void heavy2AllMeaningfulFights_stayWithinGeneralizationGate() throws Exception {
+        SubmissionParityReportService reportService = buildConfiguredService();
+        SubmissionParityReport baseline = reportService.buildReport(HEAVY2_SUBMISSION);
+
+        for (SubmissionParityReport.FflogsFightSummary fight : baseline.fflogs().fights()) {
+            if (fight.encounterId() <= 0 || fight.name() == null || fight.name().isBlank()
+                    || "Unknown".equalsIgnoreCase(fight.name())) {
+                continue;
+            }
+            SubmissionParityReport report = reportService.buildReportForFight(HEAVY2_SUBMISSION, fight.id());
+            SubmissionParityReport.ParityQualitySummary quality = report.parityQuality();
+            assertTrue(
+                    quality.matchedActorCount() >= 8,
+                    "heavy2 all-fights matched actor count failed for fight " + fight.id()
+                            + ": " + quality.matchedActorCount()
+            );
+            assertTrue(
+                    quality.p95AbsolutePercentageError() <= MAX_ALLOWED_HEAVY2_ALL_FIGHTS_P95_APE,
+                    "heavy2 all-fights p95 gate failed for fight " + fight.id()
+                            + ": " + quality.p95AbsolutePercentageError()
+            );
+            assertTrue(
+                    quality.maxAbsolutePercentageError() <= MAX_ALLOWED_HEAVY2_ALL_FIGHTS_MAX_APE,
+                    "heavy2 all-fights max gate failed for fight " + fight.id()
+                            + ": " + quality.maxAbsolutePercentageError()
+            );
+        }
+    }
+
+    private static void assertSubmissionQuality(
+            Map<String, SubmissionParityQualityService.SubmissionQualityEntry> bySubmissionId,
+            String submissionId,
+            int minMatchedActors,
+            double maxP95Ape,
+            double maxActorApe
+    ) {
+        SubmissionParityQualityService.SubmissionQualityEntry entry = bySubmissionId.get(submissionId);
+        assertTrue(entry != null, "missing submission quality entry: " + submissionId);
+        assertTrue(
+                entry.matchedActorCount() >= minMatchedActors,
+                "matched actor count gate failed for " + submissionId + ": " + entry.matchedActorCount()
+        );
+        assertTrue(
+                entry.p95AbsolutePercentageError() <= maxP95Ape,
+                "submission p95 gate failed for " + submissionId + ": " + entry.p95AbsolutePercentageError()
+        );
+        assertTrue(
+                entry.maxAbsolutePercentageError() <= maxActorApe,
+                "submission max actor gate failed for " + submissionId + ": " + entry.maxAbsolutePercentageError()
         );
     }
 
@@ -58,7 +148,22 @@ class SubmissionParityRegressionGateTest {
                         && clientSecret != null && !clientSecret.isBlank(),
                 "FFLogs credentials are required for parity regression gate test"
         );
-        return new FflogsApiClient(new FflogsTokenStore(objectMapper), objectMapper);
+        FflogsTokenStore tokenStore = new FflogsTokenStore(objectMapper);
+        setField(tokenStore, "clientId", clientId);
+        setField(tokenStore, "clientSecret", clientSecret);
+        FflogsApiClient apiClient = new FflogsApiClient(tokenStore, objectMapper);
+        setField(apiClient, "defaultPartition", envOrProperty("PACE_FFLOGS_PARTITION", "pace.fflogs.partition"));
+        return apiClient;
+    }
+
+    private static void setField(Object target, String fieldName, Object value) {
+        try {
+            Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(target, value);
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to set field " + fieldName + " on " + target.getClass().getSimpleName(), e);
+        }
     }
 
     private static String envOrProperty(String envKey, String propertyKey) {

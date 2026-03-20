@@ -96,6 +96,69 @@ final class UnknownStatusDotAttributionResolver {
         ));
     }
 
+    Optional<UnknownSourceAttribution> resolveKnownStatusUnknownSourceAttribution(
+            DotTickRaw dot,
+            Map<DotKey, DotApplication> actionApplications,
+            Map<DotKey, DotApplication> statusApplications,
+            long unknownActorId,
+            long windowMs,
+            LongPredicate isPartyMember,
+            LongFunction<String> sourceNameResolver,
+            IntUnaryOperator toTrackedDotActionId
+    ) {
+        if (dot.statusId() == 0) {
+            return Optional.empty();
+        }
+        if (dot.sourceId() != 0 && dot.sourceId() != unknownActorId) {
+            return Optional.empty();
+        }
+
+        int mappedActionId = toTrackedDotActionId.applyAsInt(dot.statusId());
+        if (mappedActionId == 0) {
+            return Optional.empty();
+        }
+
+        Instant cutoff = dot.ts().minusMillis(windowMs);
+        Map<Long, UnknownSourceCandidate> candidatesBySource = new HashMap<>();
+
+        addKnownStatusActionCandidates(
+                dot,
+                cutoff,
+                mappedActionId,
+                actionApplications,
+                isPartyMember,
+                sourceNameResolver,
+                candidatesBySource
+        );
+        addKnownStatusMappedStatusCandidates(
+                dot,
+                cutoff,
+                mappedActionId,
+                statusApplications,
+                isPartyMember,
+                sourceNameResolver,
+                toTrackedDotActionId,
+                candidatesBySource
+        );
+
+        if (candidatesBySource.isEmpty()) {
+            return Optional.empty();
+        }
+        UnknownSourceCandidate selected = candidatesBySource.values().stream()
+                .max(Comparator.comparing(UnknownSourceCandidate::corroborated)
+                        .thenComparing(UnknownSourceCandidate::appliedAt)
+                        .thenComparingLong(UnknownSourceCandidate::sourceId))
+                .orElse(null);
+        if (selected == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new UnknownSourceAttribution(
+                selected.sourceId(),
+                selected.actionId(),
+                selected.sourceName()
+        ));
+    }
+
     private DotApplication resolveEvidence(
             Map<DotKey, DotApplication> evidenceMap,
             DotTickRaw dot,
@@ -168,6 +231,76 @@ final class UnknownStatusDotAttributionResolver {
                     new UnknownSourceCandidate(
                             key.sourceId(),
                             mappedAction,
+                            sourceNameResolver.apply(key.sourceId()),
+                            application.appliedAt(),
+                            false
+                    )
+            ));
+        }
+    }
+
+    private void addKnownStatusActionCandidates(
+            DotTickRaw dot,
+            Instant cutoff,
+            int expectedActionId,
+            Map<DotKey, DotApplication> actionApplications,
+            LongPredicate isPartyMember,
+            LongFunction<String> sourceNameResolver,
+            Map<Long, UnknownSourceCandidate> candidatesBySource
+    ) {
+        for (Map.Entry<DotKey, DotApplication> entry : actionApplications.entrySet()) {
+            DotKey key = entry.getKey();
+            DotApplication application = entry.getValue();
+            if (key.targetId() != dot.targetId() || application.appliedAt().isBefore(cutoff)) {
+                continue;
+            }
+            if (!isPartyMember.test(key.sourceId())) {
+                continue;
+            }
+            if (application.actionId() != expectedActionId) {
+                continue;
+            }
+            candidatesBySource.compute(key.sourceId(), (ignored, existing) -> mergeCandidate(
+                    existing,
+                    new UnknownSourceCandidate(
+                            key.sourceId(),
+                            expectedActionId,
+                            sourceNameResolver.apply(key.sourceId()),
+                            application.appliedAt(),
+                            false
+                    )
+            ));
+        }
+    }
+
+    private void addKnownStatusMappedStatusCandidates(
+            DotTickRaw dot,
+            Instant cutoff,
+            int expectedActionId,
+            Map<DotKey, DotApplication> statusApplications,
+            LongPredicate isPartyMember,
+            LongFunction<String> sourceNameResolver,
+            IntUnaryOperator toTrackedDotActionId,
+            Map<Long, UnknownSourceCandidate> candidatesBySource
+    ) {
+        for (Map.Entry<DotKey, DotApplication> entry : statusApplications.entrySet()) {
+            DotKey key = entry.getKey();
+            DotApplication application = entry.getValue();
+            if (key.targetId() != dot.targetId() || application.appliedAt().isBefore(cutoff)) {
+                continue;
+            }
+            if (!isPartyMember.test(key.sourceId())) {
+                continue;
+            }
+            int mappedActionId = toTrackedDotActionId.applyAsInt(application.actionId());
+            if (mappedActionId != expectedActionId) {
+                continue;
+            }
+            candidatesBySource.compute(key.sourceId(), (ignored, existing) -> mergeCandidate(
+                    existing,
+                    new UnknownSourceCandidate(
+                            key.sourceId(),
+                            expectedActionId,
                             sourceNameResolver.apply(key.sourceId()),
                             application.appliedAt(),
                             false

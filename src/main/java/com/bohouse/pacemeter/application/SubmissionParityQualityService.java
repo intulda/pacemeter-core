@@ -10,8 +10,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -115,7 +117,8 @@ public class SubmissionParityQualityService {
                                     comparison.fflogsType(),
                                     absolutePercentageError,
                                     comparison.rdpsDelta(),
-                                    comparison.fflogsRdpsPerSecond()
+                                    comparison.fflogsRdpsPerSecond(),
+                                    buildTopSkillDeltas(comparison)
                             );
                         })
                         .collect(Collectors.toList()));
@@ -250,11 +253,92 @@ public class SubmissionParityQualityService {
         return jobs;
     }
 
+    private List<SkillDeltaEntry> buildTopSkillDeltas(SubmissionParityReport.ActorParityComparison comparison) {
+        Map<String, SkillAggregate> localByKey = new HashMap<>();
+        for (SubmissionParityReport.SkillBreakdownEntry localSkill : comparison.localTopSkills()) {
+            localByKey.merge(
+                    buildSkillMatchKey(localSkill),
+                    SkillAggregate.from(localSkill),
+                    SkillAggregate::merge
+            );
+        }
+        Map<String, SkillAggregate> fflogsByKey = new HashMap<>();
+        for (SubmissionParityReport.SkillBreakdownEntry fflogsSkill : comparison.fflogsTopSkills()) {
+            fflogsByKey.merge(
+                    buildSkillMatchKey(fflogsSkill),
+                    SkillAggregate.from(fflogsSkill),
+                    SkillAggregate::merge
+            );
+        }
+
+        Set<String> keys = new HashSet<>();
+        keys.addAll(localByKey.keySet());
+        keys.addAll(fflogsByKey.keySet());
+
+        return keys.stream()
+                .map(key -> {
+                    SkillAggregate local = localByKey.get(key);
+                    SkillAggregate fflogs = fflogsByKey.get(key);
+                    long localTotal = local == null ? 0L : local.totalDamage();
+                    long fflogsTotal = fflogs == null ? 0L : fflogs.totalDamage();
+                    long delta = localTotal - fflogsTotal;
+                    Integer localGuid = local == null ? null : local.skillGuid();
+                    String guidHex = localGuid == null ? null : Integer.toHexString(localGuid).toUpperCase();
+                    return new SkillDeltaEntry(
+                            guidHex,
+                            local == null ? "" : local.skillName(),
+                            fflogs == null ? "" : fflogs.skillName(),
+                            localTotal,
+                            fflogsTotal,
+                            delta
+                    );
+                })
+                .sorted(Comparator.comparingLong((SkillDeltaEntry entry) -> Math.abs(entry.delta())).reversed())
+                .limit(5)
+                .toList();
+    }
+
+    private static String buildSkillMatchKey(SubmissionParityReport.SkillBreakdownEntry entry) {
+        if (entry.skillGuid() != null && entry.skillGuid() > 0) {
+            return "guid:" + Integer.toHexString(entry.skillGuid()).toUpperCase();
+        }
+        return "name:" + normalizeSkillKey(entry.skillName());
+    }
+
+    private static String normalizeSkillKey(String skillName) {
+        if (skillName == null || skillName.isBlank()) {
+            return "";
+        }
+        String normalized = skillName;
+        int bracketStart = normalized.lastIndexOf(" (");
+        int bracketEnd = normalized.lastIndexOf(")");
+        if (bracketStart >= 0 && bracketEnd > bracketStart) {
+            normalized = normalized.substring(0, bracketStart);
+        }
+        return normalized.trim().toLowerCase();
+    }
+
     private static double ratio(int part, int total) {
         if (total <= 0) {
             return 0.0;
         }
         return (double) part / total;
+    }
+
+    private record SkillAggregate(
+            Integer skillGuid,
+            String skillName,
+            long totalDamage
+    ) {
+        static SkillAggregate from(SubmissionParityReport.SkillBreakdownEntry entry) {
+            return new SkillAggregate(entry.skillGuid(), entry.skillName(), entry.totalDamage());
+        }
+
+        SkillAggregate merge(SkillAggregate other) {
+            Integer mergedGuid = skillGuid != null ? skillGuid : other.skillGuid;
+            String mergedName = (skillName != null && !skillName.isBlank()) ? skillName : other.skillName;
+            return new SkillAggregate(mergedGuid, mergedName, totalDamage + other.totalDamage);
+        }
     }
 
     private static double percentile(List<Double> sortedValues, double ratio) {
@@ -314,7 +398,18 @@ public class SubmissionParityQualityService {
             String actorType,
             double absolutePercentageError,
             double rdpsDelta,
-            double fflogsRdpsPerSecond
+            double fflogsRdpsPerSecond,
+            List<SkillDeltaEntry> topSkillDeltas
+    ) {
+    }
+
+    public record SkillDeltaEntry(
+            String localGuidHex,
+            String localSkillName,
+            String fflogsSkillName,
+            long localTotalDamage,
+            long fflogsTotalDamage,
+            long delta
     ) {
     }
 

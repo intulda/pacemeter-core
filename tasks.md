@@ -116,6 +116,12 @@
 #### parity 재시작 핸드오프 (중요)
 - 재시작/다른 컴퓨터 진행 기준 문서:
   - `docs/parity-continuation-handoff-2026-03-19.md`
+- 크로스 환경(맥/윈도우) 재현 런북:
+  - `docs/parity-cross-env-runbook.md`
+- dot attribution 카탈로그 재생성/검증 문서:
+  - `docs/dot-attribution-catalog-maintenance.md`
+- 자동 재현 스크립트:
+  - `scripts/parity_repro_check.sh`
 - 상세 변경/측정 이력:
   - `docs/parity-patch-notes.md`
 - 집 테스트용 실행 요약:

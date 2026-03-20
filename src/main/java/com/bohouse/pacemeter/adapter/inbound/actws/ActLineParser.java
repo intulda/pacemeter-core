@@ -167,21 +167,33 @@ public final class ActLineParser {
         }
 
         if (typeCode == 37) {
-            if (p.length < 5) return null;
+            if (p.length < 24) return null;
             long targetId = parseHexLong(p[2]);
-            for (int i = 16; i + 4 < p.length - 1; i++) {
-                long packedStatus = parseHexLong(p[i + 1]);
+            int effectCount = (int) parseHexLong(p[18]);
+            if (effectCount <= 0) {
+                return null;
+            }
+            int offset = 19;
+            List<DotStatusSignalRaw.StatusSignal> signals = new ArrayList<>();
+            for (int effectIndex = 0; effectIndex < effectCount && offset + 3 < p.length - 1; effectIndex++) {
+                long packedStatus = parseHexLong(p[offset]);
                 int statusId = (int) (packedStatus & 0xFFFFL);
                 if (!DOT_SIGNAL_STATUS_IDS.contains(statusId)) {
+                    offset += 4;
                     continue;
                 }
-                long sourceId = parseHexLong(p[i + 4]);
+                long sourceId = parseHexLong(p[offset + 3]);
                 if (sourceId == 0) {
+                    offset += 4;
                     continue;
                 }
-                return new DotStatusSignalRaw(ts, targetId, statusId, sourceId, line);
+                signals.add(new DotStatusSignalRaw.StatusSignal(statusId, sourceId));
+                offset += 4;
             }
-            return null;
+            if (signals.isEmpty()) {
+                return null;
+            }
+            return new DotStatusSignalRaw(ts, targetId, List.copyOf(signals), line);
         }
 
         if (typeCode == 38) {
