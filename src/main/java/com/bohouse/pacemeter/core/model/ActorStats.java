@@ -98,9 +98,13 @@ public final class ActorStats {
     }
 
     public void addDamage(long amount, long timestampMs, int actionId, String actionName) {
+        addDamage(amount, timestampMs, actionId, actionName, true);
+    }
+
+    public void addDamage(long amount, long timestampMs, int actionId, String actionName, boolean trackMaxHit) {
         this.totalDamage += amount;
         this.hitCount++;
-        if (amount > this.maxHitDamage) {
+        if (trackMaxHit && amount > this.maxHitDamage) {
             this.maxHitDamage = amount;
             this.maxHitActionId = actionId;
             this.maxHitActionName = actionName == null ? "" : actionName;

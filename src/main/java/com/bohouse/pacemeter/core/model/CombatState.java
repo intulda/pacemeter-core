@@ -148,7 +148,13 @@ public final class CombatState {
             stats.observeHitOutcome(e.criticalHit(), e.directHit());
         }
 
-        stats.addDamage(e.amount(), e.timestampMs(), e.actionId(), e.actionName());
+        stats.addDamage(
+                e.amount(),
+                e.timestampMs(),
+                e.actionId(),
+                e.actionName(),
+                e.damageType() != DamageType.DOT
+        );
         AttributionContext attributionContext = resolveAttributionContext(e);
         attributeExternalBuffContribution(stats, e, e.timestampMs(), attributionContext);
         this.totalPartyDamage += e.amount();

@@ -110,6 +110,28 @@ class CombatStateTest {
     }
 
     @Test
+    void dotDamage_doesNotOverrideMaxHit() {
+        CombatState state = new CombatState();
+        ActorId actorId = new ActorId(0x10000001L);
+        ActorId targetId = new ActorId(0x40000001L);
+
+        state.reduce(new CombatEvent.FightStart(0L, "test", 1327, 42));
+        state.reduce(new CombatEvent.ActorJoined(0L, actorId, "dealer"));
+        state.reduce(new CombatEvent.DamageEvent(
+                1_000L, actorId, "dealer", targetId, 0x223F, "direct-hit", 8_000L, DamageType.DIRECT, false, false
+        ));
+        state.reduce(new CombatEvent.DamageEvent(
+                2_000L, actorId, "dealer", targetId, 0x40AA, "0x40AA", 9_000L, DamageType.DOT, false, false
+        ));
+
+        ActorStats actorStats = state.actors().get(actorId);
+        assertNotNull(actorStats);
+        assertEquals(8_000L, actorStats.maxHitDamage());
+        assertEquals(0x223F, actorStats.maxHitActionId());
+        assertEquals("direct-hit", actorStats.maxHitActionName());
+    }
+
+    @Test
     void ownerBuffOnOwnedPet_isNotAttributedAsExternalRdps() {
         CombatState state = new CombatState();
         ActorId ownerId = new ActorId(0x10000001L);
