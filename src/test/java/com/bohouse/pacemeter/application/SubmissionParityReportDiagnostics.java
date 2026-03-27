@@ -35,6 +35,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -3719,24 +3720,26 @@ class SubmissionParityReportDiagnostics {
             }
         }
 
-        String resolvedActorName = report.comparisons().stream()
+        Optional<String> resolvedActorName = report.comparisons().stream()
                 .filter(comparison -> actorName.equals(comparison.localName()))
                 .map(SubmissionParityReport.ActorParityComparison::localName)
                 .findFirst()
-                .orElseGet(() -> report.comparisons().stream()
+                .or(() -> report.comparisons().stream()
                         .filter(comparison -> actorName.equals(comparison.fflogsType()))
                         .map(SubmissionParityReport.ActorParityComparison::localName)
-                        .findFirst()
-                        .orElseThrow());
+                        .findFirst());
 
-        long actorId = report.combat().actors().stream()
-                .filter(actor -> resolvedActorName.equals(actor.name()))
+        OptionalLong actorId = resolvedActorName.isPresent()
+                ? report.combat().actors().stream()
+                .filter(actor -> resolvedActorName.get().equals(actor.name()))
                 .mapToLong(actor -> actor.actorId().value())
                 .findFirst()
-                .orElseThrow();
+                : OptionalLong.empty();
 
         String actionHex = Integer.toHexString(actionId).toUpperCase();
-        String sourceHex = Long.toHexString(actorId).toUpperCase();
+        String sourceHex = actorId.isPresent()
+                ? Long.toHexString(actorId.getAsLong()).toUpperCase()
+                : null;
         Map<String, Long> assignedAmounts = ingestion.debugDotAttributionAssignedAmounts();
         Map<String, Long> assignedHits = ingestion.debugDotAttributionAssignedHitCounts();
 
@@ -3744,12 +3747,12 @@ class SubmissionParityReportDiagnostics {
                 "%s dotModeBreakdown fight=%d actor=%s action=%s%n",
                 label,
                 fightId,
-                resolvedActorName,
+                resolvedActorName.orElse(actorName),
                 actionHex
         );
         assignedAmounts.entrySet().stream()
-                .filter(entry -> entry.getKey().contains("source=" + sourceHex))
                 .filter(entry -> entry.getKey().contains("action=" + actionHex))
+                .filter(entry -> sourceHex == null || entry.getKey().contains("source=" + sourceHex))
                 .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
                 .forEach(entry -> System.out.printf(
                         "  mode=%s amount=%d hits=%d%n",

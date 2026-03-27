@@ -29,7 +29,7 @@ public final class ActIngestionService {
     private static final Duration STATUS_SNAPSHOT_REDISTRIBUTION_WINDOW = Duration.ofMillis(10000);
     private static final Duration STATUS_SIGNAL_REDISTRIBUTION_WINDOW = Duration.ofMillis(3500);
     private static final Duration LIVE_DOT_ATTRIBUTION_DEBUG_RETENTION = Duration.ofSeconds(30);
-    private static final double STATUS_SNAPSHOT_WEIGHT_GAMMA = 0.76;
+    private static final double STATUS_SNAPSHOT_WEIGHT_GAMMA = 0.74;
     private static final double STATUS_SIGNAL_WEIGHT_BLEND_ALPHA = 0.80;
     private static final double STATUS0_SOURCE_HINT_WEIGHT = 1.0;
     private static final double ACTIVE_DOT_SUBSET_WEIGHT_COVERAGE_THRESHOLD = 0.50;
@@ -1199,11 +1199,8 @@ public final class ActIngestionService {
         if (tsMs < 0) tsMs = 0;
 
         // 처음 보는 파티원이면 ActorJoined 이벤트 먼저 전송
-        boolean isNewPartyMember = partyMemberIds.add(a.actorId());
-        if (isNewPartyMember) {
-            if (fightStarted) {
-                combatPartyMemberIds.add(a.actorId());
-            }
+        boolean isNewPartyMember = combatPartyMemberIds.add(a.actorId());
+        if (isNewPartyMember && partyMemberIds.contains(a.actorId())) {
             combatEventPort.onEvent(new CombatEvent.ActorJoined(
                     tsMs, new ActorId(a.actorId()), a.actorName()));
             logger.info("[Ingestion] Party member joined: {}(id={}) | total party size={}",
@@ -1428,11 +1425,8 @@ public final class ActIngestionService {
         long tsMs = Duration.between(fightStartInstant, dot.ts()).toMillis();
         if (tsMs < 0) tsMs = 0;
 
-        boolean isNewPartyMember = partyMemberIds.add(resolvedSourceId);
-        if (isNewPartyMember) {
-            if (fightStarted) {
-                combatPartyMemberIds.add(resolvedSourceId);
-            }
+        boolean isNewPartyMember = combatPartyMemberIds.add(resolvedSourceId);
+        if (isNewPartyMember && partyMemberIds.contains(resolvedSourceId)) {
             combatEventPort.onEvent(new CombatEvent.ActorJoined(
                     tsMs, new ActorId(resolvedSourceId), resolvedSourceName));
             logger.info("[Ingestion] Party member joined via DoT: {}(id={}) | total party size={}",
@@ -1744,10 +1738,7 @@ public final class ActIngestionService {
     }
 
     private boolean isPartyMember(NetworkAbilityRaw a) {
-        if (isPartyMember(a.actorId())) {
-            return true;
-        }
-        return bootstrapCombatPartyMember(a);
+        return isPartyMember(a.actorId());
     }
 
     private boolean isPartyMember(long actorId) {
@@ -1783,25 +1774,6 @@ public final class ActIngestionService {
         }
         Long owner = ownerByCombatantId.get(targetId);
         return owner != null && effectivePartyMembers.contains(owner);
-    }
-
-    private boolean bootstrapCombatPartyMember(NetworkAbilityRaw ability) {
-        if (partyDataInitialized || !fightStarted) {
-            return false;
-        }
-        long actorId = ability.actorId();
-        if (!isPlayerCharacter(actorId) || actorId == currentPlayerId) {
-            return false;
-        }
-        if (isFriendlyTarget(ability.targetId()) || !isValidCombatZone(ability)) {
-            return false;
-        }
-        boolean added = combatPartyMemberIds.add(actorId);
-        if (added) {
-            logger.info("[Ingestion] bootstrapped combat party member: {}(id={})",
-                    ability.actorName(), Long.toHexString(actorId));
-        }
-        return added;
     }
 
     private Set<Long> effectivePartyMemberIds() {

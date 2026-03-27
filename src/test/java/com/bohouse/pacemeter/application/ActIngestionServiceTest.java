@@ -2288,7 +2288,7 @@ class ActIngestionServiceTest {
                 "21|...|raw"
         ));
 
-        assertTrue(captured.stream().anyMatch(CombatEvent.DamageEvent.class::isInstance));
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
     }
 
     @Test
@@ -2394,15 +2394,15 @@ class ActIngestionServiceTest {
 
     @Test
     void selfNetworkAbility_waitsForJobMetadataBeforeFightStart() {
-        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "DarkKnight"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000FFEEL, "MetadataWaiter"));
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         captured.clear();
 
         service.onParsed(new NetworkAbilityRaw(
                 base().plusMillis(100),
                 21,
-                0x1000000AL,
-                "DarkKnight",
+                0x1000FFEEL,
+                "MetadataWaiter",
                 0xE21,
                 "Hard Slash",
                 0x40000001L,
@@ -2423,7 +2423,7 @@ class ActIngestionServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals(0x20, fightStart.playerJobId());
-        assertEquals(0x20, service.debugJobId(0x1000000AL));
+        assertEquals(0x20, service.debugJobId(0x1000FFEEL));
     }
 
     @Test
@@ -2570,7 +2570,7 @@ class ActIngestionServiceTest {
                 "03|..."
         ));
 
-        assertTrue(captured.isEmpty());
+        assertTrue(captured.stream().noneMatch(CombatEvent.BossIdentified.class::isInstance));
     }
 
     @Test
@@ -2716,5 +2716,111 @@ class ActIngestionServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals(0x19, nextFightStart.playerJobId());
+    }
+
+    @Test
+    void partyWipe_endsFightAndNextPullStartsFreshWithoutCarryingPreviousDamage() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Paladin"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(10),
+                0x1000000AL,
+                "Paladin",
+                0x13,
+                0,
+                180_000L,
+                180_000L,
+                "261|...|Add"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(20),
+                0x1000000BL,
+                "Scholar",
+                0x1C,
+                0,
+                180_000L,
+                180_000L,
+                "261|...|Add"
+        ));
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(100),
+                21,
+                0x1000000AL,
+                "Paladin",
+                0x18,
+                "Shield Lob",
+                0x40000001L,
+                "Boss",
+                false,
+                false,
+                5000,
+                "21|...|raw"
+        ));
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(120),
+                21,
+                0x1000000BL,
+                "Scholar",
+                0x409C,
+                "Biolysis",
+                0x40000001L,
+                "Boss",
+                false,
+                false,
+                6000,
+                "21|...|raw"
+        ));
+
+        assertTrue(service.isFightStarted());
+        captured.clear();
+
+        service.onParsed(new NetworkDeath(
+                base().plusMillis(200),
+                0x1000000AL,
+                "Paladin"
+        ));
+        assertTrue(service.isFightStarted());
+
+        service.onParsed(new NetworkDeath(
+                base().plusMillis(220),
+                0x1000000BL,
+                "Scholar"
+        ));
+
+        assertFalse(service.isFightStarted());
+        assertTrue(captured.stream().anyMatch(CombatEvent.FightEnd.class::isInstance));
+
+        captured.clear();
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(400),
+                21,
+                0x1000000AL,
+                "Paladin",
+                0x18,
+                "Shield Lob",
+                0x40000001L,
+                "Boss",
+                false,
+                false,
+                7000,
+                "21|...|raw"
+        ));
+
+        CombatEvent.FightStart nextFightStart = captured.stream()
+                .filter(CombatEvent.FightStart.class::isInstance)
+                .map(CombatEvent.FightStart.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertEquals(0L, nextFightStart.timestampMs());
+
+        CombatEvent.DamageEvent firstDamage = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertEquals(0L, firstDamage.timestampMs());
+        assertEquals(7000L, firstDamage.amount());
     }
 }

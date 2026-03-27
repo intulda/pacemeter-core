@@ -2,6 +2,13 @@
 
 ## 2026-03-27 Priority Update
 
+### 2026-03-27 Live Wipe Reset Regression
+- 레이드 전멸 후 다음 풀에 이전 전투 데이터가 이어지던 회귀가 재발.
+- 원인: live damage / DoT emit 경로가 관측된 actor를 `partyMemberIds` / `combatPartyMemberIds`에 다시 편입시켜 wipe 카운트 모수를 부풀림.
+- 결과: `deadPlayers.size() == effectivePartyMemberCountForCombat()` 조건이 깨져 `FightEnd`가 누락됨.
+- 조치: 명시적 파티 정보(`PartyList`, trusted `CombatData`)만 wipe 모수에 반영하고, damage/DoT 관측만으로 파티 집합을 확장하지 않도록 수정.
+- 회귀 테스트: `ActIngestionServiceTest.partyWipe_endsFightAndNextPullStartsFreshWithoutCarryingPreviousDamage`
+
 ### 현재 메인 스트림
 - 현재 최우선 작업은 `clearability`가 아니라 `rDPS 정밀도 개선 / FFLogs parity 보정`이다.
 - clearability는 구현 경로가 이미 연결되어 있으며, 지금은 메인 개발 스트림이 아니라 검증/보강 단계로 본다.
