@@ -29,6 +29,9 @@ import com.bohouse.pacemeter.core.model.ActorId;
  * @param rdpsConfidence    rDPS 추정치의 신뢰도 (얼마나 믿을 수 있는지)
  * @param damagePercent     파티 전체 데미지 중 이 캐릭터의 비율 [0.0 ~ 1.0]
  * @param hitCount          총 공격 횟수
+ * @param critRate          극대 비율 [0.0 ~ 1.0]
+ * @param directHitRate     직격 비율 [0.0 ~ 1.0]
+ * @param critDirectHitRate 극직 비율 [0.0 ~ 1.0]
  * @param deathCount        전투 중 사망 횟수
  * @param maxHitDamage      전투 중 가장 강한 단일 타격 데미지
  * @param maxHitSkillName   maxHitDamage를 기록한 스킬 이름
@@ -47,6 +50,9 @@ public record ActorSnapshot(
         Confidence rdpsConfidence,
         double damagePercent,
         int hitCount,
+        double critRate,
+        double directHitRate,
+        double critDirectHitRate,
         int deathCount,
         long maxHitDamage,
         String maxHitSkillName,

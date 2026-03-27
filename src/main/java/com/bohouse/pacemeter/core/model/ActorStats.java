@@ -36,6 +36,7 @@ public final class ActorStats {
     private int observedHitSampleCount;
     private int observedCritHitCount;
     private int observedDirectHitCount;
+    private int observedCritDirectHitCount;
 
     /** 사망 상태: true면 현재 사망 중 */
     private boolean isDead;
@@ -61,6 +62,7 @@ public final class ActorStats {
         this.observedHitSampleCount = 0;
         this.observedCritHitCount = 0;
         this.observedDirectHitCount = 0;
+        this.observedCritDirectHitCount = 0;
         this.isDead = false;
         this.deathTimestamp = -1;
     }
@@ -84,6 +86,7 @@ public final class ActorStats {
         this.observedHitSampleCount = other.observedHitSampleCount;
         this.observedCritHitCount = other.observedCritHitCount;
         this.observedDirectHitCount = other.observedDirectHitCount;
+        this.observedCritDirectHitCount = other.observedCritDirectHitCount;
         this.isDead = other.isDead;
         this.deathTimestamp = other.deathTimestamp;
     }
@@ -141,6 +144,9 @@ public final class ActorStats {
         }
         if (directHit) {
             this.observedDirectHitCount++;
+        }
+        if (criticalHit && directHit) {
+            this.observedCritDirectHitCount++;
         }
     }
 
@@ -234,6 +240,7 @@ public final class ActorStats {
     public int observedHitSampleCount() { return observedHitSampleCount; }
     public int observedCritHitCount() { return observedCritHitCount; }
     public int observedDirectHitCount() { return observedDirectHitCount; }
+    public int observedCritDirectHitCount() { return observedCritDirectHitCount; }
 
     /**
      * 슬라이딩 윈도우에 보관되는 데미지 기록 하나.

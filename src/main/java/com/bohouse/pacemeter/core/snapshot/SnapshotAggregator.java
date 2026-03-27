@@ -100,6 +100,16 @@ public final class SnapshotAggregator {
             long recentDamage = stats.recentDamage();
             long recentWindowMs = Math.min(elapsedMs, CombatState.RECENT_WINDOW_MS);
             double recentDps = (recentWindowMs > 0) ? recentDamage / (recentWindowMs / 1000.0) : dps;
+            int observedHitSampleCount = stats.observedHitSampleCount();
+            double critRate = observedHitSampleCount > 0
+                    ? (double) stats.observedCritHitCount() / observedHitSampleCount
+                    : 0.0;
+            double directHitRate = observedHitSampleCount > 0
+                    ? (double) stats.observedDirectHitCount() / observedHitSampleCount
+                    : 0.0;
+            double critDirectHitRate = observedHitSampleCount > 0
+                    ? (double) stats.observedCritDirectHitCount() / observedHitSampleCount
+                    : 0.0;
 
             int jobId = jobIdMap.getOrDefault(actorId, 0);  // 직업 정보 (없으면 0)
 
@@ -120,6 +130,9 @@ public final class SnapshotAggregator {
                     est.confidence(),
                     damagePercent,
                     stats.hitCount(),
+                    critRate,
+                    directHitRate,
+                    critDirectHitRate,
                     stats.deathCount(),
                     stats.maxHitDamage(),
                     resolveMaxHitSkillName(stats),

@@ -169,4 +169,19 @@ class CombatStateTest {
         assertEquals(0.0, ownerStats.totalGrantedBuffContribution(), 0.001);
         assertEquals(0.0, petStats.totalReceivedBuffContribution(), 0.001);
     }
+
+    @Test
+    void observeHitOutcome_tracksCritAndDirectHitRatesSeparately() {
+        ActorStats stats = new ActorStats(new ActorId(0x10000001L), "dealer");
+
+        stats.observeHitOutcome(false, false);
+        stats.observeHitOutcome(true, false);
+        stats.observeHitOutcome(false, true);
+        stats.observeHitOutcome(true, true);
+
+        assertEquals(4, stats.observedHitSampleCount());
+        assertEquals(2, stats.observedCritHitCount());
+        assertEquals(2, stats.observedDirectHitCount());
+        assertEquals(1, stats.observedCritDirectHitCount());
+    }
 }
