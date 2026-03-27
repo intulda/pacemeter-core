@@ -374,4 +374,29 @@ class ActLineParserTest {
         assertEquals(0x1008B280L, combatant.ownerId());
         assertEquals(215512L, combatant.maxHp());
     }
+
+    @Test
+    void parse_combatantAdded_from261Add_readsJobAsDecimal() {
+        String line = "261|" + TS + "|Add|101F2C6F|Job|19|Name|Paladin Main|CurrentHP|197833|MaxHP|197833|OwnerID|0|checksum";
+
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(CombatantAdded.class, result);
+        CombatantAdded combatant = (CombatantAdded) result;
+        assertEquals(19, combatant.jobId());
+        assertEquals("Paladin Main", combatant.name());
+    }
+
+    @Test
+    void parse_partyList_withHexCount_stillParses() {
+        String line = "11|" + TS + "|0x2|101396A7|10128857";
+
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(PartyList.class, result);
+        PartyList partyList = (PartyList) result;
+        assertEquals(2, partyList.partyMemberIds().size());
+        assertEquals(0x101396A7L, partyList.partyMemberIds().get(0));
+        assertEquals(0x10128857L, partyList.partyMemberIds().get(1));
+    }
 }

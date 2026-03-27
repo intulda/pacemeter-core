@@ -10,4 +10,4 @@ pacemeter:
     client-secret: "rneeibBKs0uFSpZ5hakN4xXD15bFObLgt1IYAl2b"
     partition: ""
   act:
-    direct-enabled: false
+    direct-enabled: true

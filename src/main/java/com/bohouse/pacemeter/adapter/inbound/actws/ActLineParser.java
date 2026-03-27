@@ -104,7 +104,8 @@ public final class ActLineParser {
         // Format: 11|timestamp|partyCount|id0|id1|id2|id3|id4|id5|id6|id7
         if (typeCode == 11) {
             if (p.length < 3) return null;
-            int partyCount = Integer.parseInt(p[2]);
+            int partyCount = parseFlexibleInt(p[2]);
+            if (partyCount < 0) return null;
             List<Long> memberIds = new ArrayList<>();
             for (int i = 0; i < partyCount && i < 8 && (3 + i) < p.length; i++) {
                 long memberId = parseHexLong(p[3 + i]);
@@ -134,7 +135,7 @@ public final class ActLineParser {
             long id = parseHexLong(p[3]);
             Map<String, String> fields = parseKeyValueFields(p, 4);
             String name = fields.getOrDefault("Name", "");
-            int jobId = (int) parseHexLong(fields.get("Job"));
+            int jobId = parseDecimalInt(fields.get("Job"));
             long ownerId = parseHexLong(fields.get("OwnerID"));
             long currentHp = parseDecimalLong(fields.get("CurrentHP"));
             long maxHp = parseDecimalLong(fields.get("MaxHP"));
@@ -291,6 +292,21 @@ public final class ActLineParser {
         if (value == null || value.isBlank()) return 0;
         try { return Long.parseLong(value); }
         catch (NumberFormatException e) { return 0; }
+    }
+
+    private static int parseDecimalInt(String value) {
+        if (value == null || value.isBlank()) return 0;
+        try { return Integer.parseInt(value); }
+        catch (NumberFormatException e) { return 0; }
+    }
+
+    private static int parseFlexibleInt(String value) {
+        if (value == null || value.isBlank()) return -1;
+        try { return Integer.parseInt(value); }
+        catch (NumberFormatException ignored) {
+            try { return (int) Long.parseUnsignedLong(value.replace("0x", ""), 16); }
+            catch (NumberFormatException ignoredAgain) { return -1; }
+        }
     }
 
     /**

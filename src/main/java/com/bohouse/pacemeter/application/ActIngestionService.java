@@ -214,9 +214,18 @@ public final class ActIngestionService {
         }
 
         if (line instanceof PrimaryPlayerChanged p) {
+            boolean playerIdentityChanged = currentPlayerId != 0
+                    && (currentPlayerId != p.playerId() || !Objects.equals(currentPlayerName, p.playerName()));
+            if (fightStarted && playerIdentityChanged) {
+                logger.info("[Ingestion] primary player changed during fight: old={}({}) new={}({}), ending fight",
+                        currentPlayerName, Long.toHexString(currentPlayerId),
+                        p.playerName(), Long.toHexString(p.playerId()));
+                endFight();
+            }
             this.currentPlayerId = p.playerId();
             this.currentPlayerName = p.playerName();
             actorNameById.put(p.playerId(), p.playerName());
+            partyMemberIds.add(p.playerId());
             // jobId는 CombatantAdded에서 설정됨
 
             // 엔진에 현재 플레이어 ID 전달 (개인 페이스 비교용)
@@ -247,6 +256,7 @@ public final class ActIngestionService {
                     c.name(), Long.toHexString(c.id()), Integer.toHexString(c.jobId()),
                     Long.toHexString(c.ownerId()), c.rawLine());
             actorNameById.put(c.id(), c.name());
+            boolean wasKnownPartyMember = partyMemberIds.contains(c.id());
 
             // 펫/소환수 소유자 추적
             if (c.ownerId() != 0) {
@@ -263,6 +273,11 @@ public final class ActIngestionService {
 
                 // 본인이면 currentPlayerJobId 저장
                 if (c.id() == currentPlayerId || c.name().equals(currentPlayerName)) {
+                    if (fightStarted && currentPlayerJobId != 0 && c.jobId() != 0 && c.jobId() != currentPlayerJobId) {
+                        logger.info("[Ingestion] current player job changed during fight: {} -> {}, ending fight",
+                                Integer.toHexString(currentPlayerJobId), Integer.toHexString(c.jobId()));
+                        endFight();
+                    }
                     currentPlayerId = c.id();
                     currentPlayerJobId = c.jobId();
                     combatEventPort.setCurrentPlayerId(new ActorId(c.id()));
@@ -270,6 +285,12 @@ public final class ActIngestionService {
                             c.name(), Long.toHexString(c.id()),
                             Integer.toHexString(c.jobId()),
                             FfxivJobMapper.toKoreanName(c.jobId()));
+                }
+
+                if (!partyDataInitialized
+                        && !(c.id() == currentPlayerId || c.name().equals(currentPlayerName))
+                        && !wasKnownPartyMember) {
+                    partyMemberIds.remove(c.id());
                 }
 
             }
@@ -1556,7 +1577,11 @@ public final class ActIngestionService {
         }
 
         // 파티 정보 미수신 시: PC면 파티원으로 간주 (레이트 스타트 대응)
-        if (!partyDataInitialized && isPlayerCharacter(actorId)) {
+        if (!partyDataInitialized && actorId == currentPlayerId) {
+            return true;
+        }
+
+        if (!partyDataInitialized && owner != null && owner == currentPlayerId) {
             return true;
         }
 

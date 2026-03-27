@@ -132,12 +132,27 @@ public class ActWsClient {
                             }
 
                             String rawLine = rawLineNode.asText();
+                            int rawTypeCode = extractRawLineTypeCode(rawLine);
+                            if (rawTypeCode == 11) {
+                                logger.info("[ACT] raw PartyList line: {}", rawLine);
+                            }
                             ParsedLine parsed = parser.parse(rawLine);
                             if (parsed != null) {
+                                if (parsed instanceof PartyList partyList) {
+                                    logger.info("[ACT] parsed PartyList: {} members {}",
+                                            partyList.partyMemberIds().size(),
+                                            partyList.partyMemberIds().stream()
+                                                    .map(id -> Long.toHexString(id))
+                                                    .toList());
+                                }
                                 ingestion.onParsed(parsed);
                             } else {
                                 // 파싱 실패한 라인은 디버그 레벨로 로깅 (너무 많이 나올 수 있음)
-                                logger.debug("[ACT] failed to parse line: {}", rawLine);
+                                if (rawTypeCode == 11) {
+                                    logger.warn("[ACT] failed to parse PartyList raw line: {}", rawLine);
+                                } else {
+                                    logger.debug("[ACT] failed to parse line: {}", rawLine);
+                                }
                             }
                         } catch (Exception e) {
                             logger.warn("[ACT] payload parse error: {} | payload: {}", e.getMessage(), payload.substring(0, Math.min(200, payload.length())));
@@ -213,6 +228,10 @@ public class ActWsClient {
 
             Instant now = Instant.now();
 
+            // Mark party data as available before replaying combatants so restored party
+            // members are retained instead of being treated like generic town PCs.
+            ingestion.onCombatDataReady(combatantNode.size());
+
             // 각 파티원 정보 처리
             combatantNode.fields().forEachRemaining(entry -> {
                 String name = entry.getKey();
@@ -247,9 +266,6 @@ public class ActWsClient {
             logger.info("[ACT] CombatData: restored {} combatants from ongoing combat",
                     combatantNode.size());
 
-            // 파티 데이터 초기화 완료 알림
-            ingestion.onCombatDataReady(combatantNode.size());
-
         } catch (Exception e) {
             logger.error("[ACT] CombatData parse error: {}", e.getMessage(), e);
         }
@@ -261,6 +277,19 @@ public class ActWsClient {
             return Long.parseLong(value);
         } catch (NumberFormatException e) {
             return 0;
+        }
+    }
+
+    private static int extractRawLineTypeCode(String rawLine) {
+        if (rawLine == null || rawLine.isBlank()) {
+            return -1;
+        }
+        int separatorIndex = rawLine.indexOf('|');
+        String typeToken = separatorIndex >= 0 ? rawLine.substring(0, separatorIndex) : rawLine;
+        try {
+            return Integer.parseInt(typeToken);
+        } catch (NumberFormatException e) {
+            return -1;
         }
     }
 }
