@@ -26,8 +26,11 @@ public final class ActIngestionService {
     private static final long UNKNOWN_STATUS_DOT_WINDOW_MS = 90_000L;
     private static final Duration STATUS_SNAPSHOT_REDISTRIBUTION_WINDOW = Duration.ofMillis(10000);
     private static final Duration STATUS_SIGNAL_REDISTRIBUTION_WINDOW = Duration.ofMillis(3500);
+    private static final Duration LIVE_DOT_ATTRIBUTION_DEBUG_RETENTION = Duration.ofSeconds(30);
+    private static final double STATUS_SNAPSHOT_WEIGHT_GAMMA = 0.76;
     private static final double STATUS_SIGNAL_WEIGHT_BLEND_ALPHA = 0.80;
     private static final double STATUS0_SOURCE_HINT_WEIGHT = 1.0;
+    private static final double ACTIVE_DOT_SUBSET_WEIGHT_COVERAGE_THRESHOLD = 0.50;
     private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);
     private final CombatEventPort combatEventPort;
     private final CombatService combatService;
@@ -61,6 +64,7 @@ public final class ActIngestionService {
     private final Map<String, Long> dotAttributionModeCounts = new HashMap<>();
     private final Map<String, Long> dotAttributionAssignedAmountByKey = new HashMap<>();
     private final Map<String, Long> dotAttributionAssignedHitCountByKey = new HashMap<>();
+    private final Deque<DotAttributionAssignment> recentDotAttributionAssignments = new ArrayDeque<>();
     private final StatusZeroDotAllocationPlanner statusZeroDotAllocationPlanner = new StatusZeroDotAllocationPlanner();
     private BossCandidate pendingBoss;
     private Long announcedBossId;
@@ -146,6 +150,7 @@ public final class ActIngestionService {
         dotAttributionModeCounts.clear();
         dotAttributionAssignedAmountByKey.clear();
         dotAttributionAssignedHitCountByKey.clear();
+        recentDotAttributionAssignments.clear();
         actorNameById.clear();
         pendingBoss = null;
         announcedBossId = null;
@@ -200,6 +205,7 @@ public final class ActIngestionService {
             dotAttributionModeCounts.clear();
             dotAttributionAssignedAmountByKey.clear();
             dotAttributionAssignedHitCountByKey.clear();
+            recentDotAttributionAssignments.clear();
             combatService.clearCombatantContext();
             pendingBoss = null;
             announcedBossId = null;
@@ -599,6 +605,7 @@ public final class ActIngestionService {
             if (value <= 0.0) {
                 continue;
             }
+            value = Math.pow(value, STATUS_SNAPSHOT_WEIGHT_GAMMA);
             weights.put(new TrackedDotKey(entry.sourceId(), trackedActionId), value);
         }
         if (weights.isEmpty()) {
@@ -617,6 +624,22 @@ public final class ActIngestionService {
             return List.of();
         }
         return targetDots.values().stream()
+                .filter(dotState -> isPartyMember(dotState.sourceId()))
+                .sorted(Comparator.comparingLong(TrackedDotState::sourceId).thenComparingInt(TrackedDotState::actionId))
+                .toList();
+    }
+
+    private List<TrackedDotState> resolveTrackedSourceDots(DotTickRaw dot) {
+        if (dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
+            return List.of();
+        }
+        pruneExpiredTrackedDots(dot.ts());
+        Map<TrackedDotKey, TrackedDotState> targetDots = activeTargetDots.get(dot.targetId());
+        if (targetDots == null || targetDots.isEmpty()) {
+            return List.of();
+        }
+        return targetDots.values().stream()
+                .filter(dotState -> dotState.sourceId() == dot.sourceId())
                 .filter(dotState -> isPartyMember(dotState.sourceId()))
                 .sorted(Comparator.comparingLong(TrackedDotState::sourceId).thenComparingInt(TrackedDotState::actionId))
                 .toList();
@@ -684,10 +707,32 @@ public final class ActIngestionService {
                 activeWeights.put(entry.getKey(), entry.getValue());
             }
         }
-        if (!activeWeights.isEmpty()) {
+        if (!activeWeights.isEmpty() && shouldPreferActiveTrackedDotSubset(activeWeights, fallbackWeights)) {
             return activeWeights;
         }
         return fallbackWeights;
+    }
+
+    private static boolean shouldPreferActiveTrackedDotSubset(
+            Map<TrackedDotKey, Double> activeWeights,
+            Map<TrackedDotKey, Double> fallbackWeights
+    ) {
+        if (activeWeights.isEmpty() || fallbackWeights.isEmpty()) {
+            return false;
+        }
+        if (activeWeights.size() == fallbackWeights.size()) {
+            return true;
+        }
+        if (activeWeights.size() < 2) {
+            return false;
+        }
+
+        double fallbackWeightSum = fallbackWeights.values().stream().mapToDouble(Double::doubleValue).sum();
+        if (fallbackWeightSum <= 0.0) {
+            return false;
+        }
+        double activeWeightSum = activeWeights.values().stream().mapToDouble(Double::doubleValue).sum();
+        return (activeWeightSum / fallbackWeightSum) >= ACTIVE_DOT_SUBSET_WEIGHT_COVERAGE_THRESHOLD;
     }
 
     private Map<TrackedDotKey, Double> applyStatusSignalWeighting(DotTickRaw dot, Map<TrackedDotKey, Double> baseWeights) {
@@ -835,15 +880,6 @@ public final class ActIngestionService {
         if (resolved != null) {
             return resolved;
         }
-        UnknownStatusDotAttributionResolver.DotApplication byEquivalentTarget =
-                resolveRecentEquivalentTargetEvidence(dot, unknownStatusDotStatusApplications);
-        if (byEquivalentTarget != null) {
-            int trackedActionId = toTrackedDotActionId(byEquivalentTarget.actionId());
-            if (trackedActionId != 0) {
-                return trackedActionId;
-            }
-            return byEquivalentTarget.actionId();
-        }
         return resolveSourceEvidenceFallbackActionId(
                 dot,
                 unknownStatusDotStatusEvidenceBySource,
@@ -867,6 +903,65 @@ public final class ActIngestionService {
         return Map.copyOf(dotAttributionAssignedHitCountByKey);
     }
 
+    public LiveDotAttributionDebugSnapshot debugLiveDotAttributionSnapshot(long lookbackSeconds) {
+        long sanitizedLookbackSeconds = Math.max(1L, Math.min(60L, lookbackSeconds));
+        Instant now = lastEventInstant != null ? lastEventInstant : Instant.now();
+        pruneRecentDotAttributionAssignments(now);
+        Instant cutoff = now.minusSeconds(sanitizedLookbackSeconds);
+        Map<DotAttributionRollupKey, DotAttributionRollup> rollups = new HashMap<>();
+        int recentAssignmentCount = 0;
+        for (DotAttributionAssignment assignment : recentDotAttributionAssignments) {
+            if (assignment.ts().isBefore(cutoff)) {
+                continue;
+            }
+            recentAssignmentCount++;
+            rollups.computeIfAbsent(
+                            new DotAttributionRollupKey(
+                                    assignment.mode(),
+                                    assignment.sourceId(),
+                                    assignment.sourceName(),
+                                    assignment.actionId()
+                            ),
+                            ignored -> new DotAttributionRollup()
+                    )
+                    .add(assignment.amount());
+        }
+        List<LiveDotAttributionDebugSnapshot.Entry> entries = rollups.entrySet().stream()
+                .sorted((left, right) -> {
+                    int amountCompare = Long.compare(right.getValue().totalAmount, left.getValue().totalAmount);
+                    if (amountCompare != 0) {
+                        return amountCompare;
+                    }
+                    int hitCompare = Long.compare(right.getValue().hitCount, left.getValue().hitCount);
+                    if (hitCompare != 0) {
+                        return hitCompare;
+                    }
+                    int modeCompare = left.getKey().mode.compareTo(right.getKey().mode);
+                    if (modeCompare != 0) {
+                        return modeCompare;
+                    }
+                    int sourceCompare = Long.compare(left.getKey().sourceId, right.getKey().sourceId);
+                    if (sourceCompare != 0) {
+                        return sourceCompare;
+                    }
+                    return Integer.compare(left.getKey().actionId, right.getKey().actionId);
+                })
+                .map(entry -> new LiveDotAttributionDebugSnapshot.Entry(
+                        entry.getKey().mode,
+                        entry.getKey().sourceId,
+                        entry.getKey().sourceName,
+                        entry.getKey().actionId,
+                        entry.getValue().totalAmount,
+                        entry.getValue().hitCount
+                ))
+                .toList();
+        return new LiveDotAttributionDebugSnapshot(
+                sanitizedLookbackSeconds,
+                recentAssignmentCount,
+                entries
+        );
+    }
+
     boolean debugHasUnknownStatusDotAction(long sourceId, long targetId) {
         return unknownStatusDotApplications.containsKey(new UnknownStatusDotAttributionResolver.DotKey(sourceId, targetId));
     }
@@ -885,62 +980,11 @@ public final class ActIngestionService {
         if (resolved != null) {
             return resolved;
         }
-        UnknownStatusDotAttributionResolver.DotApplication byEquivalentTarget =
-                resolveRecentEquivalentTargetEvidence(dot, unknownStatusDotApplications);
-        if (byEquivalentTarget != null) {
-            return byEquivalentTarget.actionId();
-        }
         return resolveSourceEvidenceFallbackActionId(
                 dot,
                 unknownStatusDotActionEvidenceBySource,
                 actionId -> actionId
         );
-    }
-
-    private UnknownStatusDotAttributionResolver.DotApplication resolveRecentEquivalentTargetEvidence(
-            DotTickRaw dot,
-            Map<UnknownStatusDotAttributionResolver.DotKey, UnknownStatusDotAttributionResolver.DotApplication> evidenceMap
-    ) {
-        if (dot.sourceId() == 0L
-                || dot.sourceId() == UNKNOWN_ACTOR_ID
-                || isFriendlyTarget(dot.targetId())) {
-            return null;
-        }
-        String normalizedTargetName = normalizeActorName(dot.targetName());
-        if (normalizedTargetName.isEmpty()) {
-            return null;
-        }
-        Instant cutoff = dot.ts().minusMillis(UNKNOWN_STATUS_DOT_WINDOW_MS);
-        UnknownStatusDotAttributionResolver.DotApplication latest = null;
-        for (Map.Entry<UnknownStatusDotAttributionResolver.DotKey, UnknownStatusDotAttributionResolver.DotApplication> entry
-                : evidenceMap.entrySet()) {
-            UnknownStatusDotAttributionResolver.DotKey key = entry.getKey();
-            UnknownStatusDotAttributionResolver.DotApplication application = entry.getValue();
-            if (key.sourceId() != dot.sourceId() || key.targetId() == dot.targetId()) {
-                continue;
-            }
-            if (application.appliedAt().isBefore(cutoff)) {
-                continue;
-            }
-            if (isFriendlyTarget(key.targetId())) {
-                continue;
-            }
-            String candidateTargetName = normalizeActorName(actorNameById.getOrDefault(key.targetId(), ""));
-            if (!normalizedTargetName.equals(candidateTargetName)) {
-                continue;
-            }
-            if (latest == null || application.appliedAt().isAfter(latest.appliedAt())) {
-                latest = application;
-            }
-        }
-        return latest;
-    }
-
-    private static String normalizeActorName(String name) {
-        if (name == null) {
-            return "";
-        }
-        return name.trim().toLowerCase(Locale.ROOT);
     }
 
     private Integer resolveSourceEvidenceFallbackActionId(
@@ -953,11 +997,7 @@ public final class ActIngestionService {
             return null;
         }
         if (evidence.targetId() != dot.targetId()) {
-            String evidenceTargetName = normalizeActorName(evidence.targetName());
-            String dotTargetName = normalizeActorName(dot.targetName());
-            if (evidenceTargetName.isEmpty() || !evidenceTargetName.equals(dotTargetName)) {
-                return null;
-            }
+            return null;
         }
         int mapped = actionMapper.applyAsInt(evidence.actionOrStatusId());
         return mapped != 0 ? mapped : evidence.actionOrStatusId();
@@ -1218,6 +1258,7 @@ public final class ActIngestionService {
                     remaining -= allocated;
                     emitDotDamageWithAttribution(
                             "status0_snapshot_redistribution",
+                            dot.ts(),
                             tsMs,
                             new ActorId(redistributedDot.sourceId()),
                             actorNameById.getOrDefault(redistributedDot.sourceId(), dot.sourceName()),
@@ -1229,6 +1270,29 @@ public final class ActIngestionService {
                 return;
             }
 
+            if (!acceptedBySource) {
+                List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
+                if (!sourceTrackedDots.isEmpty()) {
+                    long remaining = dot.damage();
+                    for (int i = 0; i < sourceTrackedDots.size(); i++) {
+                        TrackedDotState trackedDot = sourceTrackedDots.get(i);
+                        long allocated = remaining / (sourceTrackedDots.size() - i);
+                        remaining -= allocated;
+                        emitDotDamageWithAttribution(
+                                "status0_tracked_source_target_split",
+                                dot.ts(),
+                                tsMs,
+                                new ActorId(trackedDot.sourceId()),
+                                trackedDot.sourceName(),
+                                new ActorId(dot.targetId()),
+                                trackedDot.actionId(),
+                                allocated
+                        );
+                    }
+                    return;
+                }
+            }
+
             List<TrackedDotState> trackedDots = resolveTrackedTargetDots(dot);
             if (!trackedDots.isEmpty()) {
                 long remaining = dot.damage();
@@ -1238,6 +1302,7 @@ public final class ActIngestionService {
                     remaining -= allocated;
                     emitDotDamageWithAttribution(
                             "status0_tracked_target_split",
+                            dot.ts(),
                             tsMs,
                             new ActorId(trackedDot.sourceId()),
                             trackedDot.sourceName(),
@@ -1259,6 +1324,7 @@ public final class ActIngestionService {
                     .orElseGet(() -> resolveDotActionId(dot));
             emitDotDamageWithAttribution(
                     attributionMode,
+                    dot.ts(),
                     tsMs,
                     new ActorId(resolvedSourceId),
                     resolvedSourceName,
@@ -1278,6 +1344,7 @@ public final class ActIngestionService {
                 remaining -= allocated;
                 emitDotDamageWithAttribution(
                         "status0_fallback_tracked_target_split",
+                        dot.ts(),
                         tsMs,
                         new ActorId(trackedDot.sourceId()),
                         trackedDot.sourceName(),
@@ -1295,6 +1362,7 @@ public final class ActIngestionService {
 
     private void emitDotDamageWithAttribution(
             String attributionMode,
+            Instant attributionTs,
             long tsMs,
             ActorId sourceId,
             String sourceName,
@@ -1309,7 +1377,24 @@ public final class ActIngestionService {
         String key = buildDotAttributionAssignmentKey(attributionMode, sourceId.value(), actionId);
         dotAttributionAssignedAmountByKey.merge(key, amount, Long::sum);
         dotAttributionAssignedHitCountByKey.merge(key, 1L, Long::sum);
+        recentDotAttributionAssignments.addLast(new DotAttributionAssignment(
+                attributionTs,
+                attributionMode,
+                sourceId.value(),
+                sourceName,
+                actionId,
+                amount
+        ));
+        pruneRecentDotAttributionAssignments(attributionTs);
         emitValidatedDotDamageEvent(tsMs, sourceId, sourceName, targetId, actionId, amount);
+    }
+
+    private void pruneRecentDotAttributionAssignments(Instant now) {
+        Instant cutoff = now.minus(LIVE_DOT_ATTRIBUTION_DEBUG_RETENTION);
+        while (!recentDotAttributionAssignments.isEmpty()
+                && recentDotAttributionAssignments.peekFirst().ts().isBefore(cutoff)) {
+            recentDotAttributionAssignments.removeFirst();
+        }
     }
 
     private String buildDotAttributionAssignmentKey(String mode, long sourceId, int actionId) {
@@ -1565,6 +1650,24 @@ public final class ActIngestionService {
     private record StatusSignalEvidence(Instant ts, long sourceId, int actionId) {}
     private record StatusSnapshotState(Instant ts, Map<TrackedDotKey, Double> weights) {}
     private record SnapshotRedistributedDot(long sourceId, int actionId, long amount) {}
+    private record DotAttributionAssignment(
+            Instant ts,
+            String mode,
+            long sourceId,
+            String sourceName,
+            int actionId,
+            long amount
+    ) {}
+    private record DotAttributionRollupKey(String mode, long sourceId, String sourceName, int actionId) {}
+    private static final class DotAttributionRollup {
+        private long totalAmount;
+        private long hitCount;
+
+        private void add(long amount) {
+            totalAmount += amount;
+            hitCount++;
+        }
+    }
     private record PendingBuffEvent(BuffApplyRaw apply, BuffRemoveRaw remove) {
         private static PendingBuffEvent apply(BuffApplyRaw apply) {
             return new PendingBuffEvent(apply, null);

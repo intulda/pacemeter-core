@@ -1,5 +1,43 @@
 # paceMeter 작업 목록
 
+## 2026-03-27 Priority Update
+
+### 현재 메인 스트림
+- 현재 최우선 작업은 `clearability`가 아니라 `rDPS 정밀도 개선 / FFLogs parity 보정`이다.
+- clearability는 구현 경로가 이미 연결되어 있으며, 지금은 메인 개발 스트림이 아니라 검증/보강 단계로 본다.
+- 기준 문서는 `docs/parity-patch-notes.md`이며, 우선순위와 금지 실험은 해당 문서를 기준으로 맞춘다.
+
+### 우선순위
+1. 현재 parity baseline을 깨지 않고 유지한다.
+   - 기준: `scripts/parity_repro_check.sh`
+   - 핵심 지표: `mape`, `p95`, `max`, `gate pass`
+2. selected fight 하나만 맞추는 방향으로 가지 않는다.
+   - heavy2/heavy4/lindwurm rollup과 all-fights gate를 같이 본다.
+   - 특히 heavy2 report의 fight 1/2/3처럼 흔들리는 구간을 별도로 본다.
+3. `status=0` DoT attribution의 실제 누락/오귀속 원인을 diagnostics로 먼저 분리한다.
+   - source-only fallback이 왜 위험한지 이미 확인되어 있다.
+   - target mismatch, evidence coverage, selected-fight type37 coverage를 계속 기준으로 삼는다.
+4. `SCH/SGE` 계열 DoT 누락/과소 집계를 줄이는 작업을 이어간다.
+   - 우선 대상: `Biolysis`, `Baneful Impaction`, `Eukrasian Dosis III`
+   - 단, production 경로에 성급히 넣지 말고 diagnostics/replay/parity report로 먼저 확인한다.
+5. `PCT/NIN/DNC/DRG`의 잔여 편차는 status 단위 buff attribution으로 다시 본다.
+6. `type 37`은 보조 증거로만 다룬다.
+   - parser 자체가 문제의 전부는 아니며, signal-only / widened-window / source-priority 계열은 이미 여러 번 악화가 확인되었다.
+   - production ingestion에 바로 넣기보다 offline diagnostics와 제한적 검증을 우선한다.
+
+### 작업 원칙
+- parity를 깨는 큰 구조 변경보다, 재현 가능한 실험과 직업별 편차 축소를 우선한다.
+- production 경로 반영 전에는 replay / parity report / debug API로 먼저 검증한다.
+- 실패한 실험은 같은 형태로 재시도하지 않는다.
+  - source-only 우선 귀속
+  - signal-only 분배 확장
+  - widened signal window
+  - strict corroborated source 우선
+  - rules-empty/source-empty 차단 계열
+- `eventsByAbility`만으로 결론 내리지 않는다.
+  - `abilities total`, actor delta, target mismatch, evidence coverage를 함께 본다.
+- clearability 관련 잔여 항목은 후순위 검증으로 유지한다.
+
 ## 현재 작업: 보스 체력 기반 클리어 가능 여부 판단 시스템
 
 **목표**: ACT에서 보스 HP 정보를 받아서, 현재 파티 DPS로 엔레이지 전에 보스를 잡을 수 있는지 판단
@@ -280,3 +318,14 @@
 1. 백엔드 목표는 구현보다 검증 강화 단계에 들어옴
 2. clearability 백엔드는 거의 마감 단계이며 남은 일은 실제 플레이/JSONL 검증
 3. rDPS 정밀도 개선은 별도 후속 스트림으로 계속 진행
+## 2026-03-27 Live-First Note
+
+- `data/submissions/*` is a regression fixture set, not the product target.
+- The product target is `live ACT -> pacemeter live rDPS` tracking `FFLogs companion live rDPS` with near-identical behavior.
+- Offline replay parity is required, but replay-only wins are not acceptable if they reduce live explainability or live stability.
+- Every attribution rule should be defensible on the live ingestion path, not just on selected submission windows.
+- Final acceptance criteria:
+  - replay regression gate stays healthy
+  - all-fights generalization stays healthy
+  - live overlay rDPS trend matches FFLogs companion live trend over time
+  - job-level DoT attribution is stable under ongoing combat, not only at fight end

@@ -558,3 +558,14 @@
   - `SubmissionParityRegressionGateTest` 통과.
   - 기존 `parity_repro_check.sh` baseline 유지:
     - rollup `mape=0.01026`, `p95=0.01649`, `max=0.02225`.
+## 2026-03-27 Live-First Guardrail
+
+- `data/submissions/*` is only an offline regression and diagnostics corpus.
+- The real target is `pacemeter live rDPS ~= FFLogs companion live rDPS`, not just end-of-fight similarity on a few curated logs.
+- A patch is not acceptable if it improves submission parity while making the live attribution model harder to explain or less stable.
+- Replay diagnostics remain necessary because they give reproducible evidence, but they are only a gate, not the goal.
+- From this point onward, every parity change should be evaluated with this order:
+  1. preserve replay regression baseline
+  2. preserve all-fights generalization
+  3. improve live-path attribution explainability
+  4. improve live trend matching against FFLogs companion

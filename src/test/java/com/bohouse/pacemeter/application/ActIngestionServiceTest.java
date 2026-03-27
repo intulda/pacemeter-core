@@ -1396,6 +1396,91 @@ class ActIngestionServiceTest {
     }
 
     @Test
+    void dotTick_withUnknownStatusId_singleActiveTrackedDotFallsBackToFullSnapshotWeights() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Samurai"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL, 0x1000000CL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x1000000AL,
+                "Samurai",
+                0x22,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Samurai"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(60),
+                0x1000000BL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(70),
+                0x1000000CL,
+                "WhiteMage",
+                0x18,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|WhiteMage"
+        ));
+        Instant applyTime = base().plusMillis(900);
+        service.onParsed(new BuffApplyRaw(
+                applyTime,
+                0x04CC,
+                "Higanbana",
+                60.0,
+                0x1000000AL,
+                "Samurai",
+                0x40000001L,
+                "Boss"
+        ));
+        captured.clear();
+
+        Instant snapshotTime = base().plusMillis(1_000);
+        service.onParsed(new StatusSnapshotRaw(
+                snapshotTime,
+                0x40000001L,
+                "Boss",
+                List.of(
+                        new StatusSnapshotRaw.StatusEntry(0x04CC, "42200000", 0x1000000AL),
+                        new StatusSnapshotRaw.StatusEntry(0x0767, "41900000", 0x1000000BL),
+                        new StatusSnapshotRaw.StatusEntry(0x074F, "41800000", 0x1000000CL)
+                ),
+                "38|...|raw"
+        ));
+
+        service.onParsed(new DotTickRaw(
+                snapshotTime.plusMillis(100),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0,
+                0x1000000AL,
+                "Samurai",
+                10_000,
+                "24|...|raw"
+        ));
+
+        List<CombatEvent.DamageEvent> events = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .toList();
+
+        assertEquals(3, events.size());
+        assertEquals(10_000L, events.stream().mapToLong(CombatEvent.DamageEvent::amount).sum());
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000AL)) && event.actionId() == 0x1D41));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x409C));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000CL)) && event.actionId() == 0x4094));
+    }
+
+    @Test
     void dotTick_withUnknownStatusId_blendsRecentType37SignalsIntoSnapshotRedistribution() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Samurai"));
@@ -1501,6 +1586,100 @@ class ActIngestionServiceTest {
 
         assertTrue(schAmount > samAmount);
         assertTrue(whmAmount > samAmount);
+    }
+
+    @Test
+    void debugLiveDotAttributionSnapshot_returnsRecentRollingAssignments() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Samurai"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL, 0x1000000CL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x1000000AL,
+                "Samurai",
+                0x22,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Samurai"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(60),
+                0x1000000BL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(70),
+                0x1000000CL,
+                "WhiteMage",
+                0x18,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|WhiteMage"
+        ));
+
+        Instant snapshotTime = base().plusMillis(1_000);
+        service.onParsed(new StatusSnapshotRaw(
+                snapshotTime,
+                0x40000001L,
+                "Boss",
+                List.of(
+                        new StatusSnapshotRaw.StatusEntry(0x04CC, "41200000", 0x1000000AL),
+                        new StatusSnapshotRaw.StatusEntry(0x0767, "41800000", 0x1000000BL),
+                        new StatusSnapshotRaw.StatusEntry(0x074F, "41800000", 0x1000000CL)
+                ),
+                "38|...|raw"
+        ));
+
+        service.onParsed(new DotTickRaw(
+                snapshotTime.plusMillis(200),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0,
+                0x1000000AL,
+                "Samurai",
+                9_000,
+                "24|...|raw"
+        ));
+
+        Instant secondSnapshotTime = snapshotTime.plusSeconds(11);
+        service.onParsed(new StatusSnapshotRaw(
+                secondSnapshotTime,
+                0x40000001L,
+                "Boss",
+                List.of(
+                        new StatusSnapshotRaw.StatusEntry(0x04CC, "41200000", 0x1000000AL),
+                        new StatusSnapshotRaw.StatusEntry(0x0767, "41800000", 0x1000000BL),
+                        new StatusSnapshotRaw.StatusEntry(0x074F, "41800000", 0x1000000CL)
+                ),
+                "38|...|raw"
+        ));
+        service.onParsed(new DotTickRaw(
+                secondSnapshotTime.plusMillis(200),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0,
+                0x1000000AL,
+                "Samurai",
+                9_000,
+                "24|...|raw"
+        ));
+
+        LiveDotAttributionDebugSnapshot debugSnapshot = service.debugLiveDotAttributionSnapshot(10);
+
+        assertEquals(3, debugSnapshot.recentAssignmentCount());
+        assertEquals(3, debugSnapshot.entries().size());
+        assertTrue(debugSnapshot.entries().stream().allMatch(entry -> "status0_snapshot_redistribution".equals(entry.mode())));
+        assertTrue(debugSnapshot.entries().stream().allMatch(entry -> entry.totalAmount() > 0));
+        assertTrue(debugSnapshot.entries().stream().noneMatch(entry -> entry.sourceId() == 0x1000000AL && entry.totalAmount() >= 9_000));
     }
 
     @Test
@@ -1765,6 +1944,78 @@ class ActIngestionServiceTest {
                 0xEBACL,
                 "24|...|raw"
         );
+        assertFalse(service.wouldEmitDotDamage(dot));
+        assertEquals(0, service.resolveDotActionId(dot));
+
+        service.onParsed(dot);
+        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_forTrackedJob_rejectsFallbackWhenOnlySameNameDifferentTargetExists() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x101C2E9EL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x101C2E9EL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(60),
+                0x40000001L,
+                "Boss",
+                0,
+                0,
+                50_000_000L,
+                50_000_000L,
+                "03|...|Boss"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(70),
+                0x40000002L,
+                "Boss",
+                0,
+                0,
+                50_000_000L,
+                50_000_000L,
+                "03|...|Boss"
+        ));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(300),
+                21,
+                0x101C2E9EL,
+                "Scholar",
+                0x409C,
+                "Biolysis",
+                0x40000002L,
+                "Boss",
+                false,
+                false,
+                1200,
+                "21|...|raw"
+        ));
+        captured.clear();
+
+        DotTickRaw dot = new DotTickRaw(
+                base().plusMillis(3200),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0,
+                0x101C2E9EL,
+                "Scholar",
+                0xEBACL,
+                "24|...|raw"
+        );
+
         assertFalse(service.wouldEmitDotDamage(dot));
         assertEquals(0, service.resolveDotActionId(dot));
 
