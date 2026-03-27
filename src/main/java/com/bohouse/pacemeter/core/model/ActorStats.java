@@ -24,6 +24,7 @@ public final class ActorStats {
     private int deathCount;
     private long maxHitDamage;
     private int maxHitActionId;
+    private String maxHitActionName;
     private final List<ActiveBuff> activeBuffs;
 
     /** 최근 데미지 기록 목록. 슬라이딩 윈도우 DPS 계산에 사용된다. */
@@ -50,6 +51,7 @@ public final class ActorStats {
         this.deathCount = 0;
         this.maxHitDamage = 0;
         this.maxHitActionId = 0;
+        this.maxHitActionName = "";
         this.activeBuffs = new ArrayList<>();
         this.recentSamples = new ArrayList<>();
         this.recentGrantedContributionSamples = new ArrayList<>();
@@ -72,6 +74,7 @@ public final class ActorStats {
         this.deathCount = other.deathCount;
         this.maxHitDamage = other.maxHitDamage;
         this.maxHitActionId = other.maxHitActionId;
+        this.maxHitActionName = other.maxHitActionName;
         this.activeBuffs = new ArrayList<>(other.activeBuffs);        // record는 불변이라 얕은 복사로 충분
         this.recentSamples = new ArrayList<>(other.recentSamples);    // record는 불변이라 얕은 복사로 충분
         this.recentGrantedContributionSamples = new ArrayList<>(other.recentGrantedContributionSamples);
@@ -91,11 +94,16 @@ public final class ActorStats {
     }
 
     public void addDamage(long amount, long timestampMs, int actionId) {
+        addDamage(amount, timestampMs, actionId, "");
+    }
+
+    public void addDamage(long amount, long timestampMs, int actionId, String actionName) {
         this.totalDamage += amount;
         this.hitCount++;
         if (amount > this.maxHitDamage) {
             this.maxHitDamage = amount;
             this.maxHitActionId = actionId;
+            this.maxHitActionName = actionName == null ? "" : actionName;
         }
         this.recentSamples.add(new DamageSample(timestampMs, amount));
     }
@@ -212,6 +220,7 @@ public final class ActorStats {
     public int deathCount() { return deathCount; }
     public long maxHitDamage() { return maxHitDamage; }
     public int maxHitActionId() { return maxHitActionId; }
+    public String maxHitActionName() { return maxHitActionName; }
     public List<ActiveBuff> activeBuffs() { return Collections.unmodifiableList(activeBuffs); }
     public List<DamageSample> recentSamples() { return Collections.unmodifiableList(recentSamples); }
     public double totalGrantedBuffContribution() { return totalGrantedBuffContribution; }

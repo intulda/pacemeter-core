@@ -122,7 +122,7 @@ public final class SnapshotAggregator {
                     stats.hitCount(),
                     stats.deathCount(),
                     stats.maxHitDamage(),
-                    ActionNameLibrary.resolveDisplay(stats.maxHitActionId()),
+                    resolveMaxHitSkillName(stats),
                     recentDps,
                     isCurrentPlayer,
                     individualPace,
@@ -255,6 +255,14 @@ public final class SnapshotAggregator {
     }
 
     /** 밀리초를 "분:초" 형식으로 변환한다. 예: 125000ms → "2:05" */
+    private String resolveMaxHitSkillName(ActorStats stats) {
+        String actionName = stats.maxHitActionName();
+        if (actionName != null && !actionName.isBlank()) {
+            return actionName;
+        }
+        return ActionNameLibrary.resolveDisplay(stats.maxHitActionId());
+    }
+
     private static String formatElapsed(long elapsedMs) {
         long totalSeconds = elapsedMs / 1000;
         long minutes = totalSeconds / 60;

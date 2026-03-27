@@ -399,4 +399,15 @@ class ActLineParserTest {
         assertEquals(0x101396A7L, partyList.partyMemberIds().get(0));
         assertEquals(0x10128857L, partyList.partyMemberIds().get(1));
     }
+
+    @Test
+    void parse_playerStats_readsJobId() {
+        String line = "12|" + TS + "|32|6794|442|7574";
+
+        ParsedLine result = parser.parse(line);
+
+        assertInstanceOf(PlayerStatsUpdated.class, result);
+        PlayerStatsUpdated stats = (PlayerStatsUpdated) result;
+        assertEquals(0x20, stats.jobId());
+    }
 }

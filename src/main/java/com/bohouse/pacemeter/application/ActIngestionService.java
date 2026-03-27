@@ -5,6 +5,7 @@ import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FflogsZoneLookup;
 import com.bohouse.pacemeter.adapter.outbound.fflogsapi.FfxivJobMapper;
 import com.bohouse.pacemeter.application.port.inbound.CombatEventPort;
 import com.bohouse.pacemeter.core.event.CombatEvent;
+import com.bohouse.pacemeter.core.model.ActionNameLibrary;
 import com.bohouse.pacemeter.core.model.ActorId;
 import com.bohouse.pacemeter.core.model.BuffId;
 import com.bohouse.pacemeter.core.model.DamageType;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.*;
 import java.util.*;
+import java.util.prefs.Preferences;
 
 @Component
 public final class ActIngestionService {
@@ -32,9 +34,14 @@ public final class ActIngestionService {
     private static final double STATUS0_SOURCE_HINT_WEIGHT = 1.0;
     private static final double ACTIVE_DOT_SUBSET_WEIGHT_COVERAGE_THRESHOLD = 0.50;
     private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);
+    private static final Duration SELF_JOB_METADATA_GRACE = Duration.ofMillis(1500);
+    private static final String SELF_JOB_PREF_NODE = "live-self-job";
+    private static final String ACTOR_JOB_PREF_NODE = "live-actor-job";
     private final CombatEventPort combatEventPort;
     private final CombatService combatService;
     private final FflogsZoneLookup fflogsZoneLookup;
+    private final Preferences preferences = Preferences.userNodeForPackage(ActIngestionService.class).node(SELF_JOB_PREF_NODE);
+    private final Preferences actorJobPreferences = Preferences.userNodeForPackage(ActIngestionService.class).node(ACTOR_JOB_PREF_NODE);
 
     private volatile long currentPlayerId = 0;
     private volatile String currentPlayerName = "YOU";
@@ -49,6 +56,7 @@ public final class ActIngestionService {
     private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 캐릭터별 직업 ID
     private final Map<Long, String> actorNameById = new HashMap<>();
     private final Deque<DamageText> pendingDamageTexts = new ArrayDeque<>();
+    private final Deque<NetworkAbilityRaw> pendingSelfJobAbilities = new ArrayDeque<>();
     private final Deque<PendingBuffEvent> pendingBuffEvents = new ArrayDeque<>();
     private final Map<UnknownStatusDotAttributionResolver.DotKey, UnknownStatusDotAttributionResolver.DotApplication> unknownStatusDotApplications = new HashMap<>();
     private final Map<UnknownStatusDotAttributionResolver.DotKey, UnknownStatusDotAttributionResolver.DotApplication> unknownStatusDotStatusApplications = new HashMap<>();
@@ -137,6 +145,7 @@ public final class ActIngestionService {
         deadPlayers.clear();
         combatPartyMemberIds.clear();
         pendingDamageTexts.clear();
+        pendingSelfJobAbilities.clear();
         pendingBuffEvents.clear();
         unknownStatusDotApplications.clear();
         unknownStatusDotStatusApplications.clear();
@@ -192,6 +201,7 @@ public final class ActIngestionService {
             jobIdByActorId.clear();
             actorNameById.clear();
             pendingDamageTexts.clear();
+            pendingSelfJobAbilities.clear();
             pendingBuffEvents.clear();
             unknownStatusDotApplications.clear();
             unknownStatusDotStatusApplications.clear();
@@ -209,6 +219,14 @@ public final class ActIngestionService {
             combatService.clearCombatantContext();
             pendingBoss = null;
             announcedBossId = null;
+            if (currentPlayerId != 0) {
+                actorNameById.put(currentPlayerId, currentPlayerName);
+                partyMemberIds.add(currentPlayerId);
+                if (currentPlayerJobId > 0) {
+                    jobIdByActorId.put(currentPlayerId, currentPlayerJobId);
+                    combatService.setJobId(new ActorId(currentPlayerId), currentPlayerJobId);
+                }
+            }
             logger.info("[Ingestion] ZoneChanged: id={} name={}", z.zoneId(), z.zoneName());
             return;
         }
@@ -226,11 +244,45 @@ public final class ActIngestionService {
             this.currentPlayerName = p.playerName();
             actorNameById.put(p.playerId(), p.playerName());
             partyMemberIds.add(p.playerId());
+            int restoredJobId = loadPersistedCurrentPlayerJob(p.playerId(), p.playerName());
+            if (restoredJobId > 0 && currentPlayerJobId == 0) {
+                currentPlayerJobId = restoredJobId;
+                logger.info("[Ingestion] restored cached current player job: playerId={} jobId={} ({})",
+                        Long.toHexString(p.playerId()),
+                        Integer.toHexString(restoredJobId),
+                        FfxivJobMapper.toKoreanName(restoredJobId));
+            }
+            if (currentPlayerJobId > 0) {
+                jobIdByActorId.put(p.playerId(), currentPlayerJobId);
+                combatService.setJobId(new ActorId(p.playerId()), currentPlayerJobId);
+            }
             // jobId는 CombatantAdded에서 설정됨
 
             // 엔진에 현재 플레이어 ID 전달 (개인 페이스 비교용)
             combatEventPort.setCurrentPlayerId(new ActorId(p.playerId()));
             logger.info("[Ingestion] current player set: id={} name={}", Long.toHexString(p.playerId()), p.playerName());
+            return;
+        }
+
+        if (line instanceof PlayerStatsUpdated stats) {
+            if (stats.jobId() > 0) {
+                if (fightStarted && currentPlayerJobId > 0 && currentPlayerJobId != stats.jobId()) {
+                    logger.info("[Ingestion] current player job changed from PlayerStats during fight: {} -> {}, ending fight",
+                            Integer.toHexString(currentPlayerJobId), Integer.toHexString(stats.jobId()));
+                    endFight();
+                }
+                currentPlayerJobId = stats.jobId();
+                persistCurrentPlayerJob(currentPlayerId, currentPlayerName, stats.jobId());
+                if (currentPlayerId != 0) {
+                    jobIdByActorId.put(currentPlayerId, stats.jobId());
+                    combatService.setJobId(new ActorId(currentPlayerId), stats.jobId());
+                }
+                logger.info("[Ingestion] PlayerStats job updated: playerId={} jobId={} ({})",
+                        Long.toHexString(currentPlayerId),
+                        Integer.toHexString(stats.jobId()),
+                        FfxivJobMapper.toKoreanName(stats.jobId()));
+                flushPendingSelfJobAbilities();
+            }
             return;
         }
 
@@ -269,6 +321,7 @@ public final class ActIngestionService {
             if (isPlayerCharacter(c.id())) {
                 jobIdByActorId.put(c.id(), c.jobId());  // 직업 저장
                 combatService.setJobId(new ActorId(c.id()), c.jobId());  // 엔진에 직업 정보 전달
+                persistKnownActorJob(c.id(), c.name(), c.jobId());
                 partyMemberIds.add(c.id());  // CombatData 복원 시에도 파티원으로 등록
 
                 // 본인이면 currentPlayerJobId 저장
@@ -280,11 +333,13 @@ public final class ActIngestionService {
                     }
                     currentPlayerId = c.id();
                     currentPlayerJobId = c.jobId();
+                    persistCurrentPlayerJob(c.id(), c.name(), c.jobId());
                     combatEventPort.setCurrentPlayerId(new ActorId(c.id()));
                     logger.info("[Ingestion] CURRENT PLAYER detected: {}(id={}) jobId={} ({})",
                             c.name(), Long.toHexString(c.id()),
                             Integer.toHexString(c.jobId()),
                             FfxivJobMapper.toKoreanName(c.jobId()));
+                    flushPendingSelfJobAbilities();
                 }
 
                 if (!partyDataInitialized
@@ -299,9 +354,34 @@ public final class ActIngestionService {
             return;
         }
 
+        if (line instanceof CombatantStatusSnapshotRaw snapshot) {
+            onParsed(new CombatantAdded(
+                    snapshot.ts(),
+                    snapshot.actorId(),
+                    snapshot.actorName(),
+                    snapshot.jobId(),
+                    0L,
+                    snapshot.currentHp(),
+                    snapshot.maxHp(),
+                    snapshot.rawLine()
+            ));
+            noteStatusSnapshot(new StatusSnapshotRaw(
+                    snapshot.ts(),
+                    snapshot.actorId(),
+                    snapshot.actorName(),
+                    snapshot.statuses(),
+                    snapshot.rawLine()
+            ));
+            return;
+        }
+
         if (line instanceof NetworkAbilityRaw a) {
             actorNameById.put(a.actorId(), a.actorName());
             actorNameById.put(a.targetId(), a.targetName());
+            restoreActorJobFromCache(a.actorId(), a.actorName());
+            if (queueSelfAbilityUntilJobMetadata(a)) {
+                return;
+            }
             receivedAbilityCount++;
             boolean isParty = isPartyMember(a);
             if (a.damage() <= 0) zeroDamageCount++;
@@ -1143,11 +1223,103 @@ public final class ActIngestionService {
                 a.actorName(),
                 new ActorId(a.targetId()),
                 a.skillId(),
+                a.skillName(),
                 a.damage(),
                 damageType,
                 damageFlags.criticalHit(),
                 damageFlags.directHit()
         ));
+    }
+
+    private boolean queueSelfAbilityUntilJobMetadata(NetworkAbilityRaw ability) {
+        if (fightStarted || ability.actorId() != currentPlayerId || currentPlayerJobId > 0 || ability.damage() <= 0) {
+            return false;
+        }
+        if (pendingSelfJobAbilities.isEmpty()) {
+            pendingSelfJobAbilities.addLast(ability);
+            logger.info("[Ingestion] delaying self ability until job metadata arrives: skill={}({})",
+                    ability.skillName(), Integer.toHexString(ability.skillId()));
+            return true;
+        }
+
+        NetworkAbilityRaw firstPending = pendingSelfJobAbilities.peekFirst();
+        if (firstPending != null) {
+            long waitMs = Math.abs(Duration.between(firstPending.ts(), ability.ts()).toMillis());
+            if (waitMs <= SELF_JOB_METADATA_GRACE.toMillis()) {
+                pendingSelfJobAbilities.addLast(ability);
+                logger.info("[Ingestion] buffering self ability while waiting for job metadata: skill={}({}) buffered={}",
+                        ability.skillName(), Integer.toHexString(ability.skillId()), pendingSelfJobAbilities.size());
+                return true;
+            }
+        }
+
+        logger.info("[Ingestion] job metadata grace expired, flushing {} buffered self abilities without job metadata",
+                pendingSelfJobAbilities.size());
+        flushPendingSelfJobAbilities();
+        return false;
+    }
+
+    private void flushPendingSelfJobAbilities() {
+        while (!pendingSelfJobAbilities.isEmpty()) {
+            emitDamage(pendingSelfJobAbilities.removeFirst());
+        }
+    }
+
+    private int loadPersistedCurrentPlayerJob(long playerId, String playerName) {
+        int jobId = preferences.getInt("player-id:" + Long.toHexString(playerId), 0);
+        if (jobId > 0) {
+            return jobId;
+        }
+        if (playerName == null || playerName.isBlank()) {
+            return 0;
+        }
+        return preferences.getInt("player-name:" + playerName, 0);
+    }
+
+    private void persistCurrentPlayerJob(long playerId, String playerName, int jobId) {
+        if (jobId <= 0) {
+            return;
+        }
+        if (playerId != 0) {
+            preferences.putInt("player-id:" + Long.toHexString(playerId), jobId);
+        }
+        if (playerName != null && !playerName.isBlank()) {
+            preferences.putInt("player-name:" + playerName, jobId);
+        }
+    }
+
+    private void persistKnownActorJob(long actorId, String actorName, int jobId) {
+        if (jobId <= 0) {
+            return;
+        }
+        actorJobPreferences.putInt("actor-id:" + Long.toHexString(actorId), jobId);
+        if (actorName != null && !actorName.isBlank()) {
+            actorJobPreferences.putInt("actor-name:" + actorName, jobId);
+        }
+    }
+
+    private void restoreActorJobFromCache(long actorId, String actorName) {
+        if (jobIdByActorId.containsKey(actorId)) {
+            return;
+        }
+        int cachedJobId = actorJobPreferences.getInt("actor-id:" + Long.toHexString(actorId), 0);
+        if (cachedJobId <= 0 && actorName != null && !actorName.isBlank()) {
+            cachedJobId = actorJobPreferences.getInt("actor-name:" + actorName, 0);
+        }
+        if (cachedJobId <= 0) {
+            return;
+        }
+        jobIdByActorId.put(actorId, cachedJobId);
+        combatService.setJobId(new ActorId(actorId), cachedJobId);
+        if (actorId == currentPlayerId && currentPlayerJobId <= 0) {
+            currentPlayerJobId = cachedJobId;
+            persistCurrentPlayerJob(actorId, actorName, cachedJobId);
+        }
+        logger.info("[Ingestion] restored cached actor job: actor={}({}) jobId={} ({})",
+                actorName,
+                Long.toHexString(actorId),
+                Integer.toHexString(cachedJobId),
+                FfxivJobMapper.toKoreanName(cachedJobId));
     }
 
     private DamageFlags matchDamageFlags(NetworkAbilityRaw ability) {
@@ -1452,6 +1624,7 @@ public final class ActIngestionService {
                 sourceName,
                 targetId,
                 actionId,
+                ActionNameLibrary.resolveDisplay(actionId),
                 amount,
                 DamageType.DOT,
                 false,
@@ -1558,8 +1731,23 @@ public final class ActIngestionService {
      * PartyList 로그로부터 받은 실제 파티원 목록 기반.
      * partyDataInitialized=false이면 PC 전체 허용 (레이트 스타트 / 파티 정보 미수신 대응).
      */
+    public void onCombatDataReady(int memberCount, boolean trustPartyMembership) {
+        if (trustPartyMembership) {
+            onCombatDataReady(memberCount);
+            return;
+        }
+        if (memberCount > 0) {
+            logger.info("[Ingestion] CombatData metadata received ({} members, party trust disabled)", memberCount);
+        } else {
+            logger.info("[Ingestion] CombatData received but no members (not in active combat)");
+        }
+    }
+
     private boolean isPartyMember(NetworkAbilityRaw a) {
-        return isPartyMember(a.actorId());
+        if (isPartyMember(a.actorId())) {
+            return true;
+        }
+        return bootstrapCombatPartyMember(a);
     }
 
     private boolean isPartyMember(long actorId) {
@@ -1595,6 +1783,25 @@ public final class ActIngestionService {
         }
         Long owner = ownerByCombatantId.get(targetId);
         return owner != null && effectivePartyMembers.contains(owner);
+    }
+
+    private boolean bootstrapCombatPartyMember(NetworkAbilityRaw ability) {
+        if (partyDataInitialized || !fightStarted) {
+            return false;
+        }
+        long actorId = ability.actorId();
+        if (!isPlayerCharacter(actorId) || actorId == currentPlayerId) {
+            return false;
+        }
+        if (isFriendlyTarget(ability.targetId()) || !isValidCombatZone(ability)) {
+            return false;
+        }
+        boolean added = combatPartyMemberIds.add(actorId);
+        if (added) {
+            logger.info("[Ingestion] bootstrapped combat party member: {}(id={})",
+                    ability.actorName(), Long.toHexString(actorId));
+        }
+        return added;
     }
 
     private Set<Long> effectivePartyMemberIds() {

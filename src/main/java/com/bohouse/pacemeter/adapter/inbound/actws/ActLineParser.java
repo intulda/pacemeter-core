@@ -116,6 +116,15 @@ public final class ActLineParser {
             return new PartyList(ts, memberIds);
         }
 
+        // 12: PlayerStats
+        // Format: 12|timestamp|jobId|...
+        if (typeCode == 12) {
+            if (p.length < 3) return null;
+            int jobId = parseFlexibleInt(p[2]);
+            if (jobId <= 0) return null;
+            return new PlayerStatsUpdated(ts, jobId, line);
+        }
+
         // 3: AddCombatant
         // Format: 03|ts|id|name|jobId|level|ownerId|...
         if (typeCode == 3) {
@@ -201,6 +210,9 @@ public final class ActLineParser {
             if (p.length < 19) return null;
             long actorId = parseHexLong(p[2]);
             String actorName = p[3];
+            int jobId = extractCombatantInfoJobId(p[4]);
+            long currentHp = parseDecimalLong(p[5]);
+            long maxHp = parseDecimalLong(p[6]);
             List<StatusSnapshotRaw.StatusEntry> statuses = new ArrayList<>();
             for (int i = 18; i + 2 < p.length - 1; i += 3) {
                 long packedStatus = parseHexLong(p[i]);
@@ -210,7 +222,16 @@ public final class ActLineParser {
                 }
                 statuses.add(new StatusSnapshotRaw.StatusEntry(statusId, p[i + 1], parseHexLong(p[i + 2])));
             }
-            return new StatusSnapshotRaw(ts, actorId, actorName, List.copyOf(statuses), line);
+            return new CombatantStatusSnapshotRaw(
+                    ts,
+                    actorId,
+                    actorName,
+                    jobId,
+                    currentHp,
+                    maxHp,
+                    List.copyOf(statuses),
+                    line
+            );
         }
 
         // 21/22: NetworkAbility / NetworkAOEAbility
@@ -307,6 +328,12 @@ public final class ActLineParser {
             try { return (int) Long.parseUnsignedLong(value.replace("0x", ""), 16); }
             catch (NumberFormatException ignoredAgain) { return -1; }
         }
+    }
+
+    private static int extractCombatantInfoJobId(String value) {
+        long packed = parseHexLong(value);
+        if (packed <= 0) return 0;
+        return (int) (packed & 0xFF);
     }
 
     /**

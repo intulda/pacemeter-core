@@ -214,23 +214,29 @@ public class ActWsClient {
     private void handleCombatData(JsonNode root) {
         try {
             boolean isActive = root.path("isActive").asBoolean(false);
+            Instant now = Instant.now();
 
-            if (!isActive) {
-                logger.debug("[ACT] CombatData: not in combat");
-                return;
+            int encounterJobId = extractEncounterJobId(root.path("Encounter"));
+            if (encounterJobId > 0) {
+                logger.info("[ACT] CombatData: restored current player job from Encounter job={} ({})",
+                        Integer.toHexString(encounterJobId),
+                        encounterJobId);
+                ingestion.onParsed(new PlayerStatsUpdated(now, encounterJobId, "CombatData/Encounter"));
             }
 
             JsonNode combatantNode = root.path("Combatant");
             if (!combatantNode.isObject()) {
-                logger.warn("[ACT] CombatData: no Combatant object");
+                if (!isActive) {
+                    logger.debug("[ACT] CombatData: not in combat and no Combatant object");
+                } else {
+                    logger.warn("[ACT] CombatData: no Combatant object");
+                }
                 return;
             }
 
-            Instant now = Instant.now();
-
-            // Mark party data as available before replaying combatants so restored party
-            // members are retained instead of being treated like generic town PCs.
-            ingestion.onCombatDataReady(combatantNode.size());
+            // In combat, CombatData can restore actual party membership. Out of combat,
+            // replay it as metadata only so job ids can still be restored safely.
+            ingestion.onCombatDataReady(combatantNode.size(), isActive);
 
             // 각 파티원 정보 처리
             combatantNode.fields().forEachRemaining(entry -> {
@@ -263,8 +269,8 @@ public class ActWsClient {
                 ));
             });
 
-            logger.info("[ACT] CombatData: restored {} combatants from ongoing combat",
-                    combatantNode.size());
+            logger.info("[ACT] CombatData: restored {} combatants (active={})",
+                    combatantNode.size(), isActive);
 
         } catch (Exception e) {
             logger.error("[ACT] CombatData parse error: {}", e.getMessage(), e);
@@ -275,6 +281,46 @@ public class ActWsClient {
         if (value == null || value.isBlank()) return 0;
         try {
             return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    private static int extractEncounterJobId(JsonNode encounterNode) {
+        if (encounterNode == null || encounterNode.isMissingNode() || encounterNode.isNull()) {
+            return 0;
+        }
+        int jobId = parseFlexibleInt(encounterNode.path("CurrentJob"));
+        if (jobId > 0) {
+            return jobId;
+        }
+        jobId = parseFlexibleInt(encounterNode.path("CurrentJobID"));
+        if (jobId > 0) {
+            return jobId;
+        }
+        return parseFlexibleInt(encounterNode.path("Job"));
+    }
+
+    private static int parseFlexibleInt(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return 0;
+        }
+        if (node.isInt() || node.isLong()) {
+            return node.asInt(0);
+        }
+        String raw = node.asText("");
+        if (raw == null) {
+            return 0;
+        }
+        raw = raw.trim();
+        if (raw.isEmpty()) {
+            return 0;
+        }
+        try {
+            if (raw.startsWith("0x") || raw.startsWith("0X")) {
+                return Integer.parseInt(raw.substring(2), 16);
+            }
+            return Integer.parseInt(raw);
         } catch (NumberFormatException e) {
             return 0;
         }

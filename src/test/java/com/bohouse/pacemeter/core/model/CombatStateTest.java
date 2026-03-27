@@ -93,6 +93,23 @@ class CombatStateTest {
     }
 
     @Test
+    void maxHit_keepsEventProvidedActionName() {
+        CombatState state = new CombatState();
+        ActorId actorId = new ActorId(0x10000001L);
+        ActorId targetId = new ActorId(0x40000001L);
+
+        state.reduce(new CombatEvent.FightStart(0L, "test", 1327, 42));
+        state.reduce(new CombatEvent.ActorJoined(0L, actorId, "dealer"));
+        state.reduce(new CombatEvent.DamageEvent(
+                1_000L, actorId, "dealer", targetId, 0x223F, "검은 혜성", 50_000L, DamageType.DIRECT, false, false
+        ));
+
+        ActorStats actorStats = state.actors().get(actorId);
+        assertNotNull(actorStats);
+        assertEquals("검은 혜성", actorStats.maxHitActionName());
+    }
+
+    @Test
     void ownerBuffOnOwnedPet_isNotAttributedAsExternalRdps() {
         CombatState state = new CombatState();
         ActorId ownerId = new ActorId(0x10000001L);

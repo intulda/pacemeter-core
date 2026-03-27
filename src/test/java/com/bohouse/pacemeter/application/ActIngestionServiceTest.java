@@ -2243,7 +2243,7 @@ class ActIngestionServiceTest {
     }
 
     @Test
-    void networkAbility_withoutPartyData_fromOtherPlayerCharacter_isIgnoredEvenDuringFight() {
+    void networkAbility_withoutPartyData_fromOtherPlayerCharacter_isAcceptedDuringActiveSelfFight() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Paladin"));
 
@@ -2288,7 +2288,7 @@ class ActIngestionServiceTest {
                 "21|...|raw"
         ));
 
-        assertFalse(captured.stream().anyMatch(CombatEvent.DamageEvent.class::isInstance));
+        assertTrue(captured.stream().anyMatch(CombatEvent.DamageEvent.class::isInstance));
     }
 
     @Test
@@ -2324,6 +2324,106 @@ class ActIngestionServiceTest {
         ));
 
         assertTrue(captured.stream().anyMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void combatDataMetadataReady_restoresJobWithoutTrustingPartyMembership() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Paladin"));
+        service.onCombatDataReady(1, false);
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x10128857L,
+                "Party Member",
+                0x1C,
+                0,
+                150_000L,
+                150_000L,
+                "261|...|Add"
+        ));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(100),
+                21,
+                0x10128857L,
+                "Party Member",
+                0x18,
+                "Shield Lob",
+                0x40000001L,
+                "Boss",
+                false,
+                false,
+                6525,
+                "21|...|raw"
+        ));
+
+        assertEquals(0x1C, service.debugJobId(0x10128857L));
+        assertFalse(captured.stream().anyMatch(CombatEvent.DamageEvent.class::isInstance));
+    }
+
+    @Test
+    void playerStatsUpdated_setsCurrentPlayerJobBeforeFightStart() {
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "DarkKnight"));
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PlayerStatsUpdated(base().plusMillis(10), 0x20, "12|...|raw"));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(100),
+                21,
+                0x1000000AL,
+                "DarkKnight",
+                0xE21,
+                "Hard Slash",
+                0x40000001L,
+                "Boss",
+                false,
+                false,
+                13001,
+                "21|...|raw"
+        ));
+
+        CombatEvent.FightStart fightStart = captured.stream()
+                .filter(CombatEvent.FightStart.class::isInstance)
+                .map(CombatEvent.FightStart.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertEquals(0x20, fightStart.playerJobId());
+    }
+
+    @Test
+    void selfNetworkAbility_waitsForJobMetadataBeforeFightStart() {
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "DarkKnight"));
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(100),
+                21,
+                0x1000000AL,
+                "DarkKnight",
+                0xE21,
+                "Hard Slash",
+                0x40000001L,
+                "Boss",
+                false,
+                false,
+                13001,
+                "21|...|raw"
+        ));
+
+        assertTrue(captured.isEmpty());
+
+        service.onParsed(new PlayerStatsUpdated(base().plusMillis(200), 0x20, "12|...|raw"));
+
+        CombatEvent.FightStart fightStart = captured.stream()
+                .filter(CombatEvent.FightStart.class::isInstance)
+                .map(CombatEvent.FightStart.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertEquals(0x20, fightStart.playerJobId());
+        assertEquals(0x20, service.debugJobId(0x1000000AL));
     }
 
     @Test

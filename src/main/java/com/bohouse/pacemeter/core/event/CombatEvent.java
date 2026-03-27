@@ -75,11 +75,26 @@ public sealed interface CombatEvent {
             String sourceName,
             ActorId targetId,
             int actionId,
+            String actionName,
             long amount,
             DamageType damageType,
             boolean criticalHit,
             boolean directHit
-    ) implements CombatEvent {}
+    ) implements CombatEvent {
+        public DamageEvent(
+                long timestampMs,
+                ActorId sourceId,
+                String sourceName,
+                ActorId targetId,
+                int actionId,
+                long amount,
+                DamageType damageType,
+                boolean criticalHit,
+                boolean directHit
+        ) {
+            this(timestampMs, sourceId, sourceName, targetId, actionId, "", amount, damageType, criticalHit, directHit);
+        }
+    }
     /**
      * 버프/상태효과가 대상에게 걸린 이벤트.
      *

@@ -95,6 +95,7 @@ public final class ReplayEventParser {
                     node.get("sourceName").asText(),
                     new ActorId(node.get("targetId").asLong()),
                     node.get("actionId").asInt(),
+                    node.has("actionName") ? node.get("actionName").asText("") : "",
                     node.get("amount").asLong(),
                     DamageType.valueOf(node.get("damageType").asText()),
                     node.has("criticalHit") && node.get("criticalHit").asBoolean(),
