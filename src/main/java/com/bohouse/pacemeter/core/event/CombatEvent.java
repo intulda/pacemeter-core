@@ -25,6 +25,20 @@ public sealed interface CombatEvent {
 
     long timestampMs();
 
+    enum AutoHitFlag {
+        YES,
+        NO,
+        UNKNOWN
+    }
+
+    record HitOutcomeContext(
+            AutoHitFlag autoCrit,
+            AutoHitFlag autoDirectHit
+    ) {
+        public static final HitOutcomeContext UNKNOWN =
+                new HitOutcomeContext(AutoHitFlag.UNKNOWN, AutoHitFlag.UNKNOWN);
+    }
+
     /**
      * 전투 시작을 알리는 이벤트.
      *
@@ -79,7 +93,8 @@ public sealed interface CombatEvent {
             long amount,
             DamageType damageType,
             boolean criticalHit,
-            boolean directHit
+            boolean directHit,
+            HitOutcomeContext hitOutcomeContext
     ) implements CombatEvent {
         public DamageEvent(
                 long timestampMs,
@@ -92,7 +107,46 @@ public sealed interface CombatEvent {
                 boolean criticalHit,
                 boolean directHit
         ) {
-            this(timestampMs, sourceId, sourceName, targetId, actionId, "", amount, damageType, criticalHit, directHit);
+            this(
+                    timestampMs,
+                    sourceId,
+                    sourceName,
+                    targetId,
+                    actionId,
+                    "",
+                    amount,
+                    damageType,
+                    criticalHit,
+                    directHit,
+                    HitOutcomeContext.UNKNOWN
+            );
+        }
+
+        public DamageEvent(
+                long timestampMs,
+                ActorId sourceId,
+                String sourceName,
+                ActorId targetId,
+                int actionId,
+                String actionName,
+                long amount,
+                DamageType damageType,
+                boolean criticalHit,
+                boolean directHit
+        ) {
+            this(
+                    timestampMs,
+                    sourceId,
+                    sourceName,
+                    targetId,
+                    actionId,
+                    actionName,
+                    amount,
+                    damageType,
+                    criticalHit,
+                    directHit,
+                    HitOutcomeContext.UNKNOWN
+            );
         }
     }
     /**

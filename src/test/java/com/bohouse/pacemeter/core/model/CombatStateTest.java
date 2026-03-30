@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CombatStateTest {
 
@@ -183,5 +185,23 @@ class CombatStateTest {
         assertEquals(2, stats.observedCritHitCount());
         assertEquals(2, stats.observedDirectHitCount());
         assertEquals(1, stats.observedCritDirectHitCount());
+    }
+
+    @Test
+    void experimentalAutoHitAttributionFlag_defaultsOffAndCanBeEnabledByProperty() {
+        String previous = System.getProperty(CombatState.EXPERIMENTAL_AUTO_HIT_ATTRIBUTION_PROPERTY);
+        try {
+            System.clearProperty(CombatState.EXPERIMENTAL_AUTO_HIT_ATTRIBUTION_PROPERTY);
+            assertFalse(CombatState.experimentalAutoHitAttributionEnabled());
+
+            System.setProperty(CombatState.EXPERIMENTAL_AUTO_HIT_ATTRIBUTION_PROPERTY, "true");
+            assertTrue(CombatState.experimentalAutoHitAttributionEnabled());
+        } finally {
+            if (previous == null) {
+                System.clearProperty(CombatState.EXPERIMENTAL_AUTO_HIT_ATTRIBUTION_PROPERTY);
+            } else {
+                System.setProperty(CombatState.EXPERIMENTAL_AUTO_HIT_ATTRIBUTION_PROPERTY, previous);
+            }
+        }
     }
 }

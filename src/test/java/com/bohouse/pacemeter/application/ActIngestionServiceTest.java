@@ -17,6 +17,8 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.prefs.BackingStoreException;
+import java.util.prefs.Preferences;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -45,7 +47,7 @@ class ActIngestionServiceTest {
                 // Mock: do nothing
             }
         };
-        // Mock CombatService (jobId 설정은 무시)
+        // Mock CombatService (jobId ?ㅼ젙? 臾댁떆)
         CombatService mockCombatService = new CombatService(
                 new CombatEngine(),
                 snapshot -> {},
@@ -59,6 +61,17 @@ class ActIngestionServiceTest {
         return Instant.parse("2026-02-11T12:00:00Z");
     }
 
+    private void clearSelfJobCache(long playerId, String playerName) {
+        try {
+            Preferences node = Preferences.userNodeForPackage(ActIngestionService.class).node("live-self-job");
+            node.remove("player-id:" + Long.toHexString(playerId));
+            node.remove("player-name:" + playerName);
+            node.flush();
+        } catch (BackingStoreException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private void initializeZoneAndParty() {
         service.onParsed(new ZoneChanged(base(), 1, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
@@ -70,14 +83,14 @@ class ActIngestionServiceTest {
 
         Instant t1 = base().plusMillis(100);
         service.onParsed(new NetworkAbilityRaw(t1, 21, 0x1000000AL, "Warrior",
-                0xB4, "Fast Blade", 0x40000001L, "나무인형", false, false, 5000,
+                0xB4, "Fast Blade", 0x40000001L, "Training Dummy", false, false, 5000,
                 "21|...|raw"));
 
-        // 전투가 시작되었는지 확인
+        // ?꾪닾媛 ?쒖옉?섏뿀?붿? ?뺤씤
         assertTrue(service.isFightStarted());
     }
 
-    // ── BuffApply 테스트 ──
+    // ?? BuffApply ?뚯뒪????
 
     @Test
     void buffApply_beforeFightStarted_emitsWhenFightStarts() {
@@ -89,7 +102,7 @@ class ActIngestionServiceTest {
 
         Instant t1 = base().plusMillis(100);
         service.onParsed(new NetworkAbilityRaw(t1, 21, 0x1000000AL, "Warrior",
-                0xB4, "Fast Blade", 0x40000001L, "나무인형", false, false, 5000,
+                0xB4, "Fast Blade", 0x40000001L, "Training Dummy", false, false, 5000,
                 "21|...|raw"));
 
         CombatEvent.BuffApply event = captured.stream()
@@ -114,7 +127,7 @@ class ActIngestionServiceTest {
 
         Instant t1 = base().plusMillis(100);
         service.onParsed(new NetworkAbilityRaw(t1, 21, 0x1000000AL, "Warrior",
-                0xB4, "Fast Blade", 0x40000001L, "나무인형", false, false, 5000,
+                0xB4, "Fast Blade", 0x40000001L, "Training Dummy", false, false, 5000,
                 "21|...|raw"));
 
         CombatEvent.BuffRemove event = captured.stream()
@@ -144,7 +157,7 @@ class ActIngestionServiceTest {
         assertEquals(0x74F, event.buffId().value());
         assertEquals(new ActorId(0x1000000BL), event.sourceId());
         assertEquals(new ActorId(0x1000000AL), event.targetId());
-        assertEquals(15000, event.durationMs()); // 15.0초 → 15000ms
+        assertEquals(15000, event.durationMs()); // 15.0珥???15000ms
     }
 
     @Test
@@ -167,7 +180,7 @@ class ActIngestionServiceTest {
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
         service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL)));
 
-        // 전투 시작
+        // ?꾪닾 ?쒖옉
         service.onParsed(new NetworkAbilityRaw(
                 base().plusMillis(100),
                 21,
@@ -176,7 +189,7 @@ class ActIngestionServiceTest {
                 0xB4,
                 "Fast Blade",
                 0x40000001L,
-                "나무인형",
+                "Training Dummy",
                 false,
                 false,
                 5000,
@@ -185,7 +198,7 @@ class ActIngestionServiceTest {
         assertTrue(service.isFightStarted());
         captured.clear();
 
-        // 전투 중 PartyList 축소 수신(일시적 누락 시나리오)
+        // ?꾪닾 以?PartyList 異뺤냼 ?섏떊(?쇱떆???꾨씫 ?쒕굹由ъ삤)
         service.onParsed(new PartyList(base().plusMillis(200), List.of(0x1000000AL)));
 
         service.onParsed(new DotTickRaw(
@@ -229,7 +242,7 @@ class ActIngestionServiceTest {
                 "03|...|raw"
         ));
 
-        // 전투 시작
+        // ?꾪닾 ?쒖옉
         service.onParsed(new NetworkAbilityRaw(
                 base().plusMillis(100),
                 21,
@@ -263,7 +276,7 @@ class ActIngestionServiceTest {
         ));
         captured.clear();
 
-        // sourceId가 비어있는 DoT tick
+        // sourceId媛 鍮꾩뼱?덈뒗 DoT tick
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 bossId,
@@ -390,7 +403,7 @@ class ActIngestionServiceTest {
         ));
         captured.clear();
 
-        // sourceId가 unknown이고, status는 known(Dia)이며 recent application evidence는 없는 상황.
+        // sourceId媛 unknown?닿퀬, status??known(Dia)?대ŉ recent application evidence???녿뒗 ?곹솴.
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 bossId,
@@ -499,7 +512,7 @@ class ActIngestionServiceTest {
         ));
         captured.clear();
 
-        // resolveDotActionId == 0x17 인 입력이어도 DoT로는 내보내지 않는다.
+        // resolveDotActionId == 0x17 ???낅젰?댁뼱??DoT濡쒕뒗 ?대낫?댁? ?딅뒗??
         service.onParsed(new DotTickRaw(
                 base().plusMillis(200),
                 bossId,
@@ -518,7 +531,7 @@ class ActIngestionServiceTest {
         ));
     }
 
-    // ── BuffRemove 테스트 ──
+    // ?? BuffRemove ?뚯뒪????
 
     @Test
     void buffRemove_afterFightStarted_emitsCombatEvent() {
@@ -538,22 +551,22 @@ class ActIngestionServiceTest {
         assertEquals(new ActorId(0x1000000AL), event.targetId());
     }
 
-    // ── 타임스탬프 변환 테스트 ──
+    // ?? ??꾩뒪?ы봽 蹂???뚯뒪????
 
     @Test
     void buffApply_timestampMs_isRelativeToFightStart() {
         startFight();
         captured.clear();
 
-        // 전투 시작(base+100ms) 이후 5초 시점에 버프
+        // ?꾪닾 ?쒖옉(base+100ms) ?댄썑 5珥??쒖젏??踰꾪봽
         Instant buffTime = base().plusMillis(5100);
         service.onParsed(new BuffApplyRaw(buffTime, 0x74F, "The Balance", 10.0,
                 0x1000000BL, "Astrologian", 0x1000000AL, "Warrior"));
 
         CombatEvent.BuffApply event = (CombatEvent.BuffApply) captured.get(0);
-        // fightStartInstant = base+100ms(첫 NetworkAbilityRaw 시점), buffTime = base+5100ms
+        // fightStartInstant = base+100ms(泥?NetworkAbilityRaw ?쒖젏), buffTime = base+5100ms
         // elapsed = 5000ms
-        assertEquals(5000, event.timestampMs(), 100); // 약간의 오차 허용
+        assertEquals(5000, event.timestampMs(), 100); // ?쎄컙???ㅼ감 ?덉슜
     }
 
     @Test
@@ -565,12 +578,12 @@ class ActIngestionServiceTest {
         service.onParsed(new DamageText(
                 damageTime,
                 "Warrior",
-                "나무인형",
+                "Training Dummy",
                 5000,
                 true,
                 true,
                 "00|...|12A9",
-                "극대화 직격!"
+                "洹밸???吏곴꺽!"
         ));
         service.onParsed(new NetworkAbilityRaw(
                 damageTime.plusMillis(50),
@@ -580,7 +593,7 @@ class ActIngestionServiceTest {
                 0xB4,
                 "Fast Blade",
                 0x40000001L,
-                "나무인형",
+                "Training Dummy",
                 false,
                 false,
                 5000,
@@ -605,13 +618,13 @@ class ActIngestionServiceTest {
         Instant damageTime = base().plusMillis(1500);
         service.onParsed(new DamageText(
                 damageTime,
-                "다른이름",
-                "나무인형",
+                "?ㅻⅨ?대쫫",
+                "Training Dummy",
                 5000,
                 true,
                 false,
                 "00|...|12A9",
-                "극대화!"
+                "洹밸???"
         ));
         service.onParsed(new NetworkAbilityRaw(
                 damageTime.plusMillis(50),
@@ -621,7 +634,7 @@ class ActIngestionServiceTest {
                 0xB4,
                 "Fast Blade",
                 0x40000001L,
-                "나무인형",
+                "Training Dummy",
                 false,
                 false,
                 5000,
@@ -636,6 +649,129 @@ class ActIngestionServiceTest {
 
         assertTrue(event.criticalHit());
         assertFalse(event.directHit());
+    }
+
+    @Test
+    void guaranteedAutoHitRule_setsAutoCritAndAutoDirectHitWhenRequiredSelfBuffIsActive() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL)));
+        service.onParsed(new CombatantAdded(
+                base(),
+                0x1000000AL,
+                "Warrior",
+                0x15,
+                0L,
+                250000,
+                250000,
+                "03|...|raw"
+        ));
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(50),
+                21,
+                0x1000000AL,
+                "Warrior",
+                0x00B4,
+                "Fast Blade",
+                0x40000001L,
+                "Training Dummy",
+                false,
+                false,
+                5000,
+                "21|...|raw"
+        ));
+        service.onParsed(new BuffApplyRaw(
+                base().plusMillis(80),
+                0xDEAD,
+                "Inner Release",
+                15.0,
+                0x1000000AL,
+                "Warrior",
+                0x1000000AL,
+                "Warrior"
+        ));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(1000),
+                21,
+                0x1000000AL,
+                "Warrior",
+                0x0DDD,
+                "Fell Cleave",
+                0x40000001L,
+                "Training Dummy",
+                true,
+                true,
+                20000,
+                "21|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+
+        assertEquals(CombatEvent.AutoHitFlag.YES, event.hitOutcomeContext().autoCrit());
+        assertEquals(CombatEvent.AutoHitFlag.YES, event.hitOutcomeContext().autoDirectHit());
+    }
+
+    @Test
+    void guaranteedAutoHitRule_withoutRequiredSelfBuff_keepsOutcomeUnknown() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL)));
+        service.onParsed(new CombatantAdded(
+                base(),
+                0x1000000AL,
+                "Warrior",
+                0x15,
+                0L,
+                250000,
+                250000,
+                "03|...|raw"
+        ));
+        captured.clear();
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(50),
+                21,
+                0x1000000AL,
+                "Warrior",
+                0x00B4,
+                "Fast Blade",
+                0x40000001L,
+                "Training Dummy",
+                false,
+                false,
+                5000,
+                "21|...|raw"
+        ));
+        captured.clear();
+
+        service.onParsed(new NetworkAbilityRaw(
+                base().plusMillis(1000),
+                21,
+                0x1000000AL,
+                "Warrior",
+                0x0DDD,
+                "Fell Cleave",
+                0x40000001L,
+                "Training Dummy",
+                true,
+                true,
+                20000,
+                "21|...|raw"
+        ));
+
+        CombatEvent.DamageEvent event = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .reduce((first, second) -> second)
+                .orElseThrow();
+
+        assertEquals(CombatEvent.AutoHitFlag.UNKNOWN, event.hitOutcomeContext().autoCrit());
+        assertEquals(CombatEvent.AutoHitFlag.UNKNOWN, event.hitOutcomeContext().autoDirectHit());
     }
 
     @Test
@@ -662,7 +798,7 @@ class ActIngestionServiceTest {
                 0xB4,
                 "Fast Blade",
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 5000,
@@ -677,9 +813,9 @@ class ActIngestionServiceTest {
                 scholarId,
                 "Scholar",
                 0x409C,
-                "고독법",
+                "Baneful Impaction",
                 0x40000011L,
-                "보스A",
+                "蹂댁뒪A",
                 false,
                 false,
                 10_000,
@@ -690,7 +826,7 @@ class ActIngestionServiceTest {
         DotTickRaw dot = new DotTickRaw(
                 t.plusMillis(1_500),
                 0x40000022L,
-                "보스B",
+                "蹂댁뒪B",
                 "DoT",
                 0,
                 scholarId,
@@ -730,7 +866,7 @@ class ActIngestionServiceTest {
                 0xB4,
                 "Fast Blade",
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 5000,
@@ -747,13 +883,13 @@ class ActIngestionServiceTest {
                 scholarId,
                 "Scholar",
                 0x40000011L,
-                "보스A"
+                "蹂댁뒪A"
         ));
 
         DotTickRaw dot = new DotTickRaw(
                 t.plusMillis(1_500),
                 0x40000022L,
-                "보스B",
+                "蹂댁뒪B",
                 "DoT",
                 0,
                 scholarId,
@@ -963,7 +1099,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(200),
                 0x40000001L,
-                "나무인형",
+                "Training Dummy",
                 "DoT",
                 0x2ED,
                 0x101C2E9EL,
@@ -1036,7 +1172,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(200),
                 0x40000001L,
-                "나무인형",
+                "Training Dummy",
                 "DoT",
                 0,
                 0x1000000AL,
@@ -1068,7 +1204,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x101C2E9EL,
@@ -1087,7 +1223,7 @@ class ActIngestionServiceTest {
                 0x409C,
                 "Biolysis",
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 1200,
@@ -1098,7 +1234,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x101C2E9EL,
@@ -1396,7 +1532,7 @@ class ActIngestionServiceTest {
     }
 
     @Test
-    void dotTick_withUnknownStatusId_singleActiveTrackedDotFallsBackToFullSnapshotWeights() {
+    void dotTick_withUnknownStatusId_singleActiveTrackedDot_prefersKnownSourceAttribution() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Samurai"));
         service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL, 0x1000000CL)));
@@ -1473,11 +1609,94 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertEquals(3, events.size());
+        assertEquals(1, events.size());
         assertEquals(10_000L, events.stream().mapToLong(CombatEvent.DamageEvent::amount).sum());
         assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000AL)) && event.actionId() == 0x1D41));
-        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x409C));
-        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000CL)) && event.actionId() == 0x4094));
+    }
+
+    @Test
+    void dotTick_withUnknownStatusId_knownPartySource_skipsSnapshotRedistribution() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Samurai"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL, 0x1000000CL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x1000000AL,
+                "Samurai",
+                0x22,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Samurai"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(60),
+                0x1000000BL,
+                "Scholar",
+                0x1C,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Scholar"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(70),
+                0x1000000CL,
+                "WhiteMage",
+                0x18,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|WhiteMage"
+        ));
+        service.onParsed(new BuffApplyRaw(
+                base().plusMillis(900),
+                0x04CC,
+                "Higanbana",
+                60.0,
+                0x1000000AL,
+                "Samurai",
+                0x40000001L,
+                "Boss"
+        ));
+        service.onParsed(new StatusSnapshotRaw(
+                base().plusMillis(1_000),
+                0x40000001L,
+                "Boss",
+                List.of(
+                        new StatusSnapshotRaw.StatusEntry(0x04CC, "42200000", 0x1000000AL),
+                        new StatusSnapshotRaw.StatusEntry(0x0767, "41900000", 0x1000000BL),
+                        new StatusSnapshotRaw.StatusEntry(0x074F, "41800000", 0x1000000CL)
+                ),
+                "38|...|raw"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                base().plusMillis(1_100),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0,
+                0x1000000AL,
+                "Samurai",
+                10_000,
+                "24|...|raw"
+        ));
+
+        List<CombatEvent.DamageEvent> events = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .toList();
+
+        assertEquals(1, events.size());
+        CombatEvent.DamageEvent dotEvent = events.get(0);
+        assertEquals(new ActorId(0x1000000AL), dotEvent.sourceId());
+        assertEquals(0x1D41, dotEvent.actionId());
+        assertEquals(10_000L, dotEvent.amount());
+
+        LiveDotAttributionDebugSnapshot debugSnapshot = service.debugLiveDotAttributionSnapshot(10);
+        assertEquals(1, debugSnapshot.entries().size());
     }
 
     @Test
@@ -1530,7 +1749,7 @@ class ActIngestionServiceTest {
                 "38|...|raw"
         ));
 
-        // 최근 type 37에서 SCH/WHM만 신호가 반복된 상황을 가정
+        // 理쒓렐 type 37?먯꽌 SCH/WHM留??좏샇媛 諛섎났???곹솴??媛??
         service.onParsed(new DotStatusSignalRaw(
                 snapshotTime.plusMillis(200),
                 0x40000001L,
@@ -1702,7 +1921,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x1013ABCDL,
@@ -1721,7 +1940,7 @@ class ActIngestionServiceTest {
                 0x1093,
                 "Dokumori",
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 1200,
@@ -1732,7 +1951,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x1013ABCDL,
@@ -1775,7 +1994,7 @@ class ActIngestionServiceTest {
                 0x5EFA,
                 "Eukrasian Dosis III",
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 1200,
@@ -1785,7 +2004,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x10127ABCL,
@@ -1828,13 +2047,13 @@ class ActIngestionServiceTest {
                 0x101C2E9EL,
                 "Scholar",
                 0x40000001L,
-                "보스"
+                "蹂댁뒪"
         ));
 
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x101C2E9EL,
@@ -1877,7 +2096,7 @@ class ActIngestionServiceTest {
                 0x409C,
                 "Biolysis",
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 1200,
@@ -1888,7 +2107,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusSeconds(91),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x101C2E9EL,
@@ -1925,7 +2144,7 @@ class ActIngestionServiceTest {
                 0x409C,
                 "Biolysis",
                 0x40000002L,
-                "다른 보스",
+                "?ㅻⅨ 蹂댁뒪",
                 false,
                 false,
                 1200,
@@ -1936,7 +2155,7 @@ class ActIngestionServiceTest {
         DotTickRaw dot = new DotTickRaw(
                 base().plusMillis(3200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x101C2E9EL,
@@ -2043,7 +2262,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x101589A6L,
@@ -2062,14 +2281,14 @@ class ActIngestionServiceTest {
                 0x101589A6L,
                 "Dragoon",
                 0x40000001L,
-                "보스"
+                "蹂댁뒪"
         ));
         captured.clear();
 
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x101589A6L,
@@ -2109,7 +2328,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x10180001L,
@@ -2128,7 +2347,7 @@ class ActIngestionServiceTest {
                 0x4094,
                 "Dia",
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 1200,
@@ -2139,7 +2358,7 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 0x40000001L,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x10180001L,
@@ -2394,15 +2613,17 @@ class ActIngestionServiceTest {
 
     @Test
     void selfNetworkAbility_waitsForJobMetadataBeforeFightStart() {
-        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000FFEEL, "MetadataWaiter"));
+        long playerId = 0x7000FFEEL;
+        clearSelfJobCache(playerId, "MetadataWaiterFresh");
+        service.onParsed(new PrimaryPlayerChanged(base(), playerId, "MetadataWaiterFresh"));
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         captured.clear();
 
         service.onParsed(new NetworkAbilityRaw(
                 base().plusMillis(100),
                 21,
-                0x1000FFEEL,
-                "MetadataWaiter",
+                playerId,
+                "MetadataWaiterFresh",
                 0xE21,
                 "Hard Slash",
                 0x40000001L,
@@ -2423,7 +2644,7 @@ class ActIngestionServiceTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals(0x20, fightStart.playerJobId());
-        assertEquals(0x20, service.debugJobId(0x1000FFEEL));
+        assertEquals(0x20, service.debugJobId(playerId));
     }
 
     @Test
@@ -2451,7 +2672,7 @@ class ActIngestionServiceTest {
                 0x875A,
                 "Summon Attack",
                 0x40000001L,
-                "나무인형",
+                "Training Dummy",
                 false,
                 false,
                 40000,
@@ -2513,7 +2734,7 @@ class ActIngestionServiceTest {
                 0xB4,
                 "Fast Blade",
                 0x40000001L,
-                "나무인형",
+                "Training Dummy",
                 false,
                 false,
                 5000,
@@ -2537,7 +2758,7 @@ class ActIngestionServiceTest {
                 0xB4,
                 "Fast Blade",
                 0x40000001L,
-                "나무인형",
+                "Training Dummy",
                 true,
                 true,
                 5000,
@@ -2581,7 +2802,7 @@ class ActIngestionServiceTest {
         service.onParsed(new CombatantAdded(
                 base().plusMillis(50),
                 0x1013CC4BL,
-                "나성",
+                "?섏꽦",
                 0x28,
                 0,
                 191512L,
@@ -2592,11 +2813,11 @@ class ActIngestionServiceTest {
                 base().plusMillis(100),
                 21,
                 0x1013CC4BL,
-                "나성",
+                "?섏꽦",
                 0x5EF8,
                 "Player127",
                 0x4000664CL,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 1000,
@@ -2605,7 +2826,7 @@ class ActIngestionServiceTest {
         service.onParsed(new NetworkDeath(
                 base().plusMillis(200),
                 0x1013CC4BL,
-                "나성"
+                "?섏꽦"
         ));
 
         captured.clear();
@@ -2614,11 +2835,11 @@ class ActIngestionServiceTest {
                 base().plusSeconds(40),
                 21,
                 0x1013CC4BL,
-                "나성",
+                "?섏꽦",
                 0x5EF8,
                 "Player127",
                 0x4000664CL,
-                "보스",
+                "蹂댁뒪",
                 false,
                 false,
                 1000,
@@ -2627,11 +2848,11 @@ class ActIngestionServiceTest {
         service.onParsed(new DotTickRaw(
                 base().plusSeconds(41),
                 0x4000664CL,
-                "보스",
+                "蹂댁뒪",
                 "DoT",
                 0,
                 0x1013CC4BL,
-                "나성",
+                "?섏꽦",
                 2500,
                 "24|..."
         ));
@@ -2824,3 +3045,4 @@ class ActIngestionServiceTest {
         assertEquals(7000L, firstDamage.amount());
     }
 }
+

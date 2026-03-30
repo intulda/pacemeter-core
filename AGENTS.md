@@ -126,6 +126,7 @@
 
 ## 참고 링크
 - [`tasks.md`](/Users/kimbogeun/Documents/Project/paceMeter/tasks.md)
+- FFLogs Buff Allocation Math: https://docs.google.com/document/d/1pWVsDaroDHpvh1IuB42bWLBE2TMru2CrWnjTDjeAvJY/view?tab=t.0
 - FFLogs API: https://www.fflogs.com/v2-api-docs/ff/
 - OverlayPlugin: https://github.com/OverlayPlugin/OverlayPlugin
 - Cactbot: https://github.com/OverlayPlugin/cactbot

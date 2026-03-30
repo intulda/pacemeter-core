@@ -99,7 +99,11 @@ public final class ReplayEventParser {
                     node.get("amount").asLong(),
                     DamageType.valueOf(node.get("damageType").asText()),
                     node.has("criticalHit") && node.get("criticalHit").asBoolean(),
-                    node.has("directHit") && node.get("directHit").asBoolean()
+                    node.has("directHit") && node.get("directHit").asBoolean(),
+                    new CombatEvent.HitOutcomeContext(
+                            parseAutoHitFlag(node, "autoCrit"),
+                            parseAutoHitFlag(node, "autoDirectHit")
+                    )
             );
 
             case "BuffApply" -> new CombatEvent.BuffApply(
@@ -130,5 +134,12 @@ public final class ReplayEventParser {
 
             default -> throw new IllegalArgumentException("알 수 없는 이벤트 타입: " + type);
         };
+    }
+
+    private static CombatEvent.AutoHitFlag parseAutoHitFlag(JsonNode node, String fieldName) {
+        if (!node.has(fieldName)) {
+            return CombatEvent.AutoHitFlag.UNKNOWN;
+        }
+        return CombatEvent.AutoHitFlag.valueOf(node.get(fieldName).asText().toUpperCase());
     }
 }

@@ -1,5 +1,57 @@
 # Parity Patch Notes
 
+## 2026-03-30
+
+### Auto-hit attribution guardrail
+- `CombatState` auto-hit attribution path is now behind a feature flag.
+- default: `off`
+- property: `pacemeter.experimental.auto-hit-attribution.enabled=true`
+- env: `PACE_EXPERIMENTAL_AUTO_HIT_ATTRIBUTION=true`
+- keep the modeling scaffolding, but only enable the math explicitly for replay/parity comparison runs.
+
+### FFLogs auto-hit design record
+- `docs/FFLogs Buff Allocation Math.docx` 기준으로 guaranteed crit/direct hit 처리 설계를 분리했다.
+- 핵심 문제: 현재 `DamageEvent`는 `criticalHit/directHit` 결과만 갖고 있어서, 자연 발생 / 외부 버프 유발 / job mechanic 보장타를 구분할 수 없다.
+- 결정:
+  - `CombatEvent.DamageEvent`에 `HitOutcomeContext(autoCrit, autoDirectHit)` 추가
+  - 각 필드는 `YES/NO/UNKNOWN`
+  - ingestion 기본값은 우선 `UNKNOWN`
+- 이유:
+  - ACT 입력만으로 auto-hit 여부를 항상 증명할 수 없으므로, 섣불리 boolean으로 확정하지 않는다.
+  - `UNKNOWN`을 유지하면 현재 모델과 호환되는 상태로 점진 이행할 수 있다.
+- 설계 문서: `docs/fflogs-auto-hit-design-2026-03-30.md`
+- 이번 단계 범위:
+  - 이벤트 모델 스캐폴딩 추가
+  - replay parser가 optional `autoCrit`, `autoDirectHit`를 읽도록 확장
+  - 실제 6.2 auto-hit multiplier attribution 계산은 다음 단계
+
+### FFLogs auto-hit ingestion wiring
+- `CombatState`에 auto-crit / auto-dhit 6.2 multiplier attribution 계산을 반영했다.
+- `ActIngestionService`는 이제 `AutoHitCatalog`를 통해 `job + action + active self-buff` 기준으로 `HitOutcomeContext`를 채운다.
+- 초기 catalog는 WAR `Inner Release + Fell Cleave / Inner Chaos / Primal Rend` 경로를 포함한다.
+- self-buff active state는 ingestion 내부에서 `BuffApplyRaw` / `BuffRemoveRaw`를 통해 추적한다.
+- 미분류 스킬은 계속 `UNKNOWN`을 유지한다.
+- 다음 확장 포인트:
+  - 직업별 guaranteed-hit rules 추가
+  - action-only rule과 required-self-buff rule 분리 보강
+  - replay / parity fixture로 실제 FFLogs 차이 재측정
+
+### Auto-hit catalog expansion
+- `auto-hit-catalog.json` 확장:
+  - WAR: `Inner Release` + `Fell Cleave`, `Decimate`, `Inner Chaos`, `Chaotic Cyclone`, `Primal Rend`, `Primal Ruination`
+  - DRG: `Life Surge` + `WEAPONSKILL`
+  - MCH: `Reassemble` + `WEAPONSKILL`
+  - SAM: action-only guaranteed crit (`Midare Setsugekka`, `Kaeshi: Setsugekka`, `Ogi Namikiri`, `Kaeshi: Namikiri`, `Tendo Setsugekka`, `Tendo Kaeshi Setsugekka`)
+  - DNC: `Flourishing Starfall` + `Starfall Dance`
+  - MCH: action-only guaranteed crit/direct hit `Full Metal Field`
+  - PCT: action-only guaranteed crit/direct hit `Hammer Stamp`, `Hammer Brush`, `Polishing Hammer`
+- `action-tag-catalog.json` 추가:
+  - 현재는 DRG / MCH weaponskill 집합에 `WEAPONSKILL` 태그를 부여
+  - `AutoHitCatalog`가 `required_action_tags`를 읽어 `Life Surge` / `Reassemble`를 일반화해서 처리
+- 주의:
+  - action metadata가 아직 전체 직업/스킬 전범위는 아니다.
+  - 현재 `WEAPONSKILL` 태그는 DRG / MCH 쪽부터 시작했고, 필요 직업을 계속 확장해야 한다.
+
 ## 2026-03-19
 
 ### 현재 초점
@@ -569,3 +621,26 @@
   2. preserve all-fights generalization
   3. improve live-path attribution explainability
   4. improve live trend matching against FFLogs companion
+
+## 2026-03-30 Higanbana status0 redistribution clamp
+
+- Change:
+  - In `ActIngestionService.resolveSnapshotRedistribution`, skip `status0_snapshot_redistribution` when the DoT tick already has a known party source and `shouldAcceptDot(dot)` is true.
+  - This keeps snapshot redistribution for ambiguous `status=0` ticks, but stops it from overriding already-supported known-source Higanbana ticks.
+- Why:
+  - Heavy2 Samurai `1D41` was being over-attributed almost entirely through `status0_snapshot_redistribution`.
+- Verification:
+  - `ActIngestionServiceTest`
+  - `SubmissionParityReportDiagnostics.debugHeavy2Fight{1,2}Samurai{DotAttributionModes,TargetParity}_...`
+  - `SubmissionParityRegressionGateTest`
+  - `SubmissionParityReportDiagnostics.debugParityQualityRollup_withConfiguredFflogsCredentials_printsGateAndWorstActors`
+- Observed impact:
+  - heavy2 fight1 `1D41` snapshot redistribution amount: `1,539,560 -> 581,606`
+  - heavy2 fight2 `1D41` snapshot redistribution amount: `2,345,287 -> 838,955`
+  - heavy2 fight1 Higanbana target delta: `+1,372,974 -> +1,156,727`
+  - heavy2 fight2 Higanbana target delta: `+2,068,343 -> +1,749,419`
+  - rollup summary: `mape=0.01390`, `p95=0.03520`, `max=0.03550`
+- Remaining gap:
+  - Samurai is still one of the worst actors in heavy2.
+  - Remaining `1D41` local total is `2,026,363` vs FFLogs `1,542,816`, delta `+483,547`.
+  - Next focus should be the remaining `status0_snapshot_redistribution` bucket and target mismatch on heavy2 fight 2.

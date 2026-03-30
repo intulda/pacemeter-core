@@ -561,6 +561,182 @@ class CombatEngineReplayTest {
     }
 
     @Test
+    void critAndDirectHitBuffs_splitCritDirectHitContributionPerEndwalkerMath() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Reaper"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Scholar"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(3), "Bard"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(100),
+                new BuffId(0xFFFF),
+                "Chain Stratagem",
+                15_000
+        ));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(3),
+                new ActorId(1),
+                new BuffId(0xFFFF),
+                "Battle Voice",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Reaper",
+                new ActorId(100),
+                1,
+                20_000,
+                DamageType.DIRECT,
+                true,
+                true
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Reaper")).findFirst().orElseThrow();
+        ActorSnapshot critProvider = snapshot.actors().stream().filter(a -> a.name().equals("Scholar")).findFirst().orElseThrow();
+        ActorSnapshot directHitProvider = snapshot.actors().stream().filter(a -> a.name().equals("Bard")).findFirst().orElseThrow();
+
+        assertEquals(15_816.3, dealer.onlineRdps(), 2.0);
+        assertEquals(2_025.4, critProvider.onlineRdps(), 2.0);
+        assertEquals(2_158.3, directHitProvider.onlineRdps(), 2.0);
+    }
+
+    @Test
+    void selfCritBuff_isAbsorbedIntoUnbuffedRateBeforeExternalCritAllocation() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Dragoon"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Bard"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(1),
+                new ActorId(1),
+                new BuffId(0xFFFF),
+                "Battle Litany",
+                15_000
+        ));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0xFFFF),
+                "Battle Litany",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Dragoon",
+                new ActorId(100),
+                1,
+                16_000,
+                DamageType.DIRECT,
+                true,
+                false
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Dragoon")).findFirst().orElseThrow();
+        ActorSnapshot provider = snapshot.actors().stream().filter(a -> a.name().equals("Bard")).findFirst().orElseThrow();
+
+        assertEquals(14_666.7, dealer.onlineRdps(), 2.0);
+        assertEquals(1_333.3, provider.onlineRdps(), 2.0);
+    }
+
+    @Test
+    void autoCrit_usesPatch62ExternalCritMultiplierInsteadOfProcAttribution() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Dragoon"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Bard"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(1),
+                new BuffId(0xFFFF),
+                "Battle Litany",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Dragoon",
+                new ActorId(100),
+                1,
+                "Auto Crit Skill",
+                14_000,
+                DamageType.DIRECT,
+                true,
+                false,
+                new CombatEvent.HitOutcomeContext(
+                        CombatEvent.AutoHitFlag.YES,
+                        CombatEvent.AutoHitFlag.NO
+                )
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Dragoon")).findFirst().orElseThrow();
+        ActorSnapshot provider = snapshot.actors().stream().filter(a -> a.name().equals("Bard")).findFirst().orElseThrow();
+
+        assertEquals(13_305.8, dealer.onlineRdps(), 2.0);
+        assertEquals(694.2, provider.onlineRdps(), 2.0);
+    }
+
+    @Test
+    void autoCritAndAutoDirectHit_splitPatch62RateBuffMultipliersAcrossProviders() {
+        CombatEngine engine = new CombatEngine();
+        engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(1), "Samurai"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(2), "Scholar"));
+        engine.process(new CombatEvent.ActorJoined(0, new ActorId(3), "Bard"));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(2),
+                new ActorId(100),
+                new BuffId(0xFFFF),
+                "Chain Stratagem",
+                15_000
+        ));
+        engine.process(new CombatEvent.BuffApply(
+                0,
+                new ActorId(3),
+                new ActorId(1),
+                new BuffId(0xFFFF),
+                "Battle Voice",
+                15_000
+        ));
+        engine.process(new CombatEvent.DamageEvent(
+                1000,
+                new ActorId(1),
+                "Samurai",
+                new ActorId(100),
+                1,
+                "Guaranteed CritDhit Skill",
+                20_000,
+                DamageType.DIRECT,
+                true,
+                true,
+                new CombatEvent.HitOutcomeContext(
+                        CombatEvent.AutoHitFlag.YES,
+                        CombatEvent.AutoHitFlag.YES
+                )
+        ));
+
+        OverlaySnapshot snapshot = engine.process(new CombatEvent.Tick(1000)).snapshot().orElseThrow();
+        ActorSnapshot dealer = snapshot.actors().stream().filter(a -> a.name().equals("Samurai")).findFirst().orElseThrow();
+        ActorSnapshot critProvider = snapshot.actors().stream().filter(a -> a.name().equals("Scholar")).findFirst().orElseThrow();
+        ActorSnapshot directHitProvider = snapshot.actors().stream().filter(a -> a.name().equals("Bard")).findFirst().orElseThrow();
+
+        assertEquals(18_134.1, dealer.onlineRdps(), 3.0);
+        assertEquals(969.0, critProvider.onlineRdps(), 3.0);
+        assertEquals(896.9, directHitProvider.onlineRdps(), 3.0);
+    }
+
+    @Test
     void dotSnapshot_preservesBuffAttributionAfterBuffFallsOff() {
         CombatEngine engine = new CombatEngine();
         engine.process(new CombatEvent.FightStart(0, "Test", 0, 0));

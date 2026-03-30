@@ -1,0 +1,46 @@
+[
+  {
+    "job_id": 21,
+    "action_ids": [3549, 3550, 16465, 16463, 25753, 36925],
+    "action_aliases": [
+      "fell cleave",
+      "decimate",
+      "inner chaos",
+      "chaotic cyclone",
+      "primal rend",
+      "primal ruination"
+    ],
+    "required_self_buff_aliases": ["inner release"],
+    "auto_crit": "YES",
+    "auto_direct_hit": "YES"
+  },
+  {
+    "job_id": 22,
+    "required_action_tags": ["WEAPONSKILL"],
+    "required_self_buff_aliases": ["life surge"],
+    "auto_crit": "YES",
+    "auto_direct_hit": "NO"
+  },
+  {
+    "job_id": 31,
+    "required_action_tags": ["WEAPONSKILL"],
+    "required_self_buff_aliases": ["reassemble"],
+    "auto_crit": "YES",
+    "auto_direct_hit": "YES"
+  },
+  {
+    "job_id": 38,
+    "action_ids": [25792],
+    "action_aliases": ["starfall dance"],
+    "required_self_buff_aliases": ["flourishing starfall"],
+    "auto_crit": "YES",
+    "auto_direct_hit": "YES"
+  },
+  {
+    "job_id": 31,
+    "action_ids": [36982],
+    "action_aliases": ["full metal field"],
+    "auto_crit": "YES",
+    "auto_direct_hit": "YES"
+  }
+]

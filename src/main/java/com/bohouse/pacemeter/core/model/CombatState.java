@@ -22,6 +22,8 @@ import java.util.Optional;
  */
 public final class CombatState {
 
+    static final String EXPERIMENTAL_AUTO_HIT_ATTRIBUTION_PROPERTY =
+            "pacemeter.experimental.auto-hit-attribution.enabled";
     private static final double DEFAULT_CRIT_RATE = 0.25;
     private static final double DEFAULT_DIRECT_HIT_RATE = 0.15;
     private static final double MIN_CRIT_RATE = 0.05;
@@ -168,6 +170,18 @@ public final class CombatState {
             long timestampMs,
             AttributionContext attributionContext
     ) {
+        if (experimentalAutoHitAttributionEnabled() && hasExplicitAutoHitContext(event)) {
+            AllocationResult experimentalAllocation = allocateExperimentalAutoHitContribution(event, attributionContext);
+            if (experimentalAllocation.totalExtra() > 0.0) {
+                sourceStats.addReceivedBuffContribution(experimentalAllocation.totalExtra(), timestampMs);
+                for (Map.Entry<ActorId, Double> entry : experimentalAllocation.providerExtras().entrySet()) {
+                    ActorStats providerStats = actors.computeIfAbsent(entry.getKey(), id -> new ActorStats(id, ""));
+                    providerStats.addGrantedBuffContribution(entry.getValue(), timestampMs);
+                }
+                return;
+            }
+        }
+
         long amount = event.amount();
         double directDamageExtra = 0.0;
         if (attributionContext.totalMultiplier() > 1.0 && !attributionContext.providerMultiplierLogWeight().isEmpty()) {
@@ -203,7 +217,6 @@ public final class CombatState {
                 }
             }
         }
-
         if (critRateExtra > 0.0 && totalCritRateUp > 0.0) {
             for (Map.Entry<ActorId, Double> entry : attributionContext.providerCritRate().entrySet()) {
                 ActorStats providerStats = actors.computeIfAbsent(entry.getKey(), id -> new ActorStats(id, ""));
@@ -219,6 +232,106 @@ public final class CombatState {
                 providerStats.addGrantedBuffContribution(providerExtra, timestampMs);
             }
         }
+    }
+
+    private AllocationResult allocateExperimentalAutoHitContribution(
+            CombatEvent.DamageEvent event,
+            AttributionContext attributionContext
+    ) {
+        long amount = event.amount();
+        double directDamageExtra = 0.0;
+        if (attributionContext.totalMultiplier() > 1.0 && !attributionContext.providerMultiplierLogWeight().isEmpty()) {
+            directDamageExtra = amount - (amount / attributionContext.totalMultiplier());
+        }
+
+        double adjustedAmount = amount - directDamageExtra;
+        boolean autoCrit = event.hitOutcomeContext().autoCrit() == CombatEvent.AutoHitFlag.YES;
+        boolean autoDirectHit = event.hitOutcomeContext().autoDirectHit() == CombatEvent.AutoHitFlag.YES;
+
+        double critPortion = autoCrit ? 0.0 : calculateCritPortion(event, adjustedAmount, attributionContext);
+        double directHitPortion = autoDirectHit ? 0.0 : calculateDirectHitPortion(event, adjustedAmount, attributionContext);
+
+        double critRateExtra = attributionContext.buffedCritRate() > 0.0
+                ? critPortion * (attributionContext.totalCritRateUp() / attributionContext.buffedCritRate())
+                : 0.0;
+        double directHitRateExtra = attributionContext.buffedDirectHitRate() > 0.0
+                ? directHitPortion * (attributionContext.totalDirectHitRateUp() / attributionContext.buffedDirectHitRate())
+                : 0.0;
+
+        double autoCritMultiplier = autoCrit ? attributionContext.externalAutoCritMultiplier() : 1.0;
+        double autoDirectHitMultiplier = autoDirectHit ? attributionContext.externalAutoDirectHitMultiplier() : 1.0;
+        double combinedAutoMultiplier = autoCritMultiplier * autoDirectHitMultiplier;
+        double autoRateExtra = combinedAutoMultiplier > 1.0
+                ? adjustedAmount - (adjustedAmount / combinedAutoMultiplier)
+                : 0.0;
+
+        double totalExtra = directDamageExtra + critRateExtra + directHitRateExtra + autoRateExtra;
+        if (totalExtra <= 0.0) {
+            return AllocationResult.EMPTY;
+        }
+
+        Map<ActorId, Double> providerExtras = new LinkedHashMap<>();
+
+        if (directDamageExtra > 0.0) {
+            double totalWeight = Math.log(attributionContext.totalMultiplier());
+            if (totalWeight > 0.0) {
+                for (Map.Entry<ActorId, Double> entry : attributionContext.providerMultiplierLogWeight().entrySet()) {
+                    providerExtras.merge(
+                            entry.getKey(),
+                            directDamageExtra * (entry.getValue() / totalWeight),
+                            Double::sum
+                    );
+                }
+            }
+        }
+
+        if (critRateExtra > 0.0 && attributionContext.totalCritRateUp() > 0.0) {
+            for (Map.Entry<ActorId, Double> entry : attributionContext.providerCritRate().entrySet()) {
+                providerExtras.merge(
+                        entry.getKey(),
+                        critPortion * (entry.getValue() / attributionContext.buffedCritRate()),
+                        Double::sum
+                );
+            }
+        }
+
+        if (directHitRateExtra > 0.0 && attributionContext.totalDirectHitRateUp() > 0.0) {
+            for (Map.Entry<ActorId, Double> entry : attributionContext.providerDirectHitRate().entrySet()) {
+                providerExtras.merge(
+                        entry.getKey(),
+                        directHitPortion * (entry.getValue() / attributionContext.buffedDirectHitRate()),
+                        Double::sum
+                );
+            }
+        }
+
+        if (autoRateExtra > 0.0) {
+            double autoCritWeight = autoCritMultiplier > 1.0 ? Math.log(autoCritMultiplier) : 0.0;
+            double autoDirectHitWeight = autoDirectHitMultiplier > 1.0 ? Math.log(autoDirectHitMultiplier) : 0.0;
+            double totalAutoWeight = autoCritWeight + autoDirectHitWeight;
+            if (autoCritWeight > 0.0 && attributionContext.totalCritRateUp() > 0.0 && totalAutoWeight > 0.0) {
+                double critAutoExtra = autoRateExtra * (autoCritWeight / totalAutoWeight);
+                for (Map.Entry<ActorId, Double> entry : attributionContext.providerCritRate().entrySet()) {
+                    providerExtras.merge(
+                            entry.getKey(),
+                            critAutoExtra * (entry.getValue() / attributionContext.totalCritRateUp()),
+                            Double::sum
+                    );
+                }
+            }
+            if (autoDirectHitWeight > 0.0 && attributionContext.totalDirectHitRateUp() > 0.0 && totalAutoWeight > 0.0) {
+                double directHitAutoExtra = autoRateExtra * (autoDirectHitWeight / totalAutoWeight);
+                for (Map.Entry<ActorId, Double> entry : attributionContext.providerDirectHitRate().entrySet()) {
+                    providerExtras.merge(
+                            entry.getKey(),
+                            directHitAutoExtra * (entry.getValue() / attributionContext.totalDirectHitRateUp()),
+                            Double::sum
+                    );
+                }
+            }
+        }
+
+        return new AllocationResult(totalExtra, Map.copyOf(providerExtras));
     }
 
     private double calculateCritPortion(
@@ -316,43 +429,56 @@ public final class CombatState {
         Map<ActorId, Double> providerMultiplierLogWeight = new LinkedHashMap<>();
         Map<ActorId, Double> providerCritRate = new LinkedHashMap<>();
         Map<ActorId, Double> providerDirectHitRate = new LinkedHashMap<>();
+        RateAccumulator selfRateAccumulator = new RateAccumulator();
 
         ActorStats sourceStats = actors.get(sourceId);
         if (sourceStats != null) {
             for (ActiveBuff buff : sourceStats.activeBuffs()) {
-                if (sharesOwnershipGroup(buff.sourceId(), sourceId)) {
-                    continue;
-                }
-                applyBuffEffects(buff, totalMultiplier, providerMultiplierLogWeight, providerCritRate, providerDirectHitRate);
+                applyBuffEffects(
+                        buff,
+                        sourceId,
+                        totalMultiplier,
+                        providerMultiplierLogWeight,
+                        providerCritRate,
+                        providerDirectHitRate,
+                        selfRateAccumulator
+                );
             }
         }
 
         ActorStats targetStats = actors.get(targetId);
         if (targetStats != null) {
             for (ActiveBuff buff : targetStats.activeBuffs()) {
-                if (sharesOwnershipGroup(buff.sourceId(), sourceId)) {
-                    continue;
-                }
-                applyBuffEffects(buff, totalMultiplier, providerMultiplierLogWeight, providerCritRate, providerDirectHitRate);
+                applyBuffEffects(
+                        buff,
+                        sourceId,
+                        totalMultiplier,
+                        providerMultiplierLogWeight,
+                        providerCritRate,
+                        providerDirectHitRate,
+                        selfRateAccumulator
+                );
             }
         }
 
         double totalCritRateUp = providerCritRate.values().stream().mapToDouble(Double::doubleValue).sum();
         double totalDirectHitRateUp = providerDirectHitRate.values().stream().mapToDouble(Double::doubleValue).sum();
-        double unbuffedCritRate = estimateUnbuffedRate(
+        double baseCritRate = estimateUnbuffedRate(
                 sourceStats,
-                totalCritRateUp,
                 DEFAULT_CRIT_RATE,
                 MIN_CRIT_RATE,
                 RateKind.CRIT
         );
-        double unbuffedDirectHitRate = estimateUnbuffedRate(
+        double baseDirectHitRate = estimateUnbuffedRate(
                 sourceStats,
-                totalDirectHitRateUp,
                 DEFAULT_DIRECT_HIT_RATE,
                 0.0,
                 RateKind.DIRECT_HIT
         );
+        double selfBuffedCritRate = clampRate(baseCritRate + selfRateAccumulator.critRateUp);
+        double selfBuffedDirectHitRate = clampRate(baseDirectHitRate + selfRateAccumulator.directHitRateUp);
+        double unbuffedCritRate = baseCritRate;
+        double unbuffedDirectHitRate = baseDirectHitRate;
         double buffedCritRate = clampRate(unbuffedCritRate + totalCritRateUp);
         double buffedDirectHitRate = clampRate(unbuffedDirectHitRate + totalDirectHitRateUp);
 
@@ -363,8 +489,10 @@ public final class CombatState {
                 Map.copyOf(providerDirectHitRate),
                 totalCritRateUp,
                 totalDirectHitRateUp,
+                selfBuffedCritRate,
                 unbuffedCritRate,
                 buffedCritRate,
+                selfBuffedDirectHitRate,
                 unbuffedDirectHitRate,
                 buffedDirectHitRate
         );
@@ -372,7 +500,6 @@ public final class CombatState {
 
     private double estimateUnbuffedRate(
             ActorStats sourceStats,
-            double totalRateUp,
             double defaultRate,
             double minimumRate,
             RateKind rateKind
@@ -384,7 +511,7 @@ public final class CombatState {
         return Math.max(minimumRate, defaultRate);
     }
 
-    private double clampRate(double rate) {
+    private static double clampRate(double rate) {
         return Math.max(0.0, Math.min(1.0, rate));
     }
 
@@ -406,25 +533,43 @@ public final class CombatState {
 
     private void applyBuffEffects(
             ActiveBuff buff,
+            ActorId sourceId,
             MultiplierHolder totalMultiplier,
             Map<ActorId, Double> providerMultiplierLogWeight,
             Map<ActorId, Double> providerCritRate,
-            Map<ActorId, Double> providerDirectHitRate
+            Map<ActorId, Double> providerDirectHitRate,
+            RateAccumulator selfRateAccumulator
     ) {
         Optional<RaidBuffLibrary.RaidBuffDefinition> maybeDefinition = RaidBuffLibrary.find(buff.buffId(), buff.buffName());
         if (maybeDefinition.isEmpty()) {
             return;
         }
 
+        boolean sameOwnershipGroup = sharesOwnershipGroup(buff.sourceId(), sourceId);
         for (RaidBuffLibrary.RaidBuffEffect effect : maybeDefinition.orElseThrow().effects()) {
             switch (effect.kind()) {
                 case PERCENT_DAMAGE -> {
+                    if (sameOwnershipGroup) {
+                        continue;
+                    }
                     double multiplier = 1.0 + effect.amount();
                     totalMultiplier.multiply(multiplier);
                     providerMultiplierLogWeight.merge(buff.sourceId(), Math.log(multiplier), Double::sum);
                 }
-                case CRIT_RATE -> providerCritRate.merge(buff.sourceId(), effect.amount(), Double::sum);
-                case DIRECT_HIT_RATE -> providerDirectHitRate.merge(buff.sourceId(), effect.amount(), Double::sum);
+                case CRIT_RATE -> {
+                    if (sameOwnershipGroup) {
+                        selfRateAccumulator.critRateUp += effect.amount();
+                    } else {
+                        providerCritRate.merge(buff.sourceId(), effect.amount(), Double::sum);
+                    }
+                }
+                case DIRECT_HIT_RATE -> {
+                    if (sameOwnershipGroup) {
+                        selfRateAccumulator.directHitRateUp += effect.amount();
+                    } else {
+                        providerDirectHitRate.merge(buff.sourceId(), effect.amount(), Double::sum);
+                    }
+                }
             }
         }
     }
@@ -452,11 +597,54 @@ public final class CombatState {
             Map<ActorId, Double> providerDirectHitRate,
             double totalCritRateUp,
             double totalDirectHitRateUp,
+            double selfBuffedCritRate,
             double unbuffedCritRate,
             double buffedCritRate,
+            double selfBuffedDirectHitRate,
             double unbuffedDirectHitRate,
             double buffedDirectHitRate
     ) {
+        private double externalAutoCritMultiplier() {
+            if (totalCritRateUp <= 0.0) {
+                return 1.0;
+            }
+            double critDamageMultiplier = CRIT_DAMAGE_BASE + (unbuffedCritRate - MIN_CRIT_RATE);
+            double numerator = 1.0 + (critDamageMultiplier - 1.0) * clampRate(selfBuffedCritRate + totalCritRateUp);
+            double denominator = 1.0 + (critDamageMultiplier - 1.0) * selfBuffedCritRate;
+            return denominator > 0.0 ? Math.max(1.0, numerator / denominator) : 1.0;
+        }
+
+        private double externalAutoDirectHitMultiplier() {
+            if (totalDirectHitRateUp <= 0.0) {
+                return 1.0;
+            }
+            double numerator = 1.0 + (DIRECT_HIT_DAMAGE_MULTIPLIER - 1.0) * clampRate(selfBuffedDirectHitRate + totalDirectHitRateUp);
+            double denominator = 1.0 + (DIRECT_HIT_DAMAGE_MULTIPLIER - 1.0) * selfBuffedDirectHitRate;
+            return denominator > 0.0 ? Math.max(1.0, numerator / denominator) : 1.0;
+        }
+    }
+
+    private static final class RateAccumulator {
+        private double critRateUp;
+        private double directHitRateUp;
+    }
+
+    private record AllocationResult(double totalExtra, Map<ActorId, Double> providerExtras) {
+        private static final AllocationResult EMPTY = new AllocationResult(0.0, Map.of());
+    }
+
+    static boolean experimentalAutoHitAttributionEnabled() {
+        String propertyValue = System.getProperty(EXPERIMENTAL_AUTO_HIT_ATTRIBUTION_PROPERTY);
+        if (propertyValue != null && !propertyValue.isBlank()) {
+            return Boolean.parseBoolean(propertyValue);
+        }
+        String envValue = System.getenv("PACE_EXPERIMENTAL_AUTO_HIT_ATTRIBUTION");
+        return envValue != null && Boolean.parseBoolean(envValue);
+    }
+
+    private boolean hasExplicitAutoHitContext(CombatEvent.DamageEvent event) {
+        return event.hitOutcomeContext().autoCrit() == CombatEvent.AutoHitFlag.YES
+                || event.hitOutcomeContext().autoDirectHit() == CombatEvent.AutoHitFlag.YES;
     }
 
     private enum RateKind {
