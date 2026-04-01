@@ -8,9 +8,10 @@
 
 ## 작업 시작 전 확인
 - 작업 시작 전에 항상 [`tasks.md`](/Users/kimbogeun/Documents/Project/paceMeter/tasks.md)를 확인한다.
-- 현재 우선 작업은 보스 체력 기반 클리어 가능 여부 판단 시스템이다.
-- 목표는 ACT에서 보스 HP를 받아 현재 파티 DPS로 엔레이지 전에 처치 가능한지 계산하는 것이다.
-- FFLogs 데이터가 없어도 동작해야 한다.
+- 현재 최우선 작업은 `live rDPS parity`다.
+- 기준은 `pacemeter live rDPS ~= FFLogs companion live rDPS`이며, replay parity는 그 목표를 검증하는 수단이다.
+- clearability는 부가 기능이며, 메인 스트림이 아니라 검증/보강 단계로 취급한다.
+- selected fight 하나만 맞추는 튜닝은 금지하고, heavy2/heavy4/lindwurm와 all-fights gate를 함께 본다.
 
 ## 현재 작업 단계
 1. 보스 HP 파싱

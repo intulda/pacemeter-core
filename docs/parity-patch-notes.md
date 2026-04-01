@@ -1,5 +1,42 @@
 # Parity Patch Notes
 
+## 2026-04-01
+
+### Priority reminder
+- 현재 메인 스트림은 `clearability`가 아니라 `live rDPS parity`다.
+- 목표는 `pacemeter live rDPS ~= FFLogs companion live rDPS`.
+- replay / parity report / diagnostics는 production tuning 전에 원인을 분리하는 검증 도구로 사용한다.
+
+### DRG `64AC / Chaotic Spring` investigation
+- heavy2 selected fight(`fight=6`) 기준으로 DRG actor total은 여전히 FFLogs보다 높다.
+  - local `41284.5`
+  - fflogs `40149.7`
+  - delta `+1134.8`
+- 그런데 `64AC` 자체는 "못 잡는" 문제가 아니었다.
+  - local full total `1788931`
+  - fflogs total `1330078`
+  - delta `+458853`
+- local skill breakdown에서 같은 GUID `64AC`가 두 엔트리로 분리되어 있었다.
+  - `DoT#64AC = 1086661`
+  - `chaotic spring (64AC) = 702270`
+- 기존 parity report는 local top skills를 `merge 전에 limit`하고 있어서 shared GUID 스킬 해석이 왜곡될 수 있었다.
+
+### This patch
+- `SubmissionParityReportService`에서 local top skill 집계를 `GUID/name key로 먼저 merge`한 뒤 `damage 순 정렬 + top N limit` 하도록 수정.
+- 목적은 shared GUID 스킬(`64AC` 같은 direct+DoT/alias split)의 진단 왜곡을 제거하는 것.
+- 이 수정은 우선 parity diagnostics/report 해석 안정화를 위한 것이고, live attribution production math를 바꾼 것은 아니다.
+
+### Current interpretation
+- DRG `64AC` 잔여 이슈는 `status=0 DoT를 못 잡는가`보다 `shared GUID를 어떤 의미로 합산/비교해야 하는가`에 가깝다.
+- selected fight 기준 DRG는 `64AC`가 부족한 것이 아니라 오히려 과집계 쪽으로 보인다.
+- 따라서 다음 production 변경은 `64AC를 더 잡는 방향`이 아니라 `64AC direct/DoT/shared GUID semantics`를 먼저 분리한 뒤 결정해야 한다.
+
+### Next step
+1. `64AC`의 local split이 engine/ingestion/event emit 어디서 생기는지 분리한다.
+2. FFLogs `damageDoneAbilities`가 shared GUID를 어떤 단위로 합산하는지 parity report 기준으로 맞춘다.
+3. DRG 이후에는 같은 shared GUID 패턴이 있는 job/action이 더 있는지 전수 확인한다.
+4. production attribution 수정은 diagnostics가 정리된 뒤에만 한다.
+
 ## 2026-03-30
 
 ### Auto-hit attribution guardrail

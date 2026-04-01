@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -836,13 +837,33 @@ public class SubmissionParityReportService {
                     .map(CombatDebugSnapshot.ActorSkillBreakdown::skills)
                     .orElse(List.of())
                     .stream()
-                    .limit(TOP_SKILLS_PER_ACTOR)
-                    .map(skill -> new SubmissionParityReport.SkillBreakdownEntry(
-                            extractLocalSkillGuid(skill.skillName()),
-                            skill.skillName(),
-                            skill.totalDamage(),
-                            skill.hitCount()
+                    .collect(Collectors.toMap(
+                            skill -> {
+                                Integer guid = extractLocalSkillGuid(skill.skillName());
+                                return guid != null && guid > 0
+                                        ? "guid:" + Integer.toHexString(guid).toUpperCase()
+                                        : "name:" + normalizeSkillKey(skill.skillName());
+                            },
+                            skill -> new SubmissionParityReport.SkillBreakdownEntry(
+                                    extractLocalSkillGuid(skill.skillName()),
+                                    skill.skillName(),
+                                    skill.totalDamage(),
+                                    skill.hitCount()
+                            ),
+                            (left, right) -> new SubmissionParityReport.SkillBreakdownEntry(
+                                    left.skillGuid() != null ? left.skillGuid() : right.skillGuid(),
+                                    left.skillName() != null && !left.skillName().isBlank()
+                                            ? left.skillName()
+                                            : right.skillName(),
+                                    left.totalDamage() + right.totalDamage(),
+                                    left.hitCount() + right.hitCount()
+                            ),
+                            LinkedHashMap::new
                     ))
+                    .values()
+                    .stream()
+                    .sorted((left, right) -> Long.compare(right.totalDamage(), left.totalDamage()))
+                    .limit(TOP_SKILLS_PER_ACTOR)
                     .toList();
             List<SubmissionParityReport.SkillBreakdownEntry> fflogsTopSkills = List.of();
             if (fflogs.reportCode() != null && fflogs.selectedFightId() != null && fflogsActor.id() != null) {
@@ -1016,6 +1037,19 @@ public class SubmissionParityReportService {
         } catch (NumberFormatException ignored) {
             return null;
         }
+    }
+
+    private String normalizeSkillKey(String skillName) {
+        if (skillName == null || skillName.isBlank()) {
+            return "";
+        }
+        String normalized = skillName;
+        int bracketStart = normalized.lastIndexOf(" (");
+        int bracketEnd = normalized.lastIndexOf(')');
+        if (bracketStart >= 0 && bracketEnd > bracketStart) {
+            normalized = normalized.substring(0, bracketStart);
+        }
+        return normalized.trim().toLowerCase();
     }
 
     private Map<String, String> loadOriginalToAlias(Path mappingPath) {

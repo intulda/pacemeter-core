@@ -2533,6 +2533,96 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugHeavy2Fight6DragoonGuidSkillDelta_printsActionLevelMismatch() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        List<SubmissionParityReport.ActorParityComparison> targets = report.comparisons().stream()
+                .filter(c -> "Dragoon".equals(c.fflogsType()) || "구려".equals(c.localName()))
+                .sorted((a, b) -> Double.compare(Math.abs(b.rdpsDeltaRatio()), Math.abs(a.rdpsDeltaRatio())))
+                .limit(1)
+                .toList();
+        assertEquals(1, targets.size());
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        Map<String, CombatDebugSnapshot.ActorDebugEntry> combatByName = new HashMap<>();
+        for (CombatDebugSnapshot.ActorDebugEntry actor : report.combat().actors()) {
+            combatByName.put(actor.name(), actor);
+        }
+        Map<ActorId, List<CombatDebugSnapshot.SkillDebugEntry>> skillsByActorId = new HashMap<>();
+        for (CombatDebugSnapshot.ActorSkillBreakdown breakdown : report.combat().skillBreakdowns()) {
+            skillsByActorId.put(breakdown.actorId(), breakdown.skills());
+        }
+
+        SubmissionParityReport.ActorParityComparison actor = targets.get(0);
+        List<FflogsApiClient.AbilityDamageEntry> abilities = apiClient.fetchDamageDoneAbilities(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                actor.fflogsActorId()
+        );
+
+        Map<Integer, FflogsApiClient.AbilityDamageEntry> fflogsByGuid = new HashMap<>();
+        for (FflogsApiClient.AbilityDamageEntry ability : abilities) {
+            if (ability.guid() != null) {
+                fflogsByGuid.put(ability.guid(), ability);
+            }
+        }
+
+        CombatDebugSnapshot.ActorDebugEntry combatActor = combatByName.get(actor.localName());
+        List<CombatDebugSnapshot.SkillDebugEntry> fullLocalSkills = combatActor == null
+                ? List.of()
+                : skillsByActorId.getOrDefault(combatActor.actorId(), List.of());
+
+        System.out.printf(
+                "heavy2.fight6.drg.guidDelta actor=%s job=%s rdpsDelta=%.1f ratio=%.3f%n",
+                actor.localName(),
+                actor.fflogsType(),
+                actor.rdpsDelta(),
+                actor.rdpsDeltaRatio()
+        );
+
+        Map<Integer, Long> localByGuid = new HashMap<>();
+        for (CombatDebugSnapshot.SkillDebugEntry localSkill : fullLocalSkills) {
+            Integer localSkillId = extractLocalSkillId(localSkill.skillName());
+            if (localSkillId == null || localSkillId <= 0) {
+                continue;
+            }
+            localByGuid.merge(localSkillId, localSkill.totalDamage(), Long::sum);
+        }
+
+        record GuidDelta(Integer guid, long localTotal, long fflogsTotal, long delta) {}
+        List<GuidDelta> deltas = localByGuid.entrySet().stream()
+                .map(entry -> {
+                    Integer localSkillId = entry.getKey();
+                    long localTotal = entry.getValue();
+                    FflogsApiClient.AbilityDamageEntry matched = fflogsByGuid.get(localSkillId);
+                    long fflogsTotal = matched == null ? 0L : Math.round(matched.total());
+                    return new GuidDelta(localSkillId, localTotal, fflogsTotal, localTotal - fflogsTotal);
+                })
+                .sorted((a, b) -> Long.compare(Math.abs(b.delta()), Math.abs(a.delta())))
+                .limit(20)
+                .toList();
+        deltas.forEach(entry -> System.out.printf(
+                "  guid=%s local=%d fflogs=%d delta=%d%n",
+                formatGuid(entry.guid()),
+                entry.localTotal(),
+                entry.fflogsTotal(),
+                entry.delta()
+        ));
+
+        Set<Integer> localIds = localByGuid.keySet();
+        List<String> missingHigh = abilities.stream()
+                .filter(a -> a.guid() != null && !localIds.contains(a.guid()))
+                .sorted((a, b) -> Double.compare(b.total(), a.total()))
+                .limit(10)
+                .map(a -> a.name() + "(" + formatGuid(a.guid()) + "):" + Math.round(a.total()))
+                .toList();
+        System.out.println("  fflogsMissingInLocalTop=" + missingHigh);
+    }
+
+    @Test
     void debugHeavy2Fight6GuidParityFromIngestion_printsEmitVsFflogsTotals() throws Exception {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReport("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt");
@@ -2922,6 +3012,205 @@ class SubmissionParityReportDiagnostics {
                 0x409C,
                 "heavy2.fight2.sch"
         );
+    }
+
+    @Test
+    void debugHeavy2Fight2DragoonTargetParity_printsChaoticSpringTargetDeltas() throws Exception {
+        printActorAbilityTargetParity(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                Map.of("구려", 0x64AC),
+                Map.of("구려", 0x0A9F),
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2DragoonDotAttributionModes_printsChaoticSpringModeBreakdown() throws Exception {
+        printDotAttributionBreakdown(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "구려",
+                0x64AC,
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy4Fight5DragoonTargetParity_printsChaoticSpringTargetDeltas() throws Exception {
+        printActorAbilityTargetParity(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                Map.of("치삐", 0x64AC),
+                Map.of("치삐", 0x0A9F),
+                "heavy4.fight5.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy4Fight5DragoonDotAttributionModes_printsChaoticSpringModeBreakdown() throws Exception {
+        printDotAttributionBreakdown(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "치삐",
+                0x64AC,
+                "heavy4.fight5.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight6DragoonTargetParity_printsChaoticSpringTargetDeltas() throws Exception {
+        printActorAbilityTargetParity(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                6,
+                Map.of("구려", 0x64AC),
+                Map.of("구려", 0x0A9F),
+                "heavy2.fight6.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight6DragoonDotAttributionModes_printsChaoticSpringModeBreakdown() throws Exception {
+        printDotAttributionBreakdown(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                6,
+                "구려",
+                0x64AC,
+                "heavy2.fight6.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight6DragoonActorDelta_printsTotalsAndTopSkills() throws Exception {
+        printActorParityComparisons(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                6,
+                List.of("Dragoon"),
+                "heavy2.fight6.drg.actorTotals"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight6DragoonGuidSkillDeltaByJob_printsActionLevelMismatch() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", 6);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison actor = report.comparisons().stream()
+                .filter(c -> "Dragoon".equals(c.fflogsType()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        Map<String, CombatDebugSnapshot.ActorDebugEntry> combatByName = new HashMap<>();
+        for (CombatDebugSnapshot.ActorDebugEntry combatActor : report.combat().actors()) {
+            combatByName.put(combatActor.name(), combatActor);
+        }
+        Map<ActorId, List<CombatDebugSnapshot.SkillDebugEntry>> skillsByActorId = new HashMap<>();
+        for (CombatDebugSnapshot.ActorSkillBreakdown breakdown : report.combat().skillBreakdowns()) {
+            skillsByActorId.put(breakdown.actorId(), breakdown.skills());
+        }
+
+        List<FflogsApiClient.AbilityDamageEntry> abilities = apiClient.fetchDamageDoneAbilities(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                actor.fflogsActorId()
+        );
+        Map<Integer, FflogsApiClient.AbilityDamageEntry> fflogsByGuid = new HashMap<>();
+        for (FflogsApiClient.AbilityDamageEntry ability : abilities) {
+            if (ability.guid() != null) {
+                fflogsByGuid.put(ability.guid(), ability);
+            }
+        }
+
+        CombatDebugSnapshot.ActorDebugEntry combatActor = combatByName.get(actor.localName());
+        List<CombatDebugSnapshot.SkillDebugEntry> fullLocalSkills = combatActor == null
+                ? List.of()
+                : skillsByActorId.getOrDefault(combatActor.actorId(), List.of());
+
+        System.out.printf(
+                "heavy2.fight6.drg.guidDeltaByJob actor=%s job=%s rdpsDelta=%.1f ratio=%.3f%n",
+                actor.localName(),
+                actor.fflogsType(),
+                actor.rdpsDelta(),
+                actor.rdpsDeltaRatio()
+        );
+
+        record GuidDelta(Integer guid, long localTotal, long fflogsTotal, long delta) {}
+        List<GuidDelta> deltas = new ArrayList<>();
+        for (CombatDebugSnapshot.SkillDebugEntry localSkill : fullLocalSkills) {
+            Integer localSkillId = extractLocalSkillId(localSkill.skillName());
+            if (localSkillId == null || localSkillId <= 0) {
+                continue;
+            }
+            long localTotal = localSkill.totalDamage();
+            FflogsApiClient.AbilityDamageEntry matched = fflogsByGuid.get(localSkillId);
+            long fflogsTotal = matched == null ? 0L : Math.round(matched.total());
+            deltas.add(new GuidDelta(localSkillId, localTotal, fflogsTotal, localTotal - fflogsTotal));
+        }
+        deltas.stream()
+                .sorted((a, b) -> Long.compare(Math.abs(b.delta()), Math.abs(a.delta())))
+                .limit(20)
+                .forEach(entry -> System.out.printf(
+                        "  guid=%s local=%d fflogs=%d delta=%d%n",
+                        formatGuid(entry.guid()),
+                        entry.localTotal(),
+                        entry.fflogsTotal(),
+                        entry.delta()
+                ));
+
+        Set<Integer> localIds = deltas.stream()
+                .map(GuidDelta::guid)
+                .collect(Collectors.toSet());
+        List<String> missingHigh = abilities.stream()
+                .filter(a -> a.guid() != null && !localIds.contains(a.guid()))
+                .sorted((a, b) -> Double.compare(b.total(), a.total()))
+                .limit(10)
+                .map(a -> a.name() + "(" + formatGuid(a.guid()) + "):" + Math.round(a.total()))
+                .toList();
+        System.out.println("  fflogsMissingInLocalTop=" + missingHigh);
+    }
+
+    @Test
+    void debugHeavy2Fight6DragoonLocal64acBreakdown_printsSplitEntries() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight("2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt", 6);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(6, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison actor = report.comparisons().stream()
+                .filter(c -> "Dragoon".equals(c.fflogsType()))
+                .findFirst()
+                .orElseThrow();
+
+        Map<String, CombatDebugSnapshot.ActorDebugEntry> combatByName = new HashMap<>();
+        for (CombatDebugSnapshot.ActorDebugEntry combatActor : report.combat().actors()) {
+            combatByName.put(combatActor.name(), combatActor);
+        }
+        Map<ActorId, List<CombatDebugSnapshot.SkillDebugEntry>> skillsByActorId = new HashMap<>();
+        for (CombatDebugSnapshot.ActorSkillBreakdown breakdown : report.combat().skillBreakdowns()) {
+            skillsByActorId.put(breakdown.actorId(), breakdown.skills());
+        }
+
+        CombatDebugSnapshot.ActorDebugEntry combatActor = combatByName.get(actor.localName());
+        List<CombatDebugSnapshot.SkillDebugEntry> fullLocalSkills = combatActor == null
+                ? List.of()
+                : skillsByActorId.getOrDefault(combatActor.actorId(), List.of());
+
+        System.out.printf("heavy2.fight6.drg.local64ac actor=%s%n", actor.localName());
+        fullLocalSkills.stream()
+                .filter(skill -> {
+                    Integer guid = extractLocalSkillId(skill.skillName());
+                    return guid != null && guid == 0x64AC;
+                })
+                .sorted((a, b) -> Long.compare(b.totalDamage(), a.totalDamage()))
+                .forEach(skill -> System.out.printf(
+                        "  skillName=%s total=%d hits=%d%n",
+                        skill.skillName(),
+                        skill.totalDamage(),
+                        skill.hitCount()
+                ));
     }
 
     @Test
@@ -3779,17 +4068,21 @@ class SubmissionParityReportDiagnostics {
                 .sorted(Comparator.comparingDouble(
                         SubmissionParityReport.ActorParityComparison::rdpsDeltaRatio
                 ).reversed())
-                .forEach(comparison -> System.out.printf(
-                        "%s fight=%d actor=%s job=%s local=%.1f fflogs=%.1f delta=%.1f ratio=%.4f%n",
-                        label,
-                        fightId,
-                        comparison.localName(),
-                        comparison.fflogsType(),
-                        comparison.localOnlineRdps(),
-                        comparison.fflogsRdpsPerSecond(),
-                        comparison.rdpsDelta(),
-                        comparison.rdpsDeltaRatio()
-                ));
+                .forEach(comparison -> {
+                    System.out.printf(
+                            "%s fight=%d actor=%s job=%s local=%.1f fflogs=%.1f delta=%.1f ratio=%.4f%n",
+                            label,
+                            fightId,
+                            comparison.localName(),
+                            comparison.fflogsType(),
+                            comparison.localOnlineRdps(),
+                            comparison.fflogsRdpsPerSecond(),
+                            comparison.rdpsDelta(),
+                            comparison.rdpsDeltaRatio()
+                    );
+                    System.out.println("  localTopSkills=" + comparison.localTopSkills());
+                    System.out.println("  fflogsTopSkills=" + comparison.fflogsTopSkills());
+                });
     }
 
     private static void setField(Object target, String fieldName, Object value) throws Exception {
