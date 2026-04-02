@@ -1,338 +1,174 @@
-# paceMeter 작업 목록
+# paceMeter 작업 메모
 
-## 2026-03-27 Priority Update
+## 2026-04-03 현재 기준
 
-### 2026-03-27 Live Wipe Reset Regression
-- 레이드 전멸 후 다음 풀에 이전 전투 데이터가 이어지던 회귀가 재발.
-- 원인: live damage / DoT emit 경로가 관측된 actor를 `partyMemberIds` / `combatPartyMemberIds`에 다시 편입시켜 wipe 카운트 모수를 부풀림.
-- 결과: `deadPlayers.size() == effectivePartyMemberCountForCombat()` 조건이 깨져 `FightEnd`가 누락됨.
-- 조치: 명시적 파티 정보(`PartyList`, trusted `CombatData`)만 wipe 모수에 반영하고, damage/DoT 관측만으로 파티 집합을 확장하지 않도록 수정.
-- 회귀 테스트: `ActIngestionServiceTest.partyWipe_endsFightAndNextPullStartsFreshWithoutCarryingPreviousDamage`
+### 최우선 목표
+- `live rDPS parity`
+- 기준:
+  - `pacemeter live rDPS ~= FFLogs companion live rDPS`
+  - replay parity는 검증 수단이다.
+  - selected fight 하나만 맞추는 튜닝은 금지한다.
+  - heavy2 / heavy4 / lindwurm / all-fights gate를 함께 본다.
 
-### 현재 메인 스트림
-- 현재 최우선 작업은 `clearability`가 아니라 `rDPS 정밀도 개선 / FFLogs parity 보정`이다.
-- clearability는 구현 경로가 이미 연결되어 있으며, 지금은 메인 개발 스트림이 아니라 검증/보강 단계로 본다.
-- 기준 문서는 `docs/parity-patch-notes.md`이며, 우선순위와 금지 실험은 해당 문서를 기준으로 맞춘다.
+## 현재 살아 있는 production 변경
 
-### 우선순위
-1. 현재 parity baseline을 깨지 않고 유지한다.
-   - 기준: `scripts/parity_repro_check.sh`
-   - 핵심 지표: `mape`, `p95`, `max`, `gate pass`
-2. selected fight 하나만 맞추는 방향으로 가지 않는다.
-   - heavy2/heavy4/lindwurm rollup과 all-fights gate를 같이 본다.
-   - 특히 heavy2 report의 fight 1/2/3처럼 흔들리는 구간을 별도로 본다.
-3. `status=0` DoT attribution의 실제 누락/오귀속 원인을 diagnostics로 먼저 분리한다.
-   - source-only fallback이 왜 위험한지 이미 확인되어 있다.
-   - target mismatch, evidence coverage, selected-fight type37 coverage를 계속 기준으로 삼는다.
-4. `SCH/SGE` 계열 DoT 누락/과소 집계를 줄이는 작업을 이어간다.
-   - 우선 대상: `Biolysis`, `Baneful Impaction`, `Eukrasian Dosis III`
-   - 단, production 경로에 성급히 넣지 말고 diagnostics/replay/parity report로 먼저 확인한다.
-5. `PCT/NIN/DNC/DRG`의 잔여 편차는 status 단위 buff attribution으로 다시 본다.
-6. `type 37`은 보조 증거로만 다룬다.
-   - parser 자체가 문제의 전부는 아니며, signal-only / widened-window / source-priority 계열은 이미 여러 번 악화가 확인되었다.
-   - production ingestion에 바로 넣기보다 offline diagnostics와 제한적 검증을 우선한다.
+### 1. unknown source + multi-target generic fallback 차단
+- 파일:
+  - `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+- 내용:
+  - `sourceId == E0000000`
+  - `countTrackedTargetsWithActiveDots() > 1`
+  - 이 경우 `status0_snapshot_redistribution`, `status0_tracked_target_split`의 generic fallback을 막는다.
+- 이유:
+  - heavy2의 `레드 핫 / 딥 블루 / 수중 감옥` 같은 multi-target 구조에서 unknown `status=0` tick이 mixed active set으로 과귀속되는 문제가 반복됐다.
+  - lindwurm는 single-target 본체 케이스가 많아서 전역 차단이 아니라 multi-target 조건이 필요했다.
 
-### 작업 원칙
-- parity를 깨는 큰 구조 변경보다, 재현 가능한 실험과 직업별 편차 축소를 우선한다.
-- production 경로 반영 전에는 replay / parity report / debug API로 먼저 검증한다.
-- 실패한 실험은 같은 형태로 재시도하지 않는다.
-  - source-only 우선 귀속
-  - signal-only 분배 확장
-  - widened signal window
-  - strict corroborated source 우선
-  - rules-empty/source-empty 차단 계열
-- `eventsByAbility`만으로 결론 내리지 않는다.
-  - `abilities total`, actor delta, target mismatch, evidence coverage를 함께 본다.
-- clearability 관련 잔여 항목은 후순위 검증으로 유지한다.
+### 2. corroborated known-source 복원 경로 추가
+- 파일:
+  - `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+- 현재 추가된 메서드:
+  - `shouldPreferCorroboratedKnownSourceAttribution(...)`
+- 현재 동작:
+  - 아래 조건을 모두 만족할 때만 generic split보다 먼저 직접 복원한다.
+  - `status=0`
+  - source가 known party member
+  - multi-target
+  - same-source tracked dot 없음
+  - target snapshot fallback set에 same-source key 없음
+  - `application + status` evidence가 둘 다 맞는 corroborated action이 있음
+- attribution mode:
+  - `status0_corroborated_known_source`
+- 의도:
+  - `accepted_by_source`처럼 느슨하게 가지 않고, `same source + same target + corroborated action`이 있는 경우만 좁게 복원한다.
 
-## 현재 작업: 보스 체력 기반 클리어 가능 여부 판단 시스템
+## 현재 검증 상태
+- 통과:
+  - `compileJava`
+  - `ActIngestionServiceTest`
+  - `SubmissionParityRegressionGateTest`
+- 주의:
+  - Windows/Gradle 캐시 jar 잠금 때문에 diagnostics 단건 실행이 간헐적으로 실패했다.
+  - 실패 원인은 로직보다 `AccessDeniedException` / `NoSuchFileException` 계열의 Gradle 캐시 충돌이었다.
+  - `compileJava`와 regression gate는 현재 통과 상태로 확인됐다.
 
-**목표**: ACT에서 보스 HP 정보를 받아서, 현재 파티 DPS로 엔레이지 전에 보스를 잡을 수 있는지 판단
+## 현재 확인된 수치
 
-**핵심 가치**: FFLogs 데이터 없이도 동작해서 신규 레이드 첫날부터 사용할 수 있어야 함
+### baseline으로 잡고 있는 값
+- rollup:
+  - `mape=0.0129992412`
+  - `p95=0.0339932391`
+  - `max=0.0415261898`
 
----
-
-## 현재 상태 요약
-
-### 구현 완료
-- ACT `03` AddCombatant 라인에서 `currentHp`, `maxHp` 파싱
-- 보스 후보 감지 및 `BossIdentified` 이벤트 발행
-- `CombatState`에 `BossInfo` 저장
-- `EnrageTimeProvider` 포트 정의
-- `CactbotFileMapping` 구현 및 리소스 매핑 구성
-- `CactbotTimelineProvider` 구현
-- `CombatService -> SnapshotAggregator -> OverlaySnapshot` clearability 계산 경로 연결
-- `ClearabilityCheck` 계산 로직 구현
-- raw replay 기반 보스 식별/clearability 통합 테스트 추가
-- clearability 경계조건 테스트 보강
-- `CactbotTimelineProvider` 실다운로드 통합 테스트 추가
-
-### 현재 진행 중
-- JSONL replay 기반 clearability 시나리오 추가 검증
-- rDPS 정밀도 개선: DoT snapshot 모델 보강 및 버프/디버프 검증 확대
-
-### heavy4 parity 진행 메모
-- 기준 submission: `2026-03-15-heavy4-vafpbaqjnhbk1mtw`
-- 기준 원본 raw: `src/main/resources/Split-Network_30007_20260315-2026-03-15T083420.543Z.log`
-- submission 로그는 FFLogs report `VAfPBaqJnHbK1Mtw`에 대응하는 실제 ACT raw이며, selected fight는 `fight 2`로 고정한다.
-- anonymize 스크립트는 skill/status/name까지 `PlayerXX`로 바꾸는 문제가 있었고, replay 전 역매핑 복원을 이미 넣어 둠.
-- heavy4 포렌식성 코드는 일반 회귀 테스트에서 분리했고, 회귀 테스트에는 parser/ingestion regression만 남긴 상태.
-
-#### 현재 확정된 결론
-- `409C`, `9094`, `5EFA`는 ordinary direct damage로 보기 어렵다.
-  - raw `21`의 damage 필드가 각각 `7670000`, `F2B0000`, `A380000` 형태이며 status apply marker 성격이 강함.
-  - ACT Definitions 기준으로도 `0767=Biolysis`, `0F2B=Baneful Impaction`, `0A38=Eukrasian Dosis III` status와 연결된다.
-- heavy4 fight 2 boss `24|DoT|0`는 raw에 실제로 많이 존재한다.
-  - source는 찍히지만 status는 비어 있고, source만 믿고 해석하면 오차가 커진다.
-- `38` snapshot float를 가중치로 써서 `SCH/SGE` DoT를 일부 복원하는 경로는 유효했다.
-  - 이 경로로 `SCH/SGE` delta가 크게 줄었음.
-- 반면 `38` snapshot을 synthetic buff apply처럼 메인 attribution 경로로 쓰는 시도는 과보정이었다.
-  - 해당 경로는 제거한 상태를 유지한다.
-- 남은 수백 단위 오차 중 상당수는 damage 누락이 아니라 crit/direct-hit attribution 편향이었다.
-  - `CombatState.estimateUnbuffedRate()`는 현재 버프량을 fight-wide 관측치에서 빼지 않고, 안정 baseline(`DEFAULT_CRIT_RATE`, `DEFAULT_DIRECT_HIT_RATE`)을 사용하도록 수정함.
-
-#### 현재 안정 기준 parity
-- heavy4 `fight 2` 현재 delta:
-  - `후엔 / SCH`: `-1404.3`
-  - `나성 / SGE`: `-796.6`
-  - `이끼이끼 / PCT`: `+798.5`
-  - `생쥐 / NIN`: `-530.1`
-  - `한정서너나좋아싫어 / DNC`: `+462.4`
-  - `치삐 / DRG`: `-450.5`
-  - `섬세 / DRK`: `+152.4`
-  - `재의 / PLD`: `+63.6`
-
-#### 지금 남은 핵심 문제
-- `SCH/SGE`는 아직 `totalDamage` 부족이 남아 있다.
-  - `SCH`: `Biolysis`, `Baneful Impaction`
-  - `SGE`: `Eukrasian Dosis III`
-- `PCT/NIN/DNC/DRG`는 damage 총량보다 buff contribution 편향이 더 크다.
-- `DoT#0`는 parity debug skill breakdown 집계 착시가 섞여 있을 수 있다.
-  - 현재 skill breakdown은 엔진의 최종 redistributed event가 아니라 raw `24`를 다시 `resolveDotActionId()`로만 집계한다.
-
-#### parity 실험 로그(중복 방지)
-- `status=0` known-source DoT에서 snapshot redistribution을 전면 차단하는 시도는 실패.
-  - 결과: heavy2/heavy4 모두 대폭 악화(`p95`가 약 `5.4% -> 12%+` 구간으로 증가).
-  - 결론: 전면 차단 방식은 재시도 금지.
-- `status=0` known-source DoT에서 tracked 근거가 있으면 source 단일 귀속 우선하는 시도도 실패.
-  - 결과: heavy2/heavy4 동시 악화(WHM/SCH 부족 + PLD 과다 확대).
-  - 결론: 단순 우선순위 전환 방식 재시도 금지.
-- 현재 유지되는 방향:
-  - 선택 fight 정합성 버그 수정(heavy2 `fightId=2`, heavy4 `fightId=2` 유지)
-  - source-only fallback(타겟 불일치) 제거
-  - type 37 신호는 증거 데이터로만 적재(직접 강제 귀속은 미적용)
-
-#### 다음 우선순위
-1. `type 37` 파서를 추가한다.
-2. `0767 / 0F2B / 0A38`만 대상으로 `21 application marker + 37 result`를 연결해 DoT lifecycle 복원을 시도한다.
-3. `37` 기반 복원 후 heavy4 `fight 2` 8인 parity를 다시 측정한다.
-4. 그 다음에 `PCT/NIN/DNC/DRG`의 남은 수백 단위 buff attribution 편향을 status별로 다시 본다.
-
-#### 2026-03-18 추가 메모
-- `37` parser + ingestion fallback을 production 경로에 붙이는 실험은 롤백했다.
-- 증상:
-  - local replay total damage가 전 직업에서 대략 절반 수준으로 붕괴
-  - replay 응답 예시: `parsedLines=19316`, `phase=ENDED`
-  - 로그상 `receivedAbilityCount=3980`, `emittedDamageCount=1307`
-  - replay 종료 직전 `combat timeout (166736ms idle)`가 발생
+### heavy2 fight2 / Samurai / 1D41
+- diagnostics 결과:
+  - `emittedTotal=2022286`
+  - `raw21Total=276944`
+  - `inferredDotTotal=1745342`
+  - `fflogsAbilityTotal=1542816`
+  - `delta=+479470`
 - 해석:
-  - `37` 자체가 정답 축일 가능성은 남아 있지만, 현재 replay/window/timeout 경로와 직접 연결하면 부작용이 너무 크다.
-  - 특히 parity를 깨지 않으면서 `37`을 써야 하므로, 다음에는 production ingestion이 아니라 offline diagnostics로만 먼저 검증해야 한다.
-- 현재 코드 상태:
-  - `37` parser/ingestion production 반영은 제거
-  - `SCH 9094/F2B`, `SGE 5EFA/A38` unknown-status mapping 보강은 유지
-  - parser/ingestion targeted tests는 통과
-  - `SubmissionParityReport`에 `parityQuality` 요약 필드 추가:
-    - `meanAbsolutePercentageError`, `p95AbsolutePercentageError`, `maxAbsolutePercentageError`
-    - `outlierActorCount`, `within{1,3,5}%` 비율
-    - matched/unmatched actor 카운트
-  - 앞으로 heavy4/다직업 비교는 `comparisons` 수동 점검 + `parityQuality` 지표를 함께 본다.
-  - 신규 집계 경로 추가:
-    - `SubmissionParityQualityService`가 `data/submissions/*`를 스캔해 submission별/전체 품질 지표를 집계
-    - debug API: `/api/debug/parity/quality`
-    - gate/우선순위 필드 추가:
-      - gate 기준: `p95<=3%`, `max<=10%`, `outlier(>5%)<=5%`
-      - `worstActors` 상위 20개를 함께 반환해 다음 수정 타깃을 자동 식별
-      - `jobs` 롤업 추가:
-        - job별 `MAPE/p95/max/outlier/within1/3/5/pass`를 계산
-        - 전 직업 관점에서 어떤 직업군이 구조적으로 흔들리는지 우선순위 식별 가능
+  - 예전 `+576162`, 더 예전 `+760k`대보다는 줄었다.
+  - 아직도 대부분이 inferred DoT 쪽이다.
 
-#### parity 재시작 핸드오프 (중요)
-- 재시작/다른 컴퓨터 진행 기준 문서:
-  - `docs/parity-continuation-handoff-2026-03-19.md`
-- 크로스 환경(맥/윈도우) 재현 런북:
-  - `docs/parity-cross-env-runbook.md`
-- dot attribution 카탈로그 재생성/검증 문서:
-  - `docs/dot-attribution-catalog-maintenance.md`
-- 자동 재현 스크립트:
-  - `scripts/parity_repro_check.sh`
-- 상세 변경/측정 이력:
-  - `docs/parity-patch-notes.md`
-- 집 테스트용 실행 요약:
-  - `docs/home-test-handoff-2026-03-19.md`
+### April heavy2 fight3 / Dragoon / 64AC
+- 이전 확인값:
+  - `emittedTotal=2826777`
+  - `raw21Total=1036593`
+  - `inferredDotTotal=1790184`
+  - `fflogsAbilityTotal=2063388`
+  - `delta=+763389`
+- 주의:
+  - 이 값은 corroborated known-source 경로 추가 전 기준이다.
+  - 변경 후 재측정은 이번 턴에 Gradle 캐시 잠금 때문에 아직 확정하지 못했다.
 
-### 확인 필요
-- 프론트엔드 저장소 경로: `/Users/kimbogeun/WebstormProjects/pacemeter-overlay`
-- clearability UI 렌더링은 프론트 저장소에서 이미 연결되어 있음
-- 이후 프론트 관련 작업은 위 저장소 기준으로 진행
+## 지금까지 확정된 핵심 사실
 
----
+### 공통 병목
+- 문제는 `status=0 DoT ownership`이다.
+- 특히 multi-target 전투에서 아래 조건이 반복된다.
+  - target active set이 넓다.
+  - `activeCoverage=1.0`이라 active subset이 전혀 좁혀지지 않는다.
+  - 하지만 target snapshot fallback set에는 정답 key가 없다.
+  - 그래서 generic split이 타직업 DoT set으로 과귀속된다.
 
-## Phase 1: 보스 HP 파싱 (백엔드)
+### heavy2 old/new 공통 문제 타깃
+- `레드 핫`
+- `딥 블루`
+- `수중 감옥`
 
-### 완료
-- `CombatantAdded`에 `currentHp`, `maxHp` 필드 추가
-- `ActLineParser`에서 AddCombatant HP 파싱 추가
-- `CombatEvent`에 `BossIdentified` 이벤트 추가
-- `CombatState`에 `BossInfo` 상태 추가
-- `CombatEngine`에서 `BossIdentified` 이벤트 반영
-- `ActIngestionService`에 보스 후보 감지 및 전투 시작 후 `BossIdentified` 발행 로직 추가
-- 관련 단위 테스트 추가
-- 헤비급 3층 1풀 raw replay fixture 추출 스크립트 및 결과 파일 생성
-- `heavy3_pull1_minimal.log` 기반 raw replay 통합 테스트 추가
+### 중요한 진단 결론
+- `guidPresent=false`인 tick이 실제 병목이다.
+- 이 케이스는 “같은 key가 있는데 weight만 틀린 것”이 아니라 “fallback 후보군에 정답 key 자체가 없는 것”에 가깝다.
+- 그래서 단순 weight 조정이나 우선순위 조정만으로는 한계가 있다.
 
-### 📋 남은 작업
-- [ ] Phase 1 마무리 검토: JSONL replay 시나리오 추가 보강
+## 실패한 시도
 
----
+### 실패 1. known-source generic fallback 전역 차단
+- 결과:
+  - `ActIngestionServiceTest` 실패
+  - heavy2 all-fights gate 실패
+- 판단:
+  - 전역 clamp는 금지
 
-## Phase 2: 엔레이지 정보 제공자 (백엔드)
+### 실패 2. known-source를 `accepted_by_source`로 우선
+- 결과:
+  - 일부 tick은 action 해석이 맞아도 전체 parity가 더 악화됐다.
+  - 특히 April heavy2 `DRG 64AC`가 더 나빠졌다.
+- 판단:
+  - `accepted_by_source`는 너무 느슨하다.
 
-### 완료
-- [x] **EnrageTimeProvider 인터페이스 정의**
-  - `Optional<EnrageInfo> getEnrageTime(int territoryId)`
-  - `record EnrageInfo(double seconds, ConfidenceLevel confidence, String source)`
-  - 파일: `src/main/java/com/bohouse/pacemeter/application/port/outbound/EnrageTimeProvider.java`
+### 실패 3. party-source multi-target 전역 차단
+- 결과:
+  - rollup과 heavy2 fight1이 크게 깨졌다.
+- 판단:
+  - heavy2 fight1에도 같은 구조가 작게 존재하므로, 단순 전역 차단은 안 된다.
 
-- [x] **CactbotFileMapping 구현**
-  - Territory ID → Cactbot 파일 경로 매핑 테이블
-  - Light-Heavyweight, Cruiserweight, Heavyweight, Endwalker Savage, Ultimate 포함
-  - 파일: `src/main/java/com/bohouse/pacemeter/adapter/outbound/cactbot/CactbotFileMapping.java`
+## 다음에 바로 이어서 할 일
 
-- [x] **CactbotTimelineProvider 구현**
-  - GitHub Raw URL로 타임라인 다운로드
-  - 정규식으로 `(enrage)` 라인 파싱
-  - 메모리 캐싱 (`ConcurrentHashMap`)
-  - 파일: `src/main/java/com/bohouse/pacemeter/adapter/outbound/cactbot/CactbotTimelineProvider.java`
+### 1. April heavy2 fight3 / DRG 64AC 재측정
+- 목표:
+  - 이번에 추가한 `status0_corroborated_known_source`가 April DRG를 실제로 줄였는지 확인
+- 우선 확인할 것:
+  - `debugHeavy2AprilFight3DragoonDirectVsDot_prints64acDecomposition`
+  - 필요하면 `debugHeavy2AprilFight3DragoonActiveSubsetLeak_printsSourceMatchedTargets`
+  - 필요하면 `debugHeavy2AprilFight3DragoonAcceptedBySourcePotential_printsResolvedActions`
+- 메모:
+  - Windows 캐시 잠금이 있으면 먼저 `compileJava` 후 같은 `GRADLE_USER_HOME`으로 순차 실행
 
-- [x] **Spring 빈 설정**
-  - `RestTemplate` 빈 추가
-  - `EnrageTimeProvider` 주입 경로 연결
-  - 파일: `src/main/java/com/bohouse/pacemeter/config/AppWiringConfig.java`
+### 2. April DRG가 여전히 안 줄면 다음 좁은 가설로 간다
+- 후보:
+  - corroborated known-source 경로에 `evidence age` 조건 추가
+  - corroborated known-source 경로에 `same target lifecycle freshness` 조건 추가
+- 하지 말 것:
+  - `accepted_by_source` 전역 우선화
+  - known-source generic fallback 전역 차단
 
-- [x] **테스트 작성**
-  - CactbotFileMapping 테스트
-  - CactbotTimelineProvider 파싱 단위 테스트
-  - Enrage 파싱 단위 테스트
+### 3. 최종 방향
+- 계속 미세 보정보다 `source-target-action` 복원을 더 FFLogs식으로 강화한다.
+- 다음 구조 확장 후보:
+  - same source + same target의 recent application/status를 묶는 `active dot instance` 성격 강화
+  - generic split 전에 복원 가능한 tick을 더 확실히 복원
 
-### 📋 남은 작업
-- [ ] **로컬 캐싱 (선택사항)**
-  - `~/.pacemeter/cactbot-cache/` 디렉토리 저장
-  - 오프라인 대응
+## 다음 턴 시작 체크리스트
+- 1. `tasks.md`와 `AGENTS.md` 확인
+- 2. `ActIngestionService.java`의 현재 살아 있는 변경 확인
+  - `shouldSuppressUnknownMultiTargetFallback(...)`
+  - `shouldSuppressKnownSourceGuidMissingMultiTargetFallback(...)`
+  - `shouldPreferCorroboratedKnownSourceAttribution(...)`
+- 3. `compileJava`
+- 4. `ActIngestionServiceTest`
+- 5. `SubmissionParityRegressionGateTest`
+- 6. April heavy2 DRG diagnostics 재측정
 
----
+## 건드려도 되는 원칙
+- FFLogs식 복원에 방해되는 불필요한 heuristic은 제거 가능
+- 단, gate를 깨는 전역 규칙 변경은 유지 금지
+- explainability 없는 fallback 추가 금지
 
-## Phase 3: 클리어 가능 여부 계산 (백엔드)
-
-### 완료
-- [x] **ClearabilityCheck record 정의**
-  - `canClear`, `estimatedKillTimeSeconds`, `enrageTimeSeconds`, `marginSeconds`
-  - `requiredDps`, `confidence`
-  - 파일: `src/main/java/com/bohouse/pacemeter/core/snapshot/ClearabilityCheck.java`
-
-- [x] **SnapshotAggregator 수정**
-  - `aggregate()`에 `Optional<EnrageInfo>` 파라미터 추가
-  - 보스 정보 + 엔레이지 정보가 있으면 clearability 계산
-  - 파일: `src/main/java/com/bohouse/pacemeter/core/snapshot/SnapshotAggregator.java`
-
-- [x] **OverlaySnapshot에 clearability 필드 추가**
-  - 파일: `src/main/java/com/bohouse/pacemeter/core/snapshot/OverlaySnapshot.java`
-
-- [x] **CombatService 수정**
-  - `EnrageTimeProvider` 주입
-  - tick 시 엔레이지 정보 조회 후 SnapshotAggregator에 전달
-  - 파일: `src/main/java/com/bohouse/pacemeter/application/CombatService.java`
-
-- [x] **계산 로직 검증**
-  - `ClearabilityCheck.calculate()` 단위 테스트
-  - raw replay 기반 clearability 통합 테스트
-  - 보스 없음 / 엔레이지 없음 / FightEnd 스냅샷 경계조건 테스트
-
-### 📋 남은 작업
-- [ ] JSONL replay 기반 실제 시나리오 추가 검증
-- [ ] 보스 현재 HP를 사용할지, max HP 기준 단순 kill-time 추정을 유지할지 계산 모델 고도화 검토
-
----
-
-## Phase 4: UI 표시
-
-### 상태
-- 프론트 저장소 경로: `/Users/kimbogeun/WebstormProjects/pacemeter-overlay`
-- 백엔드 snapshot 필드는 준비됨
-- `clearability` 타입/매핑/HUD 렌더링은 이미 구현됨
-
-### 남은 작업
-- [x] 프론트엔드 저장소/경로 확정
-- [x] `OverlaySnapshot.clearability` 타입 연결
-- [x] HUD 통합 및 상태별 스타일링
-- [x] `requiredDps`는 HUD 주지표에서 제외 유지
-- [ ] 데이터 없음 / 보스 없음 / LOW confidence 상태 실제 플레이 검증
-
-### 실사용 검증 체크리스트
-- [ ] ACT live 연결 상태에서 전투 시작 직후 `LOW` confidence가 정상 표시되는지 확인
-- [ ] 보스 식별 전에는 clearability 패널이 표시되지 않는지 확인
-- [ ] 엔레이지 매핑이 없는 인스턴스에서는 clearability가 숨겨지는지 확인
-- [ ] 전멸/와이프 종료 시 마지막 스냅샷에 clearability가 유지되는지 확인
-- [ ] 보스가 있는 실제 레이드에서 예상 킬타임 / 엔레이지 / 여유 시간이 상식적인 범위인지 확인
-
----
-
-## 후속 작업
-
-### 백엔드
-- [ ] 레이드 버프/디버프 ID 카탈로그 실제 값 검증 확대
-- [x] FFLogs parity 비교용 첫 실제 전투 로그 샘플 등록
-- [ ] FFLogs parity 비교용 실제 전투 로그 수집 확대
-- [x] 수집 로그 메타데이터/익명화/SQLite 카탈로그 워크플로우 추가
-- [x] 등록 submission 기준 로컬 parity 초안 리포트 API 추가
-- [x] parity 리포트에 FFLogs report summary 상태 필드 연결
-- [x] parity 리포트에 FFLogs actor table 연결 및 fight window 기준 로컬 replay 정합
-- [ ] FFLogs `table.totalRDPS` 단위 해석 검증 및 paceMeter `onlineRdps` 비교 축 정정
-- [ ] Encounter 자동 매칭 개선 (`targetName -> encounter`)
-- [ ] FFLogs API 캐싱 및 성능 최적화
-- [ ] 에러 핸들링 강화 (rate limit, 네트워크 오류)
-- [ ] 로깅 개선 (전투 종료 시 요약 로그)
-- [ ] 히스토리 저장 기능 (SQLite/H2)
-- [ ] 통계 API (`GET /api/stats`)
-- [ ] 관리 엔드포인트 (`POST /api/combat/reset` 등)
-
-### 프론트엔드
-- [ ] 직업 아이콘 추가
-- [ ] 성능 최적화
-- [ ] 전투 종료 시 최종 결과 화면
-- [ ] 에러 표시
-- [ ] 히스토리 뷰
-
-### 디버그/운영성
-- [x] 현재 전투 rDPS 분해 디버그 API 추가
-- [x] 원격 테스트용 ACT relay 경로 추가
-
----
-
-## 체크 포인트
-
-1. 백엔드 목표는 구현보다 검증 강화 단계에 들어옴
-2. clearability 백엔드는 거의 마감 단계이며 남은 일은 실제 플레이/JSONL 검증
-3. rDPS 정밀도 개선은 별도 후속 스트림으로 계속 진행
-## 2026-03-27 Live-First Note
-
-- `data/submissions/*` is a regression fixture set, not the product target.
-- The product target is `live ACT -> pacemeter live rDPS` tracking `FFLogs companion live rDPS` with near-identical behavior.
-- Offline replay parity is required, but replay-only wins are not acceptable if they reduce live explainability or live stability.
-- Every attribution rule should be defensible on the live ingestion path, not just on selected submission windows.
-- Final acceptance criteria:
-  - replay regression gate stays healthy
-  - all-fights generalization stays healthy
-  - live overlay rDPS trend matches FFLogs companion live trend over time
-  - job-level DoT attribution is stable under ongoing combat, not only at fight end
+## 참고 파일
+- `AGENTS.md`
+- `docs/parity-patch-notes.md`
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+- `src/main/java/com/bohouse/pacemeter/application/UnknownStatusDotAttributionResolver.java`
+- `src/test/java/com/bohouse/pacemeter/application/SubmissionParityReportDiagnostics.java`
+- `src/test/java/com/bohouse/pacemeter/application/SubmissionParityRegressionGateTest.java`

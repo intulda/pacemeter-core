@@ -1,145 +1,102 @@
 # paceMeter 에이전트 가이드
 
-## 프로젝트 개요
-- FFXIV 실시간 전투 DPS 페이스 비교 오버레이 툴.
-- 주요 흐름: ACT -> 전투 로그 -> rDPS 추정 -> FFLogs TOP 페이스 비교 -> Electron UI 표시.
-- 핵심 원칙: 모든 rDPS는 추정치이며, FFLogs live rDPS와 최대한 유사하게 구현한다.
-- 핵심 원칙: 에러로 인해 사용자 경험을 망치면 안 된다.
+## 현재 목표
+- 최우선 목표는 `live rDPS parity`다.
+- 기준은 `pacemeter live rDPS ~= FFLogs companion live rDPS`다.
+- replay parity와 regression gate는 목표 자체가 아니라 검증 수단이다.
+- clearability, UI, 기타 부가 기능은 메인 스트림이 아니다.
 
-## 작업 시작 전 확인
-- 작업 시작 전에 항상 [`tasks.md`](/Users/kimbogeun/Documents/Project/paceMeter/tasks.md)를 확인한다.
-- 현재 최우선 작업은 `live rDPS parity`다.
-- 기준은 `pacemeter live rDPS ~= FFLogs companion live rDPS`이며, replay parity는 그 목표를 검증하는 수단이다.
-- clearability는 부가 기능이며, 메인 스트림이 아니라 검증/보강 단계로 취급한다.
-- selected fight 하나만 맞추는 튜닝은 금지하고, heavy2/heavy4/lindwurm와 all-fights gate를 함께 본다.
+## 지금 기준선
+- 현재 오프라인 rollup 기준선:
+  - `mape=0.0139001291`
+  - `p95=0.0352008647`
+  - `max=0.0355029839`
+- 현재 selected fight:
+  - heavy4 `fight=5`
+  - heavy2 `fight=2`
+  - lindwurm `fight=8`
+- heavy2의 현재 핵심 잔차:
+  - `재탄 / 1D41(Higanbana)` 과대
+  - `구려 / 64AC(Chaotic Spring)` 과대
 
-## 현재 작업 단계
-1. 보스 HP 파싱
-2. 엔레이지 정보 제공자 연결
-3. 클리어 가능 여부 계산
-4. UI 표시
+## 작업 시작 전
+- 항상 저장소의 [`tasks.md`](pacemeter-core/tasks.md)를 먼저 확인한다.
+- 최근 parity 메모는 [`docs/parity-patch-notes.md`](pacemeter-core/docs/parity-patch-notes.md)를 기준으로 본다.
+- selected fight 하나만 보고 결론내리지 않는다.
+- heavy2/heavy4/lindwurm와 heavy2 all-fights gate를 같이 본다.
 
-## 현재 작업 메모
-- 보스 HP는 ACT AddCombatant(`03` 라인)에서 `p[10] = currentHp`, `p[11] = maxHp`로 파싱한다.
-- 엔레이지 정보는 Cactbot 타임라인 파일에서 가져온다.
-- 엔레이지 시간은 `(\d+\.\d+)\s+".*\(enrage\)"` 패턴으로 파싱한다.
-- Territory ID -> Cactbot 파일 경로 매핑이 필요하다.
-- 관련 레이드 그룹은 Light-Heavyweight, Cruiserweight, Heavyweight 기준으로 본다.
-- 신뢰도 기준:
-  - 1분 미만: `LOW`
-  - 1분 이상 3분 미만: `MEDIUM`
-  - 3분 이상: `HIGH`
-
-## 아키텍처 원칙
-- Hexagonal Architecture를 사용한다: `core`, `application`, `adapter`, `config`.
-- `core`는 순수 비즈니스 로직만 두고 Spring 의존성을 넣지 않는다.
-- `application`은 서비스와 포트 인터페이스를 가진다.
-- `adapter`는 외부 시스템 연동을 담당하며 `core`, `application`에만 의존한다.
-- adapter끼리 직접 참조하지 않는다.
-
-## 패키지 역할
-- `core/event`: `CombatEvent` 및 전투 이벤트 타입
-- `core/model`: `CombatState`, `ActorStats`, `ActorId` 등 불변 도메인 모델
-- `core/engine`: 이벤트 기반 상태 전환 로직
-- `core/estimator`: `OnlineEstimator`, `PaceProfile`
-- `core/snapshot`: `SnapshotAggregator`, `OverlaySnapshot`
-- `application`: 서비스와 포트
-- `adapter/inbound`: ACT websocket, tick driver, replay 입력
-- `adapter/outbound`: FFLogs 클라이언트, overlay websocket publisher
-
-## 코딩 규칙
-- 도메인 모델은 가능한 `record` 기반 불변 객체로 만든다.
-- 닫힌 도메인은 sealed interface/class를 우선 사용한다.
-- `null` 반환보다 `Optional`을 우선한다.
-- primitive 값 남용 대신 `ActorId` 같은 value object를 사용한다.
-- 클래스를 사용할 때는 가능하면 fully-qualified name 대신 `import`를 사용한다.
-- 네이밍 규칙:
-  - 이벤트: `AbilityDamage`, `ActorDeath`
-  - 포트/인터페이스: `~Port`, `~Provider`, `~Publisher`
-  - 어댑터: `ActWsClient`, `FflogsApiClient`, `MvcSnapshotPublisher`
-  - 서비스: `application` 계층에만 둔다
+## 개발 원칙
+- FFLogs식으로 간다는 말은 `버프 수학`만이 아니라 `attribution`까지 포함한다.
+- `status=0 DoT`는 임의 분배보다 근거 복원이 우선이다.
+- live explainability가 약한 규칙은 replay 수치가 좋아 보여도 채택하지 않는다.
+- production 변경 전에는 왜 좋아질지 설명 가능해야 한다.
+- 설명이 안 되는 heuristic 추가는 금지한다.
 
 ## 금지 사항
-- `core`에 Spring annotation이나 Spring 의존성을 추가하지 않는다.
-- FFLogs API key를 사용자 입력으로 받지 않는다.
-- `core`에 mutable 상태를 만들지 않는다.
-- FFLogs 연동을 추측으로 구현하지 않는다. 공식 문서를 먼저 확인한다.
-- adapter가 다른 adapter를 직접 참조하지 않는다.
+- selected fight 하나만 맞추는 튜닝 금지
+- heavy2 개선을 위해 heavy4/lindwurm를 깨는 변경 금지
+- gate 실패 상태 방치 금지
+- `status=0` fallback 순서만 감으로 뒤집는 작업 반복 금지
+- clearability/UI 작업으로 메인 스트림 이탈 금지
+- “FFLogs식 같다”는 추정만으로 구조 변경 정당화 금지
 
-## 주요 컴포넌트
-- `CombatEngine`: `CombatEvent`를 받아 `CombatState`를 갱신하는 이벤트 기반 상태 머신
-- `SnapshotAggregator`: `CombatState`를 UI용 `OverlaySnapshot`으로 변환
-- `PaceProfile`: FFLogs TOP 기준 시간별 기대 누적 딜 곡선
-- `ActWsClient`: ACT OverlayPlugin websocket 메시지를 받아 이벤트로 변환
-- `FflogsApiClient`: FFLogs GraphQL API에서 랭킹과 타임라인 조회
+## 현재 병목
+- 핵심 병목은 [`ActIngestionService.java`](pacemeter-core/src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java)의 `status=0` DoT attribution이다.
+- 현재 특히 문제가 되는 경로:
+  - `status0_snapshot_redistribution`
+  - `status0_tracked_target_split`
+  - `status0_tracked_source_target_split`
+- heavy2 fight2에서 `재탄 / 1D41` 과대분은 boss 총량 자체보다 타깃 오염이 더 크다.
+  - `레드 핫`, `딥 블루`, `수중 감옥`으로 잘못 붙는다.
 
-## FFLogs 작업 규칙
-- FFLogs 관련 작업 전에는 공식 문서를 먼저 확인한다.
-  - https://www.fflogs.com/v2-api-docs/ff/
-- GraphQL 쿼리는 필요한 필드만 요청한다.
-- 토큰은 매번 재발급하지 말고 저장소에서 캐싱한다.
-- 현재 기준으로 API credential은 개발자가 앱 설정으로 관리한다.
-- 사용자가 직접 입력하는 UI는 만들지 않는다.
-- 저장소가 공개되면 secret은 환경 변수 기반으로 전환한다.
-- 한국 서버는 필요한 곳에 `partition: "KR"`를 사용한다.
-- 글로벌 서버는 기본적으로 `partition: null`을 사용한다.
-- `characterRankings` 호출 시 partition 처리를 명시적으로 고려한다.
+## 현재 확인된 사실
+- `1D41` 과대의 남은 큰 축은 `status0_tracked_target_split`이다.
+- `64AC`는 “못 잡는 문제”보다 shared GUID semantics와 과집계 문제가 더 크다.
+- known-source `status=0`를 무조건 더 엄격하게 막는 패치는 gate를 깨뜨렸다.
+- 따라서 다음 변경은 전역 clamp가 아니라 evidence 기준 분해여야 한다.
 
-## 테스트 규칙
-- 전투 시나리오 검증은 JSONL replay 테스트를 우선한다.
-- `core` 테스트는 순수 함수/결정적 로직 중심으로 작성한다.
-- replay fixture는 `src/test/resources/` 아래에 둔다.
-- 대표 fixture 유형은 일반 전투, 파티 전멸, 전투 중간 시작이다.
+## 작업 순서
+1. baseline 확인
+   - `ActIngestionServiceTest`
+   - `SubmissionParityRegressionGateTest`
+   - 필요 시 `debugParityQualityRollup_withConfiguredFflogsCredentials_printsGateAndWorstActors`
+2. heavy2 진단
+   - fight2 `1D41` target parity
+   - fight2 `1D41` mode breakdown
+   - fight2 `64AC` target/mode breakdown
+3. 가설 1개만 변경
+   - 변경 범위는 작게 유지
+   - 왜 heavy2에만 이득인지, 왜 heavy4/lindwurm를 덜 건드리는지 먼저 설명 가능해야 함
+4. 바로 회귀 확인
+   - `ActIngestionServiceTest`
+   - `SubmissionParityRegressionGateTest`
+   - 가능하면 rollup
 
-## 개발 워크플로우
-1. `core`에 이벤트와 모델을 정의하거나 수정한다.
-2. `CombatEngine`에 상태 전환 로직을 추가한다.
-3. adapter에서 외부 데이터를 파싱해 도메인 이벤트로 변환한다.
-4. `SnapshotAggregator`에서 UI용 데이터를 구성한다.
-5. 테스트를 추가하고, 가능하면 JSONL replay도 같이 검증한다.
+## 허용되는 규칙 정리
+- 개발을 막는 불필요한 규칙은 제거해도 된다.
+- 다만 아래는 유지한다:
+  - live parity 우선
+  - selected fight 단일 튜닝 금지
+  - gate 유지
+  - explainable attribution 우선
 
-## FFLogs 작업 흐름
-1. 공식 API 문서로 동작을 확인한다.
-2. 필요하면 GraphQL 도구에서 쿼리를 검증한다.
-3. `FflogsApiClient` 메서드를 추가하거나 수정한다.
-4. 관련 `PaceProfile` 구현을 추가하거나 수정한다.
-5. 반복 호출 가능성이 있으면 캐싱을 넣는다.
+## 테스트 운영 원칙
+- 임시 출력용 테스트, 리포트만 찍는 테스트는 남기지 않는다.
+- 실제 회귀를 막는 테스트만 유지한다.
+- diagnostics 출력 테스트는 현재 parity 분석에 직접 쓰는 범위만 유지한다.
 
-## 성능 원칙
-- 상태 변화가 없으면 불필요한 객체 생성을 피한다.
-- 동일한 FFLogs 조회 결과는 캐싱한다.
-- 스냅샷이 바뀌지 않았으면 websocket publish를 생략한다.
-
-## 디버깅 메모
-- ACT OverlayPlugin 상태 확인: `curl http://127.0.0.1:10501/`
-- replay 실행 예시: `curl -X POST http://localhost:8080/replay?file=combat-log.jsonl`
-- FFLogs 문제를 추적할 때는 GraphQL query/response를 클라이언트 경계에서 로그로 남긴다.
-
-## 배포 전 체크
-- 실제 FFLogs credential 설정 여부 확인
-- `./gradlew test` 실행
-- JSONL replay 시나리오 확인
-- 실제 ACT 연결 확인
-- 프론트엔드 websocket 연결 확인
-
-## 커밋 규칙
-- Conventional Commits 사용: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
-
-## 참고 링크
-- [`tasks.md`](/Users/kimbogeun/Documents/Project/paceMeter/tasks.md)
-- FFLogs Buff Allocation Math: https://docs.google.com/document/d/1pWVsDaroDHpvh1IuB42bWLBE2TMru2CrWnjTDjeAvJY/view?tab=t.0
-- FFLogs API: https://www.fflogs.com/v2-api-docs/ff/
-- OverlayPlugin: https://github.com/OverlayPlugin/OverlayPlugin
-- Cactbot: https://github.com/OverlayPlugin/cactbot
-- ACT_Plugin: https://github.com/ravahn/FFXIV_ACT_Plugin
-- XIV.dev Actions/Game Internals: https://xiv.dev/game-internals/actions?q=
-- Advanced Combat Tracker API Docs: https://advancedcombattracker.com/apidoc/html/N_Advanced_Combat_Tracker.htm
-- ACTWebSocket: https://github.com/zcube/ACTWebSocket
+## 참고 파일
+- [`tasks.md`](pacemeter-core/tasks.md)
+- [`FFLogs Buff Allocation Math`](pacemeter-core/docs/FFLogs Buff Allocation Math.docx)
+- [`docs/parity-patch-notes.md`](pacemeter-core/docs/parity-patch-notes.md)
+- [`src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`](pacemeter-core/src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java)
+- [`src/test/java/com/bohouse/pacemeter/application/SubmissionParityRegressionGateTest.java`](pacemeter-core/src/test/java/com/bohouse/pacemeter/application/SubmissionParityRegressionGateTest.java)
+- [`src/test/java/com/bohouse/pacemeter/application/SubmissionParityReportDiagnostics.java`](pacemeter-core/src/test/java/com/bohouse/pacemeter/application/SubmissionParityReportDiagnostics.java)
 
 ## LogLine 참고
 - LogLine = 0,
 - ChangeZone = 1
-- ChangePrimaryPlayer = 2, 
+- ChangePrimaryPlayer = 2,
 - AddCombatant = 3,
 - RemoveCombatant = 4,
 - AddBuff = 5,

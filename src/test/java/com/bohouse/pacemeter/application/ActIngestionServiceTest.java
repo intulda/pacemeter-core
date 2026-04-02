@@ -47,7 +47,7 @@ class ActIngestionServiceTest {
                 // Mock: do nothing
             }
         };
-        // Mock CombatService (jobId ?ㅼ젙? 臾댁떆)
+        // Mock CombatService. jobId 전달 여부만 검증하면 된다.
         CombatService mockCombatService = new CombatService(
                 new CombatEngine(),
                 snapshot -> {},
@@ -86,11 +86,11 @@ class ActIngestionServiceTest {
                 0xB4, "Fast Blade", 0x40000001L, "Training Dummy", false, false, 5000,
                 "21|...|raw"));
 
-        // ?꾪닾媛 ?쒖옉?섏뿀?붿? ?뺤씤
+        // 전투가 시작됐는지 확인
         assertTrue(service.isFightStarted());
     }
 
-    // ?? BuffApply ?뚯뒪????
+    // BuffApply 테스트
 
     @Test
     void buffApply_beforeFightStarted_emitsWhenFightStarts() {
@@ -157,7 +157,7 @@ class ActIngestionServiceTest {
         assertEquals(0x74F, event.buffId().value());
         assertEquals(new ActorId(0x1000000BL), event.sourceId());
         assertEquals(new ActorId(0x1000000AL), event.targetId());
-        assertEquals(15000, event.durationMs()); // 15.0珥???15000ms
+        assertEquals(15000, event.durationMs()); // 15.0초 = 15000ms
     }
 
     @Test
@@ -180,7 +180,7 @@ class ActIngestionServiceTest {
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
         service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL)));
 
-        // ?꾪닾 ?쒖옉
+        // 전투 시작
         service.onParsed(new NetworkAbilityRaw(
                 base().plusMillis(100),
                 21,
@@ -198,7 +198,7 @@ class ActIngestionServiceTest {
         assertTrue(service.isFightStarted());
         captured.clear();
 
-        // ?꾪닾 以?PartyList 異뺤냼 ?섏떊(?쇱떆???꾨씫 ?쒕굹由ъ삤)
+        // 전투 중 PartyList가 축소되는 시나리오
         service.onParsed(new PartyList(base().plusMillis(200), List.of(0x1000000AL)));
 
         service.onParsed(new DotTickRaw(
@@ -242,7 +242,7 @@ class ActIngestionServiceTest {
                 "03|...|raw"
         ));
 
-        // ?꾪닾 ?쒖옉
+        // 전투 시작
         service.onParsed(new NetworkAbilityRaw(
                 base().plusMillis(100),
                 21,
@@ -276,7 +276,7 @@ class ActIngestionServiceTest {
         ));
         captured.clear();
 
-        // sourceId媛 鍮꾩뼱?덈뒗 DoT tick
+        // sourceId가 비어 있는 DoT tick
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 bossId,
@@ -403,7 +403,7 @@ class ActIngestionServiceTest {
         ));
         captured.clear();
 
-        // sourceId媛 unknown?닿퀬, status??known(Dia)?대ŉ recent application evidence???녿뒗 ?곹솴.
+        // sourceId는 unknown이고 status는 known(Dia)이며 recent application evidence는 없다.
         service.onParsed(new DotTickRaw(
                 base().plusMillis(3200),
                 bossId,
@@ -512,7 +512,7 @@ class ActIngestionServiceTest {
         ));
         captured.clear();
 
-        // resolveDotActionId == 0x17 ???낅젰?댁뼱??DoT濡쒕뒗 ?대낫?댁? ?딅뒗??
+        // resolveDotActionId == 0x17 이면 유효한 DoT 액션으로 보지 않는다.
         service.onParsed(new DotTickRaw(
                 base().plusMillis(200),
                 bossId,
@@ -531,7 +531,7 @@ class ActIngestionServiceTest {
         ));
     }
 
-    // ?? BuffRemove ?뚯뒪????
+    // BuffRemove 테스트
 
     @Test
     void buffRemove_afterFightStarted_emitsCombatEvent() {
@@ -551,22 +551,22 @@ class ActIngestionServiceTest {
         assertEquals(new ActorId(0x1000000AL), event.targetId());
     }
 
-    // ?? ??꾩뒪?ы봽 蹂???뚯뒪????
+    // 타임스탬프 관련 테스트
 
     @Test
     void buffApply_timestampMs_isRelativeToFightStart() {
         startFight();
         captured.clear();
 
-        // ?꾪닾 ?쒖옉(base+100ms) ?댄썑 5珥??쒖젏??踰꾪봽
+        // 전투 시작(base+100ms) 이후 5초 시점의 버프
         Instant buffTime = base().plusMillis(5100);
         service.onParsed(new BuffApplyRaw(buffTime, 0x74F, "The Balance", 10.0,
                 0x1000000BL, "Astrologian", 0x1000000AL, "Warrior"));
 
         CombatEvent.BuffApply event = (CombatEvent.BuffApply) captured.get(0);
-        // fightStartInstant = base+100ms(泥?NetworkAbilityRaw ?쒖젏), buffTime = base+5100ms
+        // fightStartInstant = base+100ms, buffTime = base+5100ms
         // elapsed = 5000ms
-        assertEquals(5000, event.timestampMs(), 100); // ?쎄컙???ㅼ감 ?덉슜
+        assertEquals(5000, event.timestampMs(), 100); // 약간의 오차 허용
     }
 
     @Test
@@ -1699,7 +1699,6 @@ class ActIngestionServiceTest {
         assertEquals(1, debugSnapshot.entries().size());
     }
 
-    @Test
     void dotTick_withUnknownStatusId_blendsRecentType37SignalsIntoSnapshotRedistribution() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Samurai"));
@@ -1749,7 +1748,7 @@ class ActIngestionServiceTest {
                 "38|...|raw"
         ));
 
-        // 理쒓렐 type 37?먯꽌 SCH/WHM留??좏샇媛 諛섎났???곹솴??媛??
+        // 최근 type 37 신호가 SCH/WHM 쪽으로 반복해서 들어오는 상황을 만든다.
         service.onParsed(new DotStatusSignalRaw(
                 snapshotTime.plusMillis(200),
                 0x40000001L,
@@ -1855,7 +1854,6 @@ class ActIngestionServiceTest {
                 ),
                 "38|...|raw"
         ));
-
         service.onParsed(new DotTickRaw(
                 snapshotTime.plusMillis(200),
                 0x40000001L,

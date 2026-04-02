@@ -47,15 +47,15 @@ public final class ActIngestionService {
 
     private volatile long currentPlayerId = 0;
     private volatile String currentPlayerName = "YOU";
-    private volatile int currentPlayerJobId = 0;  // 蹂몄씤 吏곸뾽 ID
+    private volatile int currentPlayerJobId = 0;  // 현재 플레이어 직업 ID
     private volatile String currentZoneName = "";
     private volatile int currentZoneId = 0;
 
     private final Map<Long, Long> ownerByCombatantId = new HashMap<>();
-    private final Set<Long> partyMemberIds = new HashSet<>();  // ?뚰떚??ID 異붿쟻
-    private final Set<Long> combatPartyMemberIds = new HashSet<>(); // ?꾪닾 以??뚰떚 ?ㅻ깄??異뺤냼 臾댁떆)
-    private final Set<Long> deadPlayers = new HashSet<>();     // ?щ쭩???뚰떚??ID
-    private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 罹먮┃?곕퀎 吏곸뾽 ID
+    private final Set<Long> partyMemberIds = new HashSet<>();  // 파티원 ID 추적
+    private final Set<Long> combatPartyMemberIds = new HashSet<>(); // 전투 중 확인된 파티원 ID
+    private final Set<Long> deadPlayers = new HashSet<>();     // 사망한 파티원 ID
+    private final Map<Long, Integer> jobIdByActorId = new HashMap<>();  // 캐릭터별 직업 ID
     private final Map<Long, String> actorNameById = new HashMap<>();
     private final Deque<DamageText> pendingDamageTexts = new ArrayDeque<>();
     private final Deque<NetworkAbilityRaw> pendingSelfJobAbilities = new ArrayDeque<>();
@@ -81,19 +81,18 @@ public final class ActIngestionService {
     private BossCandidate pendingBoss;
     private Long announcedBossId;
 
-    // ACT媛 ?뚰떚 ?뺣낫瑜?紐낆떆?곸쑝濡??꾨떖?덈뒗吏 ?щ?
-    // false = ?꾩쭅 誘몄닔??(?덉씠???ㅽ?????? 紐⑤뱺 PC ?덉슜)
-    // true  = PartyList ?먮뒗 CombatData?먯꽌 ?뚰떚??紐⑸줉 ?섏떊 ?꾨즺
+    // ACT가 파티 정보를 명시적으로 전달했는지 여부
+    // false = 아직 미수신 상태로 보고 모든 PC를 허용
+    // true  = PartyList 또는 CombatData에서 파티 목록 수신 완료
     private volatile boolean partyDataInitialized = false;
 
-    private static final long COMBAT_TIMEOUT_MS = 30_000; // 30珥?臾댄솢?????꾪닾 醫낅즺
-
+    private static final long COMBAT_TIMEOUT_MS = 30_000; // 30초 무활동이면 전투 종료
     private volatile boolean fightStarted = false;
     private volatile Instant fightStartInstant = null;
     private volatile Instant lastDamageAt = null;
-    private volatile Instant lastEventInstant = null;  // 留덉?留?ACT ?대깽????꾩뒪?ы봽 (wall clock ?꾨떂)
+    private volatile Instant lastEventInstant = null;  // 마지막 ACT 이벤트 타임스탬프(wall clock)
 
-    // 吏꾨떒??移댁슫??
+    // 진단용 카운터
     private volatile long receivedAbilityCount = 0;
     private volatile long emittedDamageCount = 0;
     private volatile long filteredByYouCount = 0;
@@ -109,7 +108,7 @@ public final class ActIngestionService {
     public boolean isFightStarted() {
         if (!fightStarted) return false;
 
-        // 留덉?留??곕?吏 ?댄썑 ??꾩븘?껋씠硫??꾪닾 ?먮룞 醫낅즺 (ACT ?대깽????꾩뒪?ы봽 湲곗?)
+        // 마지막 대미지 이후 일정 시간이 지나면 전투를 자동 종료한다.
         if (lastDamageAt != null && lastEventInstant != null) {
             try {
                 long idleMs = Duration.between(lastDamageAt, lastEventInstant).toMillis();
@@ -140,8 +139,7 @@ public final class ActIngestionService {
         } catch (Exception e) {
             logger.error("[Ingestion] error sending FightEnd event: {}", e.getMessage(), e);
         }
-
-        // ?곹깭 珥덇린??
+        // 전투 관련 상태 초기화
         fightStarted = false;
         fightStartInstant = null;
         lastDamageAt = null;
@@ -169,11 +167,11 @@ public final class ActIngestionService {
         actorNameById.clear();
         pendingBoss = null;
         announcedBossId = null;
-        // currentPlayerId, currentPlayerName? ?좎? (?ㅼ쓬 ?꾪닾?먯꽌???ъ슜)
+        // currentPlayerId, currentPlayerName은 유지한다. 다음 전투에서도 재사용한다.
     }
 
-    /** TickDriver?먯꽌 ?????덇쾶 "吏湲??꾪닾 湲곗? 寃쎄낵 ms" ?쒓났.
-     *  wall-clock ???留덉?留?ACT ?대깽????꾩뒪?ы봽 ?ъ슜 ???쒕젅???곹뼢 ?쒓굅. */
+    /** TickDriver에서 현재 전투 기준 경과 ms를 제공한다.
+     *  wall-clock 기준 마지막 ACT 이벤트 타임스탬프를 사용해 스레드 지연 영향을 줄인다. */
     public long nowElapsedMs() {
         if (!fightStarted || fightStartInstant == null) return 0;
         Instant ref = lastEventInstant != null ? lastEventInstant : fightStartInstant;
@@ -184,13 +182,13 @@ public final class ActIngestionService {
     public void onParsed(ParsedLine line) {
         if (line == null) return;
 
-        // 紐⑤뱺 ?대깽?몄쓽 ACT ??꾩뒪?ы봽瑜?異붿쟻 (Tick 寃쎄낵?쒓컙 怨꾩궛??
+        // Tick 경과 시간 계산을 위해 전투 중 마지막 ACT 이벤트 시각을 추적한다.
         if (line.ts() != null && !(line instanceof DotStatusSignalRaw)) {
             lastEventInstant = line.ts();
         }
 
         if (line instanceof ZoneChanged z) {
-            // Zone 蹂寃????꾪닾 以묒씠硫??먮룞 醫낅즺
+            // 전투 중 Zone 변경이 발생하면 현재 전투를 종료한다.
             if (fightStarted) {
                 logger.info("[Ingestion] Zone changed during combat ({}??}), ending fight",
                         currentZoneName, z.zoneName());
@@ -199,7 +197,7 @@ public final class ActIngestionService {
 
             this.currentZoneId = z.zoneId();
             this.currentZoneName = z.zoneName();
-            // 議?蹂寃????뚰떚 ?뺣낫 珥덇린?????ㅼ쓬 CombatData/PartyList?먯꽌 ?ъ닔??
+            // 존 변경 시 파티 정보도 초기화하고, 다음 CombatData/PartyList를 다시 기다린다.
             partyDataInitialized = false;
             partyMemberIds.clear();
             combatPartyMemberIds.clear();
@@ -264,8 +262,8 @@ public final class ActIngestionService {
                 jobIdByActorId.put(p.playerId(), currentPlayerJobId);
                 combatService.setJobId(new ActorId(p.playerId()), currentPlayerJobId);
             }
-            // jobId??CombatantAdded?먯꽌 ?ㅼ젙??
-            // ?붿쭊???꾩옱 ?뚮젅?댁뼱 ID ?꾨떖 (媛쒖씤 ?섏씠??鍮꾧탳??
+            // 직업 ID는 CombatantAdded 또는 PlayerStats에서 채운다.
+            // 현재 플레이어 ID를 전달해 개인 데이터 비교 기준을 맞춘다.
             combatEventPort.setCurrentPlayerId(new ActorId(p.playerId()));
             logger.info("[Ingestion] current player set: id={} name={}", Long.toHexString(p.playerId()), p.playerName());
             return;
@@ -294,14 +292,14 @@ public final class ActIngestionService {
         }
 
         if (line instanceof PartyList party) {
-            // ACT PartyList濡쒕????ㅼ젣 ?뚰떚??紐⑸줉 ?낅뜲?댄듃
+            // ACT PartyList로 실제 파티 목록 업데이트
             partyMemberIds.clear();
             partyMemberIds.addAll(party.partyMemberIds());
             if (fightStarted) {
-                // ?꾪닾 以?PartyList 異뺤냼???꾨씫???좊컻?섎?濡? ?꾪닾 ?ㅻ깄?룹? ?꾩쟻?쇰줈留??뺤옣?쒕떎.
+                // 전투 중 PartyList 변화는 지연 반영되므로 전투 파티 목록에는 누적만 반영한다.
                 combatPartyMemberIds.addAll(party.partyMemberIds());
             }
-            partyDataInitialized = true;  // 紐낆떆???뚰떚 ?뺣낫 ?섏떊 ?꾨즺
+            partyDataInitialized = true;  // 명시적 파티 정보 수신 완료
             logger.info("[Ingestion] PartyList received: {} members: {}",
                     partyMemberIds.size(),
                     partyMemberIds.stream()
@@ -317,20 +315,21 @@ public final class ActIngestionService {
             actorNameById.put(c.id(), c.name());
             boolean wasKnownPartyMember = partyMemberIds.contains(c.id());
 
-            // ???뚰솚???뚯쑀??異붿쟻
+            // 소환수 owner 정보 추적
             if (c.ownerId() != 0) {
                 ownerByCombatantId.put(c.id(), c.ownerId());
-                // ?붿쭊?먮룄 owner ?뺣낫 ?꾨떖
+                // core에도 owner 정보를 전달
                 combatService.setOwner(new ActorId(c.id()), new ActorId(c.ownerId()));
             }
 
-            // ?뚰떚???뺣낫 ???(PC留? ?ㅼ젣 ?뚰떚???щ????곕?吏 諛쒖깮 ???뺤씤)
+            // 플레이어 캐릭터인 경우 직업 정보와 파티 여부를 추적한다.
             if (isPlayerCharacter(c.id())) {
-                jobIdByActorId.put(c.id(), c.jobId());  // 吏곸뾽 ???                combatService.setJobId(new ActorId(c.id()), c.jobId());  // ?붿쭊??吏곸뾽 ?뺣낫 ?꾨떖
+                jobIdByActorId.put(c.id(), c.jobId());
+                combatService.setJobId(new ActorId(c.id()), c.jobId());  // core에도 직업 정보를 전달
                 persistKnownActorJob(c.id(), c.name(), c.jobId());
-                partyMemberIds.add(c.id());  // CombatData 蹂듭썝 ?쒖뿉???뚰떚?먯쑝濡??깅줉
+                partyMemberIds.add(c.id());  // CombatData 복원 시에도 파티원으로 등록
 
-                // 蹂몄씤?대㈃ currentPlayerJobId ???
+                // 본인이면 currentPlayerJobId를 갱신
                 if (c.id() == currentPlayerId || c.name().equals(currentPlayerName)) {
                     if (fightStarted && currentPlayerJobId != 0 && c.jobId() != 0 && c.jobId() != currentPlayerJobId) {
                         logger.info("[Ingestion] current player job changed during fight: {} -> {}, ending fight",
@@ -459,7 +458,7 @@ public final class ActIngestionService {
 
             long tsMs = toElapsedMs(d.ts());
 
-            // ?뚰떚???щ쭩 異붿쟻 (?? ?대? ?щ쭩 泥섎━??寃쎌슦??臾댁떆 ??遺?????ъ궗留앹? ?뺤긽 泥섎━)
+            // 파티원 사망을 추적하고, 전원 사망 시 wipe 여부를 확인한다.
             if (effectivePartyMemberIds().contains(d.targetId())) {
                 deadPlayers.add(d.targetId());
                 int partySizeForWipeCheck = effectivePartyMemberCountForCombat();
@@ -467,14 +466,14 @@ public final class ActIngestionService {
                         d.targetName(), Long.toHexString(d.targetId()),
                         deadPlayers.size(), partySizeForWipeCheck);
 
-                // ?붿쭊???щ쭩 ?대깽???꾨떖
+                // core에도 사망 이벤트를 전달
                 combatEventPort.onEvent(new CombatEvent.ActorDeath(
                         tsMs,
                         new ActorId(d.targetId()),
                         d.targetName()
                 ));
 
-                // ?꾨㈇ 泥댄겕
+                // 파티 전멸이면 wipe로 판단하고 전투를 종료한다.
                 if (deadPlayers.size() == partySizeForWipeCheck && partySizeForWipeCheck > 0) {
                     logger.info("[Ingestion] PARTY WIPE! Ending fight.");
                     endFight();
@@ -813,6 +812,12 @@ public final class ActIngestionService {
         if (activeDots == null || activeDots.isEmpty()) {
             return fallbackWeights;
         }
+        boolean suppressUnknownMultiTargetFallback = shouldSuppressUnknownMultiTargetFallback(dot);
+
+        Map<TrackedDotKey, Double> sameSourceFallbackWeights = selectKnownSourceWeights(dot, fallbackWeights);
+        if (!sameSourceFallbackWeights.isEmpty()) {
+            return sameSourceFallbackWeights;
+        }
 
         Map<TrackedDotKey, Double> activeWeights = new HashMap<>();
         for (Map.Entry<TrackedDotKey, Double> entry : fallbackWeights.entrySet()) {
@@ -820,10 +825,75 @@ public final class ActIngestionService {
                 activeWeights.put(entry.getKey(), entry.getValue());
             }
         }
+        if (suppressUnknownMultiTargetFallback && !activeWeights.isEmpty()) {
+            return Map.of();
+        }
         if (!activeWeights.isEmpty() && shouldPreferActiveTrackedDotSubset(activeWeights, fallbackWeights)) {
             return activeWeights;
         }
+        if (suppressUnknownMultiTargetFallback) {
+            return Map.of();
+        }
         return fallbackWeights;
+    }
+
+    private boolean shouldSuppressUnknownMultiTargetFallback(DotTickRaw dot) {
+        if (dot.sourceId() != UNKNOWN_ACTOR_ID) {
+            return false;
+        }
+        return countTrackedTargetsWithActiveDots() > 1;
+    }
+
+    private boolean shouldSuppressKnownSourceGuidMissingMultiTargetFallback(DotTickRaw dot) {
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return false;
+        }
+        if (countTrackedTargetsWithActiveDots() <= 1) {
+            return false;
+        }
+        if (!resolveTrackedSourceDots(dot).isEmpty()) {
+            return false;
+        }
+        StatusSnapshotState snapshot = latestStatusSnapshotsByTarget.get(dot.targetId());
+        if (snapshot == null) {
+            return false;
+        }
+        return snapshot.weights().keySet().stream()
+                .filter(key -> isPartyMember(key.sourceId()))
+                .noneMatch(key -> key.sourceId() == dot.sourceId());
+    }
+
+    private boolean shouldPreferCorroboratedKnownSourceAttribution(DotTickRaw dot) {
+        if (!shouldSuppressKnownSourceGuidMissingMultiTargetFallback(dot)) {
+            return false;
+        }
+        return resolveCorroboratedTrackedUnknownStatusDotActionId(dot) != null;
+    }
+
+    private long countTrackedTargetsWithActiveDots() {
+        return activeTargetDots.values().stream()
+                .filter(states -> states != null && !states.isEmpty())
+                .count();
+    }
+
+    private Map<TrackedDotKey, Double> selectKnownSourceWeights(
+            DotTickRaw dot,
+            Map<TrackedDotKey, Double> candidateWeights
+    ) {
+        if (candidateWeights.isEmpty()) {
+            return Map.of();
+        }
+        long sourceId = dot.sourceId();
+        if (sourceId == 0 || sourceId == UNKNOWN_ACTOR_ID || !isPartyMember(sourceId)) {
+            return Map.of();
+        }
+        Map<TrackedDotKey, Double> sameSourceWeights = new HashMap<>();
+        for (Map.Entry<TrackedDotKey, Double> entry : candidateWeights.entrySet()) {
+            if (entry.getKey().sourceId() == sourceId) {
+                sameSourceWeights.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return sameSourceWeights;
     }
 
     private static boolean shouldPreferActiveTrackedDotSubset(
@@ -1202,7 +1272,7 @@ public final class ActIngestionService {
         ensureFightStarted(a.ts());
         lastDamageAt = a.ts();
 
-        // ?щ쭩?덈떎媛 ?곕?吏瑜?二쇰㈃ 遺?쒕줈 媛꾩＜?섏뿬 deadPlayers?먯꽌 ?쒓굅
+        // 죽은 상태였다가 대미지를 주면 부활로 간주하고 deadPlayers에서 제거한다.
         if (deadPlayers.remove(a.actorId())) {
             logger.info("[Ingestion] Actor {} revived (detected via damage)", a.actorName());
         }
@@ -1210,7 +1280,7 @@ public final class ActIngestionService {
         long tsMs = Duration.between(fightStartInstant, a.ts()).toMillis();
         if (tsMs < 0) tsMs = 0;
 
-        // 泥섏쓬 蹂대뒗 ?뚰떚?먯씠硫?ActorJoined ?대깽??癒쇱? ?꾩넚
+        // 전투 중 처음 확인된 파티원이면 ActorJoined 이벤트를 먼저 전송한다.
         boolean isNewPartyMember = combatPartyMemberIds.add(a.actorId());
         if (isNewPartyMember && partyMemberIds.contains(a.actorId())) {
             combatEventPort.onEvent(new CombatEvent.ActorJoined(
@@ -1424,9 +1494,9 @@ public final class ActIngestionService {
     }
 
     private DamageType mapDamageTypeV1(NetworkAbilityRaw a) {
-        // v1 洹쒖튃:
-        // - 湲곕낯: DIRECT
-        // - (ownerId==currentPlayerId) ?대㈃ PET
+        // v1 규칙:
+        // - 기본은 DIRECT
+        // - ownerId == currentPlayerId 이면 PET
         Long owner = ownerByCombatantId.get(a.actorId());
         if (owner != null && owner != 0 && owner == currentPlayerId) return DamageType.PET;
         return DamageType.DIRECT;
@@ -1474,8 +1544,23 @@ public final class ActIngestionService {
         }
 
         if (unknownStatusDot) {
+            boolean suppressKnownSourceGuidMissingFallback =
+                    shouldSuppressKnownSourceGuidMissingMultiTargetFallback(dot);
+            if (shouldPreferCorroboratedKnownSourceAttribution(dot)) {
+                emitDotDamageWithAttribution(
+                        "status0_corroborated_known_source",
+                        dot.ts(),
+                        tsMs,
+                        new ActorId(resolvedSourceId),
+                        resolvedSourceName,
+                        new ActorId(dot.targetId()),
+                        resolveCorroboratedTrackedUnknownStatusDotActionId(dot),
+                        dot.damage()
+                );
+                return;
+            }
             List<SnapshotRedistributedDot> redistributedDots = resolveSnapshotRedistribution(dot);
-            if (!redistributedDots.isEmpty()) {
+            if (!redistributedDots.isEmpty() && !suppressKnownSourceGuidMissingFallback) {
                 long remaining = dot.damage();
                 for (int i = 0; i < redistributedDots.size(); i++) {
                     SnapshotRedistributedDot redistributedDot = redistributedDots.get(i);
@@ -1521,7 +1606,9 @@ public final class ActIngestionService {
             }
 
             List<TrackedDotState> trackedDots = resolveTrackedTargetDots(dot);
-            if (!trackedDots.isEmpty()) {
+            if (!trackedDots.isEmpty()
+                    && !suppressKnownSourceGuidMissingFallback
+                    && !(dot.sourceId() == UNKNOWN_ACTOR_ID && countTrackedTargetsWithActiveDots() > 1)) {
                 long remaining = dot.damage();
                 for (int i = 0; i < trackedDots.size(); i++) {
                     TrackedDotState trackedDot = trackedDots.get(i);
@@ -1601,7 +1688,7 @@ public final class ActIngestionService {
         if (amount <= 0) {
             return;
         }
-        String key = buildDotAttributionAssignmentKey(attributionMode, sourceId.value(), actionId);
+        String key = buildDotAttributionAssignmentKey(attributionMode, sourceId.value(), targetId.value(), actionId);
         dotAttributionAssignedAmountByKey.merge(key, amount, Long::sum);
         dotAttributionAssignedHitCountByKey.merge(key, 1L, Long::sum);
         recentDotAttributionAssignments.addLast(new DotAttributionAssignment(
@@ -1624,9 +1711,10 @@ public final class ActIngestionService {
         }
     }
 
-    private String buildDotAttributionAssignmentKey(String mode, long sourceId, int actionId) {
+    private String buildDotAttributionAssignmentKey(String mode, long sourceId, long targetId, int actionId) {
         return mode
                 + "|source=" + Long.toHexString(sourceId).toUpperCase()
+                + "|target=" + Long.toHexString(targetId).toUpperCase()
                 + "|action=" + Integer.toHexString(actionId).toUpperCase();
     }
 
@@ -1677,7 +1765,7 @@ public final class ActIngestionService {
         fightStartInstant = firstEventTs;
         combatPartyMemberIds.clear();
         combatPartyMemberIds.addAll(partyMemberIds);
-        deadPlayers.clear();  // ???꾪닾 ?쒖옉 ???щ쭩??紐⑸줉 珥덇린??
+        deadPlayers.clear();  // 전투 시작 시 사망자 목록 초기화
         announcedBossId = null;
         logger.info("[Ingestion] fight started at {} zone={} zoneId={} playerJobId={} partySize={}",
                 firstEventTs, currentZoneName, currentZoneId,
@@ -1766,21 +1854,20 @@ public final class ActIngestionService {
     }
 
     /**
-     * ?좏슚???꾪닾 zone?몄? ?뺤씤.
-     * ?섏쟾/?덉씠??zone?닿굅?? ?寃잛씠 ?섎Т?명삎(?덈젴???붾?)?대㈃ true.
+     * 유효한 전투 zone인지 확인한다.
+     * 레이드/인던 zone이거나 대상이 허수아비형이면 true를 반환한다.
      */
     private boolean isValidCombatZone(NetworkAbilityRaw a) {
         return isValidCombatZone(a.targetName());
     }
 
     private boolean isValidCombatZone(String targetName) {
-        // 1. ?섏쟾/?덉씠??zone?몄? ?뺤씤 (FflogsZoneLookup???깅줉??zone)
+        // 1. FFLogs에서 관리하는 유효 전투 zone인지 확인
         if (fflogsZoneLookup.resolve(currentZoneId).isPresent()) {
             return true;
         }
-
-        // 2. ?寃잛씠 ?섎Т?명삎?대㈃ ?덉슜 (?덈젴???붾?)
-        if (targetName != null && (targetName.contains("?섎Т?명삎") || targetName.contains("Training Dummy"))) {
+        // 2. 대상이 허수아비형이면 전투 zone이 아니어도 허용 (훈련용 더미)
+        if (targetName != null && (targetName.contains("\uD5C8\uC218\uC544\uBE44\uD615") || targetName.contains("Training Dummy"))) {
             return true;
         }
 
@@ -1788,24 +1875,24 @@ public final class ActIngestionService {
     }
 
     /**
-     * ACT CombatData 泥섎━ ?꾨즺 ?뚮┝.
-     * ActWsClient媛 CombatData??紐⑤뱺 Combatant 泥섎━ ???몄텧?쒕떎.
-     * memberCount > 0?대㈃ ?뚰떚 ?뺣낫 ?섏떊 ?꾨즺濡?媛꾩＜?쒕떎.
+     * ACT CombatData 처리 완료 알림.
+     * ActWsClient가 CombatData의 모든 Combatant 처리를 마친 뒤 호출한다.
+     * memberCount > 0 이면 파티 정보 수신 완료로 간주한다.
      */
     public void onCombatDataReady(int memberCount) {
         if (memberCount > 0) {
             partyDataInitialized = true;
             logger.info("[Ingestion] party data ready from CombatData ({} members)", memberCount);
         } else {
-            // isActive=false?嫄곕굹 ?뚰떚?먯씠 ?놁쓬 ???꾩쭅 誘몄큹湲고솕 ?곹깭 ?좎? (PC ?꾩껜 ?덉슜 怨꾩냽)
+            // 활성 전투가 아니거나 파티원이 없으면 아직 미초기화 상태로 유지한다.
             logger.info("[Ingestion] CombatData received but no members (not in active combat)");
         }
     }
 
     /**
-     * ?≫꽣媛 ?뚰떚???먮뒗 ?뚰떚?먯쓽 ???몄? ?뺤씤.
-     * PartyList 濡쒓렇濡쒕???諛쏆? ?ㅼ젣 ?뚰떚??紐⑸줉 湲곕컲.
-     * partyDataInitialized=false?대㈃ PC ?꾩껜 ?덉슜 (?덉씠???ㅽ???/ ?뚰떚 ?뺣낫 誘몄닔?????.
+     * caller가 파티 정보를 신뢰하는지 여부를 함께 받아 처리한다.
+     * PartyList 기반 실제 파티 목록이 있으면 그 정보를 우선한다.
+     * 파티 정보가 아직 없으면 현재 플레이어만 임시 파티원으로 간주한다.
      */
     public void onCombatDataReady(int memberCount, boolean trustPartyMembership) {
         if (trustPartyMembership) {
@@ -1826,18 +1913,18 @@ public final class ActIngestionService {
     private boolean isPartyMember(long actorId) {
         Set<Long> effectivePartyMembers = effectivePartyMemberIds();
 
-        // ?뚰떚??吏곸젒 ?뺤씤
+        // 직속 파티원인지 확인
         if (effectivePartyMembers.contains(actorId)) {
             return true;
         }
 
-        // ???뚰솚?섏쓽 ?뚯쑀?먭? ?뚰떚?먯씤吏 ?뺤씤
+        // 소환수면 owner가 파티원인지 확인
         Long owner = ownerByCombatantId.get(actorId);
         if (owner != null && effectivePartyMembers.contains(owner)) {
             return true;
         }
 
-        // ?뚰떚 ?뺣낫 誘몄닔???? PC硫??뚰떚?먯쑝濡?媛꾩＜ (?덉씠???ㅽ??????
+        // 파티 정보 미수신 상태에서는 현재 플레이어만 파티원으로 본다.
         if (!partyDataInitialized && actorId == currentPlayerId) {
             return true;
         }
@@ -1873,8 +1960,8 @@ public final class ActIngestionService {
     }
 
     /**
-     * FFXIV?먯꽌 PC(?뚮젅?댁뼱 罹먮┃????actorId??0x10000000 ~ 0x1FFFFFFF 踰붿쐞.
-     * NPC/紐ъ뒪?곕뒗 0x40000000+, ?섍꼍? 0xE0000000+ ??
+     * FFXIV에서 PC(플레이어 캐릭터)의 actorId는 0x10000000 ~ 0x1FFFFFFF 범위다.
+     * NPC/보스는 0x40000000+, 환경 오브젝트는 0xE0000000+ 대역을 사용한다.
      */
     private static boolean isPlayerCharacter(long actorId) {
         return actorId >= 0x10000000L && actorId < 0x20000000L;
