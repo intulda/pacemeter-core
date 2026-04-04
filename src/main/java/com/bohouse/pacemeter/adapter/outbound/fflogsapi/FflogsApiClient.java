@@ -888,13 +888,48 @@ public class FflogsApiClient {
             int sourceId,
             int abilityId
     ) {
+        return fetchDamageDoneEventsInternal(reportCode, fightId, sourceId, abilityId);
+    }
+
+    public List<DamageEventEntry> fetchDamageDoneEvents(
+            String reportCode,
+            int fightId,
+            int sourceId
+    ) {
+        return fetchDamageDoneEventsInternal(reportCode, fightId, sourceId, null);
+    }
+
+    private List<DamageEventEntry> fetchDamageDoneEventsInternal(
+            String reportCode,
+            int fightId,
+            int sourceId,
+            Integer abilityId
+    ) {
         Optional<String> token = tokenStore.getToken();
         if (token.isEmpty()) {
-            log.warn("[FFLogs] fetchDamageDoneEventsByAbility skipped - no token");
+            log.warn("[FFLogs] fetchDamageDoneEvents skipped - no token");
             return List.of();
         }
 
-        String query = """
+        String query = abilityId == null
+                ? """
+                query($code: String!, $fightId: Int!, $sourceId: Int!, $startTime: Float) {
+                  reportData {
+                    report(code: $code) {
+                      events(
+                        dataType: DamageDone
+                        fightIDs: [$fightId]
+                        sourceID: $sourceId
+                        startTime: $startTime
+                      ) {
+                        data
+                        nextPageTimestamp
+                      }
+                    }
+                  }
+                }
+                """
+                : """
                 query($code: String!, $fightId: Int!, $sourceId: Int!, $abilityId: Float!, $startTime: Float) {
                   reportData {
                     report(code: $code) {
@@ -921,7 +956,9 @@ public class FflogsApiClient {
                 variables.put("code", reportCode);
                 variables.put("fightId", fightId);
                 variables.put("sourceId", sourceId);
-                variables.put("abilityId", (double) abilityId);
+                if (abilityId != null) {
+                    variables.put("abilityId", (double) abilityId);
+                }
                 if (nextStartTime != null) {
                     variables.put("startTime", nextStartTime);
                 }
@@ -938,7 +975,9 @@ public class FflogsApiClient {
                         .body(String.class);
 
                 JsonNode root = objectMapper.readTree(response);
-                checkErrors(root, "fetchDamageDoneEventsByAbility");
+                checkErrors(root, abilityId == null
+                        ? "fetchDamageDoneEvents"
+                        : "fetchDamageDoneEventsByAbility");
 
                 JsonNode eventsNode = root.path("data").path("reportData").path("report").path("events");
                 eventsNode = parseScalarJson(eventsNode, "events");
@@ -975,7 +1014,7 @@ public class FflogsApiClient {
             }
             return events;
         } catch (Exception e) {
-            log.error("[FFLogs] fetchDamageDoneEventsByAbility failed: {}", e.getMessage());
+            log.error("[FFLogs] fetchDamageDoneEvents failed: {}", e.getMessage());
             return List.of();
         }
     }

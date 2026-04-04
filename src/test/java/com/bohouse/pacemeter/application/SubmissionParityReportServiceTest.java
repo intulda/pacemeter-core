@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.List;
 import java.util.Optional;
@@ -278,6 +279,54 @@ class SubmissionParityReportServiceTest {
 
         assertNotNull(selectedFight);
         assertEquals(5, selectedFight.id());
+    }
+
+    @Test
+    void selectRelevantSkillSurface_keepsCounterpartTopSkillEvenWhenLocalRankFallsOutsideTopLimit() throws Exception {
+        SubmissionParityReportService service = new SubmissionParityReportService(
+                new ActLineParser(),
+                new ObjectMapper(),
+                new FflogsZoneLookup(new ObjectMapper()),
+                territoryId -> Optional.empty(),
+                new FflogsApiClient(new FflogsTokenStore(new ObjectMapper()), new ObjectMapper())
+        );
+
+        Method method = SubmissionParityReportService.class.getDeclaredMethod(
+                "selectRelevantSkillSurface",
+                List.class,
+                List.class
+        );
+        method.setAccessible(true);
+
+        List<SubmissionParityReport.SkillBreakdownEntry> localEntries = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            localEntries.add(new SubmissionParityReport.SkillBreakdownEntry(
+                    0x9000 + i,
+                    "local-" + i,
+                    2_000_000L - (i * 10_000L),
+                    10L
+            ));
+        }
+        localEntries.add(new SubmissionParityReport.SkillBreakdownEntry(
+                0x1D41,
+                "DoT#1D41",
+                1_500_000L,
+                22L
+        ));
+
+        List<SubmissionParityReport.SkillBreakdownEntry> counterpartEntries = List.of(
+                new SubmissionParityReport.SkillBreakdownEntry(0x1D41, "Higanbana", 1_542_816L, 0L)
+        );
+
+        @SuppressWarnings("unchecked")
+        List<SubmissionParityReport.SkillBreakdownEntry> selected =
+                (List<SubmissionParityReport.SkillBreakdownEntry>) method.invoke(
+                        service,
+                        localEntries,
+                        counterpartEntries
+                );
+
+        assertTrue(selected.stream().anyMatch(entry -> Integer.valueOf(0x1D41).equals(entry.skillGuid())));
     }
 
     @Test

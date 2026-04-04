@@ -133,7 +133,8 @@
   - 필요하면 `debugHeavy2AprilFight3DragoonActiveSubsetLeak_printsSourceMatchedTargets`
   - 필요하면 `debugHeavy2AprilFight3DragoonAcceptedBySourcePotential_printsResolvedActions`
 - 메모:
-  - Windows 캐시 잠금이 있으면 먼저 `compileJava` 후 같은 `GRADLE_USER_HOME`으로 순차 실행
+  - `gradlew(.bat)`는 기본 `GRADLE_USER_HOME=.gradle-home`을 쓰도록 고정했다.
+  - Windows 캐시 잠금이 있으면 별도 home을 늘리지 말고, 먼저 `compileJava` 후 같은 `.gradle-home`으로 순차 실행
 
 ### 2. April DRG가 여전히 안 줄면 다음 좁은 가설로 간다
 - 후보:

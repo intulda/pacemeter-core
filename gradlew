@@ -82,6 +82,10 @@ do
     esac
 done
 
+# Default to a single repo-local Gradle user home unless the caller overrides it.
+: "${GRADLE_USER_HOME:=$APP_HOME/.gradle-home}"
+export GRADLE_USER_HOME
+
 # This is normally unused
 # shellcheck disable=SC2034
 APP_BASE_NAME=${0##*/}

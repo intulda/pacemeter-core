@@ -831,7 +831,7 @@ public class SubmissionParityReportService {
             double rdpsDeltaRatio = Math.abs(fflogsActor.rdpsPerSecond()) > 0.0
                     ? rdpsDelta / fflogsActor.rdpsPerSecond()
                     : 0.0;
-            List<SubmissionParityReport.SkillBreakdownEntry> localTopSkills = combat.skillBreakdowns().stream()
+            List<SubmissionParityReport.SkillBreakdownEntry> localSkillEntries = combat.skillBreakdowns().stream()
                     .filter(breakdown -> breakdown.actorId().equals(localActor.actorId()))
                     .findFirst()
                     .map(CombatDebugSnapshot.ActorSkillBreakdown::skills)
@@ -863,17 +863,15 @@ public class SubmissionParityReportService {
                     .values()
                     .stream()
                     .sorted((left, right) -> Long.compare(right.totalDamage(), left.totalDamage()))
-                    .limit(TOP_SKILLS_PER_ACTOR)
                     .toList();
-            List<SubmissionParityReport.SkillBreakdownEntry> fflogsTopSkills = List.of();
+            List<SubmissionParityReport.SkillBreakdownEntry> fflogsSkillEntries = List.of();
             if (fflogs.reportCode() != null && fflogs.selectedFightId() != null && fflogsActor.id() != null) {
-                fflogsTopSkills = fflogsApiClient.fetchDamageDoneAbilities(
+                fflogsSkillEntries = fflogsApiClient.fetchDamageDoneAbilities(
                                 fflogs.reportCode(),
                                 fflogs.selectedFightId(),
                                 fflogsActor.id()
                         ).stream()
                         .sorted((left, right) -> Double.compare(right.total(), left.total()))
-                        .limit(TOP_SKILLS_PER_ACTOR)
                         .map(skill -> new SubmissionParityReport.SkillBreakdownEntry(
                                 skill.guid(),
                                 skill.name(),
@@ -882,6 +880,10 @@ public class SubmissionParityReportService {
                         ))
                         .toList();
             }
+            List<SubmissionParityReport.SkillBreakdownEntry> localTopSkills =
+                    selectRelevantSkillSurface(localSkillEntries, fflogsSkillEntries);
+            List<SubmissionParityReport.SkillBreakdownEntry> fflogsTopSkills =
+                    selectRelevantSkillSurface(fflogsSkillEntries, localSkillEntries);
             List<String> warningReasons = buildWarningReasons(
                     fflogsActor,
                     totalDamageDeltaRatio,
@@ -1050,6 +1052,36 @@ public class SubmissionParityReportService {
             normalized = normalized.substring(0, bracketStart);
         }
         return normalized.trim().toLowerCase();
+    }
+
+    private List<SubmissionParityReport.SkillBreakdownEntry> selectRelevantSkillSurface(
+            List<SubmissionParityReport.SkillBreakdownEntry> primaryEntries,
+            List<SubmissionParityReport.SkillBreakdownEntry> counterpartEntries
+    ) {
+        if (primaryEntries.isEmpty()) {
+            return List.of();
+        }
+
+        Set<String> includedKeys = new HashSet<>();
+        primaryEntries.stream()
+                .limit(TOP_SKILLS_PER_ACTOR)
+                .map(this::buildSkillMatchKey)
+                .forEach(includedKeys::add);
+        counterpartEntries.stream()
+                .limit(TOP_SKILLS_PER_ACTOR)
+                .map(this::buildSkillMatchKey)
+                .forEach(includedKeys::add);
+
+        return primaryEntries.stream()
+                .filter(entry -> includedKeys.contains(buildSkillMatchKey(entry)))
+                .toList();
+    }
+
+    private String buildSkillMatchKey(SubmissionParityReport.SkillBreakdownEntry entry) {
+        if (entry.skillGuid() != null && entry.skillGuid() > 0) {
+            return "guid:" + Integer.toHexString(entry.skillGuid()).toUpperCase();
+        }
+        return "name:" + normalizeSkillKey(entry.skillName());
     }
 
     private Map<String, String> loadOriginalToAlias(Path mappingPath) {

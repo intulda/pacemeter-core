@@ -140,5 +140,5 @@ build/*
 .env.prod
 data/catalog/
 data/submissions/
-.gradle-home
+.gradle-home*
 .jdk17

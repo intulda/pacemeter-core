@@ -2,6 +2,7 @@ package com.bohouse.pacemeter.application;
 
 import com.bohouse.pacemeter.adapter.inbound.actws.ActLineParser;
 import com.bohouse.pacemeter.adapter.inbound.actws.BuffApplyRaw;
+import com.bohouse.pacemeter.adapter.inbound.actws.BuffRemoveRaw;
 import com.bohouse.pacemeter.adapter.inbound.actws.DotTickRaw;
 import com.bohouse.pacemeter.adapter.inbound.actws.DotStatusSignalRaw;
 import com.bohouse.pacemeter.adapter.inbound.actws.NetworkAbilityRaw;
@@ -34,6 +35,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -2981,6 +2983,18 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugHeavy2Fight2SamuraiAlignedEventDiff_prints1d41LocalVsFflogsSequences() throws Exception {
+        printActorAlignedEventDiff(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Samurai",
+                0x1D41,
+                0x04CC,
+                "heavy2.fight2.sam"
+        );
+    }
+
+    @Test
     void debugHeavy2Fight2SamuraiFflogsAbilities_printsNearbyAbilityRows() throws Exception {
         printActorFflogsAbilities(
                 "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
@@ -2989,6 +3003,53 @@ class SubmissionParityReportDiagnostics {
                 List.of("Higan", "彼岸", "1D41"),
                 Set.of(0x1D41, 0x04CC),
                 "heavy2.fight2.sam"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2SamuraiFflogsAbilityVsEvents_printsHiganbanaSurfaceDelta() throws Exception {
+        printActorFflogsAbilityVsEvents(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Samurai",
+                0x1D41,
+                0x04CC,
+                "heavy2.fight2.sam"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2SamuraiFflogsActorTotalVsEvents_printsSurfaceDelta() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2
+        );
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(2, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> "Samurai".equals(c.fflogsType()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        long eventTotal = apiClient.fetchDamageDoneEvents(
+                        report.fflogs().reportCode(),
+                        report.fflogs().selectedFightId(),
+                        comparison.fflogsActorId()
+                ).stream()
+                .mapToLong(FflogsApiClient.DamageEventEntry::amount)
+                .sum();
+        long tableTotal = Math.round(comparison.fflogsTotal());
+
+        System.out.printf(
+                "heavy2.fight2.sam actorTotalVsEvents actor=%s tableTotal=%d eventTotal=%d delta=%d localTotal=%d%n",
+                comparison.localName(),
+                tableTotal,
+                eventTotal,
+                eventTotal - tableTotal,
+                comparison.localTotalDamage()
         );
     }
 
@@ -3159,6 +3220,17 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugHeavy2Fight2SamuraiActiveSubsetLeak_printsSourceMatchedTargets() throws Exception {
+        printActorActiveSubsetLeak(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Samurai",
+                0x1D41,
+                "heavy2.fight2.sam"
+        );
+    }
+
+    @Test
     void debugHeavy2Fight1DragoonActiveSubsetLeak_printsSourceMatchedTargets() throws Exception {
         printActorActiveSubsetLeak(
                 "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
@@ -3197,6 +3269,24 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugHeavy2AprilFight3DragoonRawLifecycle_printsChaoticSpringOnMisattributedTargets() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printActorDotLifecycle(
+                    submissionId,
+                    3,
+                    "Dragoon",
+                    0x64AC,
+                    0x0A9F,
+                    Set.of(0x40006DF3L, 0x40006DF4L, 0x40006FA9L),
+                    "heavy2.april.fight3.drg"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
     void debugHeavy2AprilFight3FflogsActors_printsActorIds() throws Exception {
         String submissionId = createHeavy2AprilDiagnosticSubmission();
         try {
@@ -3211,6 +3301,155 @@ class SubmissionParityReportDiagnostics {
         String submissionId = createHeavy2AprilDiagnosticSubmission();
         try {
             printActorTargetTimeline(
+                    submissionId,
+                    3,
+                    "Dragoon",
+                    0x64AC,
+                    0x0A9F,
+                    "heavy2.april.fight3.drg"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3DragoonWindowedLocalTotals_prints64acDamageInsideFflogsWindows() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printActorWindowedLocalTotals(
+                    submissionId,
+                    3,
+                    "Dragoon",
+                    0x64AC,
+                    0x0A9F,
+                    "heavy2.april.fight3.drg"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3DragoonHitLeak_prints64acLocalHitsOutsideFflogsWindows() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printActorHitLeakAgainstFflogsWindows(
+                    submissionId,
+                    3,
+                    "Dragoon",
+                    0x64AC,
+                    0x0A9F,
+                    "heavy2.april.fight3.drg"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3DragoonBoundaryWindow_prints64acEventsAroundFflogsStart() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printActorDotLifecycleWindow(
+                    submissionId,
+                    3,
+                    "Dragoon",
+                    0x64AC,
+                    0x0A9F,
+                    Set.of(0x40006DF3L, 0x40006DF4L, 0x40006FA9L),
+                    280_000L,
+                    305_000L,
+                    "heavy2.april.fight3.drg"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3BoundarySnapshots_printsTargetSnapshotsAroundFflogsStart() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printSnapshotWindow(
+                    submissionId,
+                    3,
+                    Set.of(0x40006DF3L, 0x40006DF4L),
+                    280_000L,
+                    305_000L,
+                    "heavy2.april.fight3"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3DragoonFflogsFirst64acEvents_printsEarliestBuckets() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printActorFirstFflogsEventsByAbility(
+                    submissionId,
+                    3,
+                    "Dragoon",
+                    0x64AC,
+                    0x0A9F,
+                    "heavy2.april.fight3.drg"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3FflogsFightOffset_printsSelectedFightStartOffset() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printSelectedFightOffset(submissionId, 3, "heavy2.april.fight3");
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3DragoonAlignedEventDiff_prints64acLocalVsFflogsSequences() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printActorAlignedEventDiff(
+                    submissionId,
+                    3,
+                    "Dragoon",
+                    0x64AC,
+                    0x0A9F,
+                    "heavy2.april.fight3.drg"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3DragoonFflogsAbilityBuckets_printsChaoticSpringAliases() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printActorFflogsAbilityBuckets(
+                    submissionId,
+                    3,
+                    "Dragoon",
+                    Set.of(0x64AC, 0x0A9F),
+                    List.of("spring", "chaotic"),
+                    "heavy2.april.fight3.drg"
+            );
+        } finally {
+            deleteDiagnosticSubmission(submissionId);
+        }
+    }
+
+    @Test
+    void debugHeavy2AprilFight3DragoonFflogsAbilityVsEvents_printsChaoticSpringSurfaceDelta() throws Exception {
+        String submissionId = createHeavy2AprilDiagnosticSubmission();
+        try {
+            printActorFflogsAbilityVsEvents(
                     submissionId,
                     3,
                     "Dragoon",
@@ -3700,6 +3939,44 @@ class SubmissionParityReportDiagnostics {
                 2,
                 List.of("Samurai", "WhiteMage", "Scholar"),
                 "heavy2.fight2.actorTotals"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2SamuraiParityBreakdown_printsRdpsComponents() throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2
+        );
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(2, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> "Samurai".equals(c.fflogsType()))
+                .findFirst()
+                .orElseThrow();
+
+        System.out.printf(
+                "heavy2.fight2.sam parityBreakdown actor=%s localDps=%.1f localReceived=%.1f localGranted=%.1f localExternal=%.1f localDerived=%.1f localOnline=%.1f fflogsDps=%.1f fflogsTaken=%.1f fflogsGiven=%.1f fflogsExternal=%.1f fflogsRdps=%.1f totalDelta=%.1f receivedDelta=%.1f grantedDelta=%.1f externalDelta=%.1f derivedDelta=%.1f rdpsDelta=%.1f%n",
+                comparison.localName(),
+                comparison.localDpsPerSecond(),
+                comparison.localReceivedBuffPerSecond(),
+                comparison.localGrantedBuffPerSecond(),
+                comparison.localExternalDeltaPerSecond(),
+                comparison.localDerivedRdpsPerSecond(),
+                comparison.localOnlineRdps(),
+                comparison.fflogsDpsPerSecond(),
+                comparison.fflogsRdpsTakenPerSecond(),
+                comparison.fflogsRdpsGivenPerSecond(),
+                comparison.fflogsExternalDeltaPerSecond(),
+                comparison.fflogsRdpsPerSecond(),
+                comparison.totalDamageDelta(),
+                comparison.receivedDeltaPerSecond(),
+                comparison.grantedDeltaPerSecond(),
+                comparison.externalDeltaPerSecond(),
+                comparison.derivedRdpsDelta(),
+                comparison.rdpsDelta()
         );
     }
 
@@ -6118,10 +6395,29 @@ class SubmissionParityReportDiagnostics {
                                             break;
                                         }
                                     }
-                                    String key = "target=%s(%s)|guidPresent=%s".formatted(
+                                    List<String> sameSourceActiveKeys = activeDots.keySet().stream()
+                                            .filter(keyObject -> {
+                                                try {
+                                                    return trackedKeySourceId(keyObject) == dot.sourceId();
+                                                } catch (Exception e) {
+                                                    throw new RuntimeException(e);
+                                                }
+                                            })
+                                            .map(SubmissionParityReportDiagnostics::trackedKeyString)
+                                            .sorted()
+                                            .toList();
+                                    List<String> topActiveKeys = activeWeights.entrySet().stream()
+                                            .sorted((left, right) -> Double.compare(right.getValue(), left.getValue()))
+                                            .limit(4)
+                                            .<String>map(entry -> trackedKeyString(entry.getKey()) + "="
+                                                    + String.format(Locale.US, "%.3f", entry.getValue()))
+                                            .toList();
+                                    String key = "target=%s(%s)|guidPresent=%s|sameSourceActive=%s|topActive=%s".formatted(
                                             Long.toHexString(dot.targetId()).toUpperCase(),
                                             dot.targetName(),
-                                            guidPresent
+                                            guidPresent,
+                                            sameSourceActiveKeys,
+                                            topActiveKeys
                                     );
                                     statsByTarget.compute(
                                             key,
@@ -6319,6 +6615,390 @@ class SubmissionParityReportDiagnostics {
                 });
     }
 
+    private void printActorDotLifecycle(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int guid,
+            int statusId,
+            Set<Long> targetIds,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+        long localActorId = report.combat().actors().stream()
+                .filter(actor -> comparison.localName().equals(actor.name()))
+                .mapToLong(actor -> actor.actorId().value())
+                .findFirst()
+                .orElseThrow();
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        System.out.printf(
+                "%s dotLifecycle fight=%d actor=%s guid=%s status=%s%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(guid),
+                formatGuid(statusId)
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed == null) {
+                continue;
+            }
+            if (parsed instanceof BuffApplyRaw buffApply
+                    && buffApply.sourceId() == localActorId
+                    && buffApply.statusId() == statusId
+                    && targetIds.contains(buffApply.targetId())) {
+                System.out.printf(
+                        "  APPLY ts=%s target=%s(%s) duration=%.1f%n",
+                        buffApply.ts(),
+                        Long.toHexString(buffApply.targetId()).toUpperCase(),
+                        buffApply.targetName(),
+                        buffApply.durationSec()
+                );
+                continue;
+            }
+            if (parsed instanceof BuffRemoveRaw buffRemove
+                    && buffRemove.sourceId() == localActorId
+                    && buffRemove.statusId() == statusId
+                    && targetIds.contains(buffRemove.targetId())) {
+                System.out.printf(
+                        "  REMOVE ts=%s target=%s(%s)%n",
+                        buffRemove.ts(),
+                        Long.toHexString(buffRemove.targetId()).toUpperCase(),
+                        buffRemove.targetName()
+                );
+                continue;
+            }
+            if (parsed instanceof DotTickRaw dot
+                    && dot.sourceId() == localActorId
+                    && dot.statusId() == 0
+                    && targetIds.contains(dot.targetId())) {
+                System.out.printf(
+                        "  TICK ts=%s target=%s(%s) damage=%d raw=%s%n",
+                        dot.ts(),
+                        Long.toHexString(dot.targetId()).toUpperCase(),
+                        dot.targetName(),
+                        dot.damage(),
+                        dot.rawLine()
+                );
+                continue;
+            }
+            if (parsed instanceof NetworkAbilityRaw ability
+                    && ability.actorId() == localActorId
+                    && ability.skillId() == guid
+                    && targetIds.contains(ability.targetId())) {
+                System.out.printf(
+                        "  DIRECT ts=%s target=%s(%s) damage=%d raw=%s%n",
+                        ability.ts(),
+                        Long.toHexString(ability.targetId()).toUpperCase(),
+                        ability.targetName(),
+                        ability.damage(),
+                        ability.rawLine()
+                );
+            }
+        }
+    }
+
+    private void printActorDotLifecycleWindow(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int guid,
+            int statusId,
+            Set<Long> targetIds,
+            long startMsInclusive,
+            long endMsInclusive,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+        long localActorId = report.combat().actors().stream()
+                .filter(actor -> comparison.localName().equals(actor.name()))
+                .mapToLong(actor -> actor.actorId().value())
+                .findFirst()
+                .orElseThrow();
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        Instant fightStart = Instant.ofEpochMilli(report.fflogs().reportStartTime() + report.fflogs().fights().stream()
+                .filter(f -> f.id() == fightId)
+                .mapToLong(SubmissionParityReport.FflogsFightSummary::startTime)
+                .findFirst()
+                .orElseThrow());
+
+        System.out.printf(
+                "%s dotLifecycleWindow fight=%d actor=%s guid=%s status=%s window=[%d,%d]%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(guid),
+                formatGuid(statusId),
+                startMsInclusive,
+                endMsInclusive
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed == null) {
+                continue;
+            }
+
+            Instant ts = null;
+            if (parsed instanceof BuffApplyRaw buffApply) {
+                ts = buffApply.ts();
+            } else if (parsed instanceof BuffRemoveRaw buffRemove) {
+                ts = buffRemove.ts();
+            } else if (parsed instanceof DotTickRaw dotTick) {
+                ts = dotTick.ts();
+            } else if (parsed instanceof NetworkAbilityRaw ability) {
+                ts = ability.ts();
+            }
+            if (ts == null) {
+                continue;
+            }
+            long tsMs = Duration.between(fightStart, ts).toMillis();
+            if (tsMs < startMsInclusive || tsMs > endMsInclusive) {
+                continue;
+            }
+
+            if (parsed instanceof BuffApplyRaw buffApply
+                    && buffApply.sourceId() == localActorId
+                    && buffApply.statusId() == statusId
+                    && targetIds.contains(buffApply.targetId())) {
+                System.out.printf(
+                        "  %d APPLY target=%s(%s) duration=%.1f%n",
+                        tsMs,
+                        Long.toHexString(buffApply.targetId()).toUpperCase(),
+                        buffApply.targetName(),
+                        buffApply.durationSec()
+                );
+                continue;
+            }
+            if (parsed instanceof BuffRemoveRaw buffRemove
+                    && buffRemove.sourceId() == localActorId
+                    && buffRemove.statusId() == statusId
+                    && targetIds.contains(buffRemove.targetId())) {
+                System.out.printf(
+                        "  %d REMOVE target=%s(%s)%n",
+                        tsMs,
+                        Long.toHexString(buffRemove.targetId()).toUpperCase(),
+                        buffRemove.targetName()
+                );
+                continue;
+            }
+            if (parsed instanceof DotTickRaw dot
+                    && dot.sourceId() == localActorId
+                    && dot.statusId() == 0
+                    && targetIds.contains(dot.targetId())) {
+                System.out.printf(
+                        "  %d TICK target=%s(%s) damage=%d%n",
+                        tsMs,
+                        Long.toHexString(dot.targetId()).toUpperCase(),
+                        dot.targetName(),
+                        dot.damage()
+                );
+                continue;
+            }
+            if (parsed instanceof NetworkAbilityRaw ability
+                    && ability.actorId() == localActorId
+                    && ability.skillId() == guid
+                    && targetIds.contains(ability.targetId())) {
+                System.out.printf(
+                        "  %d DIRECT target=%s(%s) damage=%d%n",
+                        tsMs,
+                        Long.toHexString(ability.targetId()).toUpperCase(),
+                        ability.targetName(),
+                        ability.damage()
+                );
+            }
+        }
+    }
+
+    private void printSnapshotWindow(
+            String submissionId,
+            int fightId,
+            Set<Long> targetIds,
+            long startMsInclusive,
+            long endMsInclusive,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        long fightStartOffset = report.fflogs().fights().stream()
+                .filter(f -> f.id() == fightId)
+                .mapToLong(SubmissionParityReport.FflogsFightSummary::startTime)
+                .findFirst()
+                .orElseThrow();
+        Instant fightStart = Instant.ofEpochMilli(report.fflogs().reportStartTime() + fightStartOffset);
+
+        System.out.printf(
+                "%s snapshotWindow fight=%d window=[%d,%d]%n",
+                label,
+                fightId,
+                startMsInclusive,
+                endMsInclusive
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed instanceof com.bohouse.pacemeter.adapter.inbound.actws.StatusSnapshotRaw snapshot
+                    && targetIds.contains(snapshot.actorId())) {
+                long tsMs = Duration.between(fightStart, snapshot.ts()).toMillis();
+                if (tsMs >= startMsInclusive && tsMs <= endMsInclusive) {
+                    System.out.printf(
+                            "  %d SNAPSHOT target=%s(%s) statuses=%s%n",
+                            tsMs,
+                            Long.toHexString(snapshot.actorId()).toUpperCase(),
+                            snapshot.actorName(),
+                            snapshot.statuses().stream()
+                                    .map(status -> Integer.toHexString(status.statusId()).toUpperCase()
+                                            + ":" + Long.toHexString(status.sourceId()).toUpperCase())
+                                    .toList()
+                    );
+                }
+            } else if (parsed instanceof com.bohouse.pacemeter.adapter.inbound.actws.CombatantStatusSnapshotRaw snapshot
+                    && targetIds.contains(snapshot.actorId())) {
+                long tsMs = Duration.between(fightStart, snapshot.ts()).toMillis();
+                if (tsMs >= startMsInclusive && tsMs <= endMsInclusive) {
+                    System.out.printf(
+                            "  %d COMBATANT_SNAPSHOT target=%s(%s) statuses=%s%n",
+                            tsMs,
+                            Long.toHexString(snapshot.actorId()).toUpperCase(),
+                            snapshot.actorName(),
+                            snapshot.statuses().stream()
+                                    .map(status -> Integer.toHexString(status.statusId()).toUpperCase()
+                                            + ":" + Long.toHexString(status.sourceId()).toUpperCase())
+                                    .toList()
+                    );
+                }
+            }
+        }
+    }
+
+    private void printActorFirstFflogsEventsByAbility(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int primaryGuid,
+            int fallbackGuid,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<FflogsApiClient.DamageEventEntry> primaryEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                comparison.fflogsActorId(),
+                primaryGuid
+        );
+        List<FflogsApiClient.DamageEventEntry> fallbackEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                comparison.fflogsActorId(),
+                fallbackGuid
+        );
+
+        List<FflogsApiClient.DamageEventEntry> events = Stream.concat(primaryEvents.stream(), fallbackEvents.stream())
+                .sorted(Comparator.comparingLong(FflogsApiClient.DamageEventEntry::timestamp))
+                .toList();
+
+        System.out.printf(
+                "%s fflogsFirstEvents fight=%d actor=%s primary=%s fallback=%s totalEvents=%d%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(primaryGuid),
+                formatGuid(fallbackGuid),
+                events.size()
+        );
+        events.stream()
+                .limit(20)
+                .forEach(event -> System.out.printf(
+                        "  ts=%d target=%s ability=%s amount=%d hitType=%s%n",
+                        event.timestamp(),
+                        Integer.toHexString(event.targetId()).toUpperCase(),
+                        formatGuid(event.abilityGameId()),
+                        event.amount(),
+                        event.hitType() == null ? "null" : event.hitType().toString()
+                ));
+    }
+
+    private void printSelectedFightOffset(String submissionId, int fightId, String label) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.FflogsFightSummary fight = report.fflogs().fights().stream()
+                .filter(value -> value.id() == fightId)
+                .findFirst()
+                .orElseThrow();
+
+        System.out.printf(
+                "%s selectedFightOffset fight=%d reportStart=%d fightStart=%d fightEnd=%d relativeStart=%d duration=%d%n",
+                label,
+                fightId,
+                report.fflogs().reportStartTime(),
+                fight.startTime(),
+                fight.endTime(),
+                fight.startTime(),
+                fight.endTime() - fight.startTime()
+        );
+    }
+
     private void printFflogsActors(String submissionId, int fightId, String label) throws Exception {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
@@ -6353,6 +7033,11 @@ class SubmissionParityReportDiagnostics {
 
         SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
                 .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+        long fightStartOffset = report.fflogs().fights().stream()
+                .filter(fight -> fight.id() == fightId)
+                .mapToLong(SubmissionParityReport.FflogsFightSummary::startTime)
                 .findFirst()
                 .orElseThrow();
         long localActorId = report.combat().actors().stream()
@@ -6449,7 +7134,7 @@ class SubmissionParityReportDiagnostics {
         Stream.concat(primaryEvents.stream(), fallbackEvents.stream())
                 .forEach(event -> fflogsByTarget.compute(
                         event.targetId(),
-                        (ignored, existing) -> TimelineStats.add(existing, event.amount(), event.timestamp())
+                        (ignored, existing) -> TimelineStats.add(existing, event.amount(), event.timestamp() - fightStartOffset)
                 ));
 
         System.out.printf(
@@ -6483,6 +7168,708 @@ class SubmissionParityReportDiagnostics {
                         entry.getValue().firstTimestamp(),
                         entry.getValue().lastTimestamp()
                 ));
+    }
+
+    private void printActorWindowedLocalTotals(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int primaryGuid,
+            int fallbackGuid,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+        long fightStartOffset = report.fflogs().fights().stream()
+                .filter(fight -> fight.id() == fightId)
+                .mapToLong(SubmissionParityReport.FflogsFightSummary::startTime)
+                .findFirst()
+                .orElseThrow();
+        long localActorId = report.combat().actors().stream()
+                .filter(actor -> comparison.localName().equals(actor.name()))
+                .mapToLong(actor -> actor.actorId().value())
+                .findFirst()
+                .orElseThrow();
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> capturedDamageEvents = new ArrayList<>();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        if (event instanceof com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent damageEvent) {
+                            capturedDamageEvents.add(damageEvent);
+                        }
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<FflogsApiClient.DamageEventEntry> primaryEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                comparison.fflogsActorId(),
+                primaryGuid
+        );
+        List<FflogsApiClient.DamageEventEntry> fallbackEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                comparison.fflogsActorId(),
+                fallbackGuid
+        );
+
+        Map<Integer, TimelineStats> fflogsByTarget = new HashMap<>();
+        Stream.concat(primaryEvents.stream(), fallbackEvents.stream())
+                .forEach(event -> fflogsByTarget.compute(
+                        event.targetId(),
+                        (ignored, existing) -> TimelineStats.add(existing, event.amount(), event.timestamp() - fightStartOffset)
+                ));
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> localEvents = capturedDamageEvents.stream()
+                .filter(e -> e.sourceId().value() == localActorId)
+                .filter(e -> e.actionId() == primaryGuid || e.actionId() == fallbackGuid)
+                .toList();
+
+        System.out.printf(
+                "%s windowedLocalTotals fight=%d actor=%s primary=%s fallback=%s%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(primaryGuid),
+                formatGuid(fallbackGuid)
+        );
+        fflogsByTarget.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue().totalDamage(), left.getValue().totalDamage()))
+                .forEach(entry -> {
+                    TimelineStats stats = entry.getValue();
+                    long localWindowTotal = localEvents.stream()
+                            .filter(event -> event.timestampMs() >= stats.firstTimestamp())
+                            .filter(event -> event.timestampMs() <= stats.lastTimestamp())
+                            .mapToLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::amount)
+                            .sum();
+                    long localWindowHits = localEvents.stream()
+                            .filter(event -> event.timestampMs() >= stats.firstTimestamp())
+                            .filter(event -> event.timestampMs() <= stats.lastTimestamp())
+                            .count();
+                    System.out.printf(
+                            "  fflogsTarget=%s fflogsTotal=%d fflogsHits=%d window=[%d,%d] localWindowTotal=%d localWindowHits=%d%n",
+                            Integer.toHexString(entry.getKey()).toUpperCase(),
+                            stats.totalDamage(),
+                            stats.hitCount(),
+                            stats.firstTimestamp(),
+                            stats.lastTimestamp(),
+                            localWindowTotal,
+                            localWindowHits
+                    );
+                });
+    }
+
+    private void printActorHitLeakAgainstFflogsWindows(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int primaryGuid,
+            int fallbackGuid,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+        long fightStartOffset = report.fflogs().fights().stream()
+                .filter(fight -> fight.id() == fightId)
+                .mapToLong(SubmissionParityReport.FflogsFightSummary::startTime)
+                .findFirst()
+                .orElseThrow();
+        long localActorId = report.combat().actors().stream()
+                .filter(actor -> comparison.localName().equals(actor.name()))
+                .mapToLong(actor -> actor.actorId().value())
+                .findFirst()
+                .orElseThrow();
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> capturedDamageEvents = new ArrayList<>();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        if (event instanceof com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent damageEvent) {
+                            capturedDamageEvents.add(damageEvent);
+                        }
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Map<Long, String> targetNameById = new HashMap<>();
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed == null) {
+                continue;
+            }
+            if (parsed instanceof NetworkAbilityRaw ability) {
+                targetNameById.putIfAbsent(ability.targetId(), ability.targetName());
+            } else if (parsed instanceof DotTickRaw dot) {
+                targetNameById.putIfAbsent(dot.targetId(), dot.targetName());
+            }
+            ingestion.onParsed(parsed);
+        }
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<FflogsApiClient.DamageEventEntry> primaryEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                comparison.fflogsActorId(),
+                primaryGuid
+        );
+        List<FflogsApiClient.DamageEventEntry> fallbackEvents = apiClient.fetchDamageDoneEventsByAbility(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                comparison.fflogsActorId(),
+                fallbackGuid
+        );
+
+        List<TimelineWindow> fflogsWindows = Stream.concat(primaryEvents.stream(), fallbackEvents.stream())
+                .collect(Collectors.groupingBy(FflogsApiClient.DamageEventEntry::targetId))
+                .entrySet().stream()
+                .map(entry -> {
+                    long first = entry.getValue().stream()
+                            .mapToLong(event -> event.timestamp() - fightStartOffset)
+                            .min()
+                            .orElse(0L);
+                    long last = entry.getValue().stream()
+                            .mapToLong(event -> event.timestamp() - fightStartOffset)
+                            .max()
+                            .orElse(0L);
+                    return new TimelineWindow(entry.getKey(), first, last);
+                })
+                .sorted(Comparator.comparingLong(TimelineWindow::startMs))
+                .toList();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> localEvents = capturedDamageEvents.stream()
+                .filter(e -> e.sourceId().value() == localActorId)
+                .filter(e -> e.actionId() == primaryGuid || e.actionId() == fallbackGuid)
+                .sorted(Comparator.comparingLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::timestampMs))
+                .toList();
+
+        long localInsideWindowHits = 0L;
+        long localInsideWindowDamage = 0L;
+        Map<Long, TimelineStats> outsideByTarget = new HashMap<>();
+        Map<String, TimelineStats> outsideByBucket = new HashMap<>();
+        List<String> sampleOutsideEvents = new ArrayList<>();
+        for (com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent event : localEvents) {
+            TimelineWindow matchedWindow = fflogsWindows.stream()
+                    .filter(window -> event.timestampMs() >= window.startMs() && event.timestampMs() <= window.endMs())
+                    .findFirst()
+                    .orElse(null);
+            if (matchedWindow != null) {
+                localInsideWindowHits++;
+                localInsideWindowDamage += event.amount();
+                continue;
+            }
+
+            outsideByTarget.compute(
+                    event.targetId().value(),
+                    (ignored, existing) -> TimelineStats.add(existing, event.amount(), event.timestampMs())
+            );
+            String bucket = classifyTimelinePosition(event.timestampMs(), fflogsWindows);
+            outsideByBucket.compute(
+                    bucket,
+                    (ignored, existing) -> TimelineStats.add(existing, event.amount(), event.timestampMs())
+            );
+            if (sampleOutsideEvents.size() < 12) {
+                sampleOutsideEvents.add(
+                        "ts=%d target=%s(%s) amount=%d".formatted(
+                                event.timestampMs(),
+                                Long.toHexString(event.targetId().value()).toUpperCase(),
+                                targetNameById.getOrDefault(event.targetId().value(), "?"),
+                                event.amount()
+                        )
+                );
+            }
+        }
+
+        System.out.printf(
+                "%s hitLeakVsFflogsWindows fight=%d actor=%s primary=%s fallback=%s totalLocalHits=%d totalLocalDamage=%d insideWindowHits=%d insideWindowDamage=%d outsideWindowHits=%d outsideWindowDamage=%d%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(primaryGuid),
+                formatGuid(fallbackGuid),
+                localEvents.size(),
+                localEvents.stream().mapToLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::amount).sum(),
+                localInsideWindowHits,
+                localInsideWindowDamage,
+                localEvents.size() - localInsideWindowHits,
+                localEvents.stream().mapToLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::amount).sum() - localInsideWindowDamage
+        );
+        System.out.println("  outsideByBucket");
+        outsideByBucket.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue().hitCount(), left.getValue().hitCount()))
+                .forEach(entry -> System.out.printf(
+                        "    bucket=%s hits=%d damage=%d first=%d last=%d%n",
+                        entry.getKey(),
+                        entry.getValue().hitCount(),
+                        entry.getValue().totalDamage(),
+                        entry.getValue().firstTimestamp(),
+                        entry.getValue().lastTimestamp()
+                ));
+        System.out.println("  outsideByTarget");
+        outsideByTarget.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue().hitCount(), left.getValue().hitCount()))
+                .forEach(entry -> System.out.printf(
+                        "    id=%s name=%s hits=%d damage=%d first=%d last=%d%n",
+                        Long.toHexString(entry.getKey()).toUpperCase(),
+                        targetNameById.getOrDefault(entry.getKey(), "?"),
+                        entry.getValue().hitCount(),
+                        entry.getValue().totalDamage(),
+                        entry.getValue().firstTimestamp(),
+                        entry.getValue().lastTimestamp()
+                ));
+        System.out.println("  sampleOutsideEvents");
+        sampleOutsideEvents.forEach(sample -> System.out.println("    " + sample));
+    }
+
+    private void printActorAlignedEventDiff(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int primaryGuid,
+            int fallbackGuid,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+        long fightStartOffset = report.fflogs().fights().stream()
+                .filter(fight -> fight.id() == fightId)
+                .mapToLong(SubmissionParityReport.FflogsFightSummary::startTime)
+                .findFirst()
+                .orElseThrow();
+        long localActorId = report.combat().actors().stream()
+                .filter(actor -> comparison.localName().equals(actor.name()))
+                .mapToLong(actor -> actor.actorId().value())
+                .findFirst()
+                .orElseThrow();
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        List<com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent> capturedDamageEvents = new ArrayList<>();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        if (event instanceof com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent damageEvent) {
+                            capturedDamageEvents.add(damageEvent);
+                        }
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Map<Long, String> targetNameById = new HashMap<>();
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed == null) {
+                continue;
+            }
+            if (parsed instanceof NetworkAbilityRaw ability) {
+                targetNameById.putIfAbsent(ability.targetId(), ability.targetName());
+            } else if (parsed instanceof DotTickRaw dot) {
+                targetNameById.putIfAbsent(dot.targetId(), dot.targetName());
+            }
+            ingestion.onParsed(parsed);
+        }
+
+        List<AlignedLocalEvent> localEvents = capturedDamageEvents.stream()
+                .filter(event -> event.sourceId().value() == localActorId)
+                .filter(event -> event.actionId() == primaryGuid || event.actionId() == fallbackGuid)
+                .sorted(Comparator.comparingLong(com.bohouse.pacemeter.core.event.CombatEvent.DamageEvent::timestampMs))
+                .map(event -> new AlignedLocalEvent(
+                        event.timestampMs(),
+                        event.targetId().value(),
+                        targetNameById.getOrDefault(event.targetId().value(), "?"),
+                        event.amount(),
+                        event.damageType(),
+                        event.actionId()
+                ))
+                .toList();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<AlignedFflogsEvent> fflogsEvents = Stream.concat(
+                        apiClient.fetchDamageDoneEventsByAbility(
+                                report.fflogs().reportCode(),
+                                report.fflogs().selectedFightId(),
+                                comparison.fflogsActorId(),
+                                primaryGuid
+                        ).stream(),
+                        apiClient.fetchDamageDoneEventsByAbility(
+                                report.fflogs().reportCode(),
+                                report.fflogs().selectedFightId(),
+                                comparison.fflogsActorId(),
+                                fallbackGuid
+                        ).stream()
+                )
+                .sorted(Comparator.comparingLong(FflogsApiClient.DamageEventEntry::timestamp))
+                .map(event -> new AlignedFflogsEvent(
+                        event.timestamp() - fightStartOffset,
+                        event.targetId(),
+                        event.amount(),
+                        event.hitType(),
+                        event.abilityGameId()
+                ))
+                .toList();
+
+        Map<Long, TimelineStats> localTargetStats = new HashMap<>();
+        for (AlignedLocalEvent event : localEvents) {
+            localTargetStats.compute(
+                    event.targetId(),
+                    (ignored, existing) -> TimelineStats.add(existing, event.amount(), event.timestampMs())
+            );
+        }
+        Map<Integer, TimelineStats> fflogsTargetStats = new HashMap<>();
+        for (AlignedFflogsEvent event : fflogsEvents) {
+            fflogsTargetStats.compute(
+                    event.targetId(),
+                    (ignored, existing) -> TimelineStats.add(existing, event.amount(), event.timestampMs())
+            );
+        }
+
+        System.out.printf(
+                "%s alignedEventDiff fight=%d actor=%s primary=%s fallback=%s localHits=%d fflogsHits=%d%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(primaryGuid),
+                formatGuid(fallbackGuid),
+                localEvents.size(),
+                fflogsEvents.size()
+        );
+
+        List<TargetAlignment> alignments = fflogsTargetStats.entrySet().stream()
+                .sorted(Comparator.comparingLong(entry -> entry.getValue().firstTimestamp()))
+                .map(entry -> {
+                    Map.Entry<Long, TimelineStats> matchedLocal = localTargetStats.entrySet().stream()
+                            .min(Comparator.comparingLong(localEntry ->
+                                    Math.abs(localEntry.getValue().firstTimestamp() - entry.getValue().firstTimestamp())
+                                            + Math.abs(localEntry.getValue().lastTimestamp() - entry.getValue().lastTimestamp())))
+                            .orElse(null);
+                    return new TargetAlignment(
+                            entry.getKey(),
+                            entry.getValue(),
+                            matchedLocal == null ? null : matchedLocal.getKey(),
+                            matchedLocal == null ? null : matchedLocal.getValue()
+                    );
+                })
+                .toList();
+
+        for (TargetAlignment alignment : alignments) {
+            List<AlignedLocalEvent> localTargetEvents = alignment.localTargetId() == null
+                    ? List.of()
+                    : localEvents.stream()
+                    .filter(event -> event.targetId() == alignment.localTargetId())
+                    .toList();
+            List<AlignedFflogsEvent> fflogsTargetEvents = fflogsEvents.stream()
+                    .filter(event -> event.targetId() == alignment.fflogsTargetId())
+                    .toList();
+            long localDirectHits = localTargetEvents.stream()
+                    .filter(event -> event.damageType() == DamageType.DIRECT)
+                    .count();
+            long localDirectDamage = localTargetEvents.stream()
+                    .filter(event -> event.damageType() == DamageType.DIRECT)
+                    .mapToLong(AlignedLocalEvent::amount)
+                    .sum();
+            long localDotHits = localTargetEvents.stream()
+                    .filter(event -> event.damageType() == DamageType.DOT)
+                    .count();
+            long localDotDamage = localTargetEvents.stream()
+                    .filter(event -> event.damageType() == DamageType.DOT)
+                    .mapToLong(AlignedLocalEvent::amount)
+                    .sum();
+
+            System.out.printf(
+                    "  pair fflogs=%s[%d hits/%d dmg %d..%d] local=%s(%s)[%d hits/%d dmg %d..%d] direct=%d/%d dot=%d/%d%n",
+                    Integer.toHexString(alignment.fflogsTargetId()).toUpperCase(),
+                    alignment.fflogsStats().hitCount(),
+                    alignment.fflogsStats().totalDamage(),
+                    alignment.fflogsStats().firstTimestamp(),
+                    alignment.fflogsStats().lastTimestamp(),
+                    alignment.localTargetId() == null ? "null" : Long.toHexString(alignment.localTargetId()).toUpperCase(),
+                    alignment.localTargetId() == null ? "?" : targetNameById.getOrDefault(alignment.localTargetId(), "?"),
+                    alignment.localStats() == null ? 0L : alignment.localStats().hitCount(),
+                    alignment.localStats() == null ? 0L : alignment.localStats().totalDamage(),
+                    alignment.localStats() == null ? 0L : alignment.localStats().firstTimestamp(),
+                    alignment.localStats() == null ? 0L : alignment.localStats().lastTimestamp(),
+                    localDirectHits,
+                    localDirectDamage,
+                    localDotHits,
+                    localDotDamage
+            );
+            System.out.println("    localFirst");
+            localTargetEvents.stream()
+                    .limit(12)
+                    .forEach(event -> System.out.printf(
+                            "      ts=%d kind=%s amount=%d action=%s%n",
+                            event.timestampMs(),
+                            event.damageType(),
+                            event.amount(),
+                            formatGuid(event.actionId())
+                    ));
+            System.out.println("    fflogsFirst");
+            fflogsTargetEvents.stream()
+                    .limit(12)
+                    .forEach(event -> System.out.printf(
+                            "      ts=%d amount=%d hitType=%s ability=%s%n",
+                            event.timestampMs(),
+                            event.amount(),
+                            event.hitType() == null ? "null" : event.hitType().toString(),
+                            formatGuid(event.abilityGameId())
+                    ));
+        }
+    }
+
+    private void printActorFflogsAbilityBuckets(
+            String submissionId,
+            int fightId,
+            String actorType,
+            Set<Integer> exactGuids,
+            List<String> nameTokens,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        List<FflogsApiClient.AbilityDamageEntry> abilities = apiClient.fetchDamageDoneAbilities(
+                report.fflogs().reportCode(),
+                report.fflogs().selectedFightId(),
+                comparison.fflogsActorId()
+        );
+
+        System.out.printf(
+                "%s fflogsAbilityBuckets fight=%d actor=%s%n",
+                label,
+                fightId,
+                comparison.localName()
+        );
+        abilities.stream()
+                .filter(entry -> {
+                    String lowerName = entry.name() == null ? "" : entry.name().toLowerCase(Locale.ROOT);
+                    return (entry.guid() != null && exactGuids.contains(entry.guid()))
+                            || nameTokens.stream().anyMatch(lowerName::contains);
+                })
+                .sorted((left, right) -> Double.compare(right.total(), left.total()))
+                .forEach(entry -> System.out.printf(
+                        "  ability name=%s guid=%s total=%.0f type=%s%n",
+                        entry.name(),
+                        entry.guid() == null ? "null" : formatGuid(entry.guid()),
+                        entry.total(),
+                        entry.type()
+                ));
+        System.out.println("  comparisonLocalTopSkills=" + comparison.localTopSkills());
+        System.out.println("  comparisonFflogsTopSkills=" + comparison.fflogsTopSkills());
+    }
+
+    private void printActorFflogsAbilityVsEvents(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int primaryGuid,
+            int fallbackGuid,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+
+        FflogsApiClient apiClient = buildConfiguredApiClient();
+        long abilityTotal = Math.round(apiClient.fetchDamageDoneAbilities(
+                        report.fflogs().reportCode(),
+                        report.fflogs().selectedFightId(),
+                        comparison.fflogsActorId()
+                ).stream()
+                .filter(entry -> entry.guid() != null && (entry.guid() == primaryGuid || entry.guid() == fallbackGuid))
+                .mapToDouble(FflogsApiClient.AbilityDamageEntry::total)
+                .sum());
+
+        List<FflogsApiClient.DamageEventEntry> events = Stream.concat(
+                        apiClient.fetchDamageDoneEventsByAbility(
+                                report.fflogs().reportCode(),
+                                report.fflogs().selectedFightId(),
+                                comparison.fflogsActorId(),
+                                primaryGuid
+                        ).stream(),
+                        apiClient.fetchDamageDoneEventsByAbility(
+                                report.fflogs().reportCode(),
+                                report.fflogs().selectedFightId(),
+                                comparison.fflogsActorId(),
+                                fallbackGuid
+                        ).stream()
+                )
+                .sorted(Comparator.comparingLong(FflogsApiClient.DamageEventEntry::timestamp))
+                .toList();
+
+        long eventTotal = events.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        System.out.printf(
+                "%s fflogsAbilityVsEvents fight=%d actor=%s primary=%s fallback=%s abilityTotal=%d eventTotal=%d delta=%d hits=%d%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(primaryGuid),
+                formatGuid(fallbackGuid),
+                abilityTotal,
+                eventTotal,
+                eventTotal - abilityTotal,
+                events.size()
+        );
+        events.stream()
+                .limit(12)
+                .forEach(event -> System.out.printf(
+                        "  event ts=%d target=%s amount=%d hitType=%s ability=%s%n",
+                        event.timestamp(),
+                        Integer.toHexString(event.targetId()).toUpperCase(),
+                        event.amount(),
+                        event.hitType() == null ? "null" : event.hitType().toString(),
+                        formatGuid(event.abilityGameId())
+                ));
+    }
+
+    private String classifyTimelinePosition(long tsMs, List<TimelineWindow> windows) {
+        if (windows.isEmpty()) {
+            return "no_fflogs_windows";
+        }
+        if (tsMs < windows.get(0).startMs()) {
+            return "before_first_fflogs_window";
+        }
+        if (tsMs > windows.get(windows.size() - 1).endMs()) {
+            return "after_last_fflogs_window";
+        }
+        return "between_fflogs_windows";
     }
 
     @SuppressWarnings("unchecked")
@@ -6999,6 +8386,40 @@ class SubmissionParityReportDiagnostics {
                     Math.max(existing.lastTimestamp, timestamp)
             );
         }
+    }
+
+    private record TimelineWindow(
+            int targetId,
+            long startMs,
+            long endMs
+    ) {
+    }
+
+    private record AlignedLocalEvent(
+            long timestampMs,
+            long targetId,
+            String targetName,
+            long amount,
+            DamageType damageType,
+            int actionId
+    ) {
+    }
+
+    private record AlignedFflogsEvent(
+            long timestampMs,
+            int targetId,
+            long amount,
+            Integer hitType,
+            int abilityGameId
+    ) {
+    }
+
+    private record TargetAlignment(
+            int fflogsTargetId,
+            TimelineStats fflogsStats,
+            Long localTargetId,
+            TimelineStats localStats
+    ) {
     }
 
 }
