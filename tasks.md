@@ -173,3 +173,51 @@
 - `src/main/java/com/bohouse/pacemeter/application/UnknownStatusDotAttributionResolver.java`
 - `src/test/java/com/bohouse/pacemeter/application/SubmissionParityReportDiagnostics.java`
 - `src/test/java/com/bohouse/pacemeter/application/SubmissionParityRegressionGateTest.java`
+## 2026-04-07 checkpoint
+
+### 이번에 반영된 production 변경
+- `ActIngestionService`에서 live DoT clone/suppress를 제거했다.
+  - `LIVE_DOT_APPLICATION_CLONE_STATUS_TO_ACTION = {}`
+  - `LIVE_DOT_TICK_SUPPRESSED_ACTION_IDS = {}`
+- 대상:
+  - SAM `04CC -> 1D41`
+  - DRG `0A9F -> 64AC`
+
+### 이번에 반영된 diagnostics 정리
+- `ActIngestionService` debug 집계를 `assigned`와 `emitted`로 분리했다.
+- `SubmissionParityReportDiagnostics`의 `dotModeBreakdown` / `dotModeByTarget`는 이제 emitted 기준을 본다.
+- 해석:
+  - 이전 `1D41` 큰 차이 일부는 `status=0 attribution` 자체보다 live path에서 DoT tick이 suppress되던 문제였다.
+
+### 현재 핵심 수치
+- heavy2 `fight=2` / SAM `1D41`
+  - 이전 live surface:
+    - `emittedTotal=553888`
+    - `fflogsAbilityTotal=1542816`
+    - `delta=-988928`
+  - 현재:
+    - `emittedTotal=1755776`
+    - `fflogsAbilityTotal=1542816`
+    - `delta=+212960`
+- heavy2 `fight=2` / DRG `64AC`
+  - `localTotal=2203903`
+  - `fflogsTotal=1934116`
+  - `delta=+269787`
+
+### 현재 검증 상태
+- passed:
+  - `ActIngestionServiceTest`
+  - `SubmissionParityRegressionGateTest`
+
+### 내일 바로 이어갈 작업
+1. `tasks.md`와 `docs/parity-patch-notes.md`의 `2026-04-07` 섹션부터 다시 본다.
+2. baseline 재확인:
+   - `ActIngestionServiceTest`
+   - `SubmissionParityRegressionGateTest`
+3. heavy2 `fight=2` DRG `64AC`를 우선 본다.
+4. `64AC` 잔차 `+269,787`이
+   - live target surface 문제인지
+   - shared GUID semantics 문제인지
+   - FFLogs ability/events surface 차이인지
+   먼저 분리한다.
+5. 다음 production 변경은 `status=0` clamp 재시도가 아니라 `64AC` evidence 분해 이후에만 진행한다.

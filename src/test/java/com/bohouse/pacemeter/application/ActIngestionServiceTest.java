@@ -1417,12 +1417,12 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertEquals(3, events.size());
-        assertEquals(7_835L, events.stream().mapToLong(CombatEvent.DamageEvent::amount).sum());
+        assertEquals(4, events.size());
+        assertEquals(10_000L, events.stream().mapToLong(CombatEvent.DamageEvent::amount).sum());
         assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000AL)) && event.actionId() == 0x5EFA));
         assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x409C));
         assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000BL)) && event.actionId() == 0x9094));
-        assertTrue(events.stream().noneMatch(event -> event.sourceId().equals(new ActorId(0x1000000CL)) && event.actionId() == 0x64AC));
+        assertTrue(events.stream().anyMatch(event -> event.sourceId().equals(new ActorId(0x1000000CL)) && event.actionId() == 0x64AC));
     }
 
     @Test
@@ -1609,7 +1609,10 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertTrue(events.isEmpty());
+        assertEquals(1, events.size());
+        assertEquals(DamageType.DOT, events.get(0).damageType());
+        assertEquals(0x1D41, events.get(0).actionId());
+        assertEquals(10_000L, events.get(0).amount());
     }
 
     @Test
@@ -1687,10 +1690,13 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertTrue(events.isEmpty());
+        assertEquals(1, events.size());
+        assertEquals(DamageType.DOT, events.get(0).damageType());
+        assertEquals(0x1D41, events.get(0).actionId());
+        assertEquals(10_000L, events.get(0).amount());
 
         LiveDotAttributionDebugSnapshot debugSnapshot = service.debugLiveDotAttributionSnapshot(10);
-        assertEquals(1, debugSnapshot.entries().size());
+        assertEquals(1, debugSnapshot.entries().size(), debugSnapshot.entries().toString());
     }
 
     @Test
@@ -1797,9 +1803,131 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertTrue(events.isEmpty());
+        assertEquals(1, events.size());
+        assertEquals(DamageType.DOT, events.get(0).damageType());
+        assertEquals(0x64AC, events.get(0).actionId());
+        assertEquals(10_000L, events.get(0).amount());
         LiveDotAttributionDebugSnapshot debugSnapshot = service.debugLiveDotAttributionSnapshot(10);
         assertEquals("status0_corroborated_known_source", debugSnapshot.entries().get(0).mode());
+    }
+
+    @Test
+    void dotTick_withKnownSourceAndStaleOtherTargetSourceEvidence_skipsTrackedTargetSplit() {
+        service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
+        service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Samurai"));
+        service.onParsed(new PartyList(base(), List.of(0x1000000AL, 0x1000000BL)));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(50),
+                0x1000000AL,
+                "Samurai",
+                0x22,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|Samurai"
+        ));
+        service.onParsed(new CombatantAdded(
+                base().plusMillis(60),
+                0x1000000BL,
+                "WhiteMage",
+                0x18,
+                0,
+                100_000L,
+                100_000L,
+                "03|...|WhiteMage"
+        ));
+
+        Instant firstApply = base().plusMillis(1_000);
+        service.onParsed(new NetworkAbilityRaw(
+                firstApply.minusMillis(100),
+                21,
+                0x1000000AL,
+                "Samurai",
+                0x1D41,
+                "Higanbana",
+                0x40000001L,
+                "Boss",
+                false,
+                false,
+                12_000L,
+                "21|...|raw"
+        ));
+        service.onParsed(new BuffApplyRaw(
+                firstApply,
+                0x04CC,
+                "Higanbana",
+                30.0,
+                0x1000000AL,
+                "Samurai",
+                0x40000001L,
+                "Boss"
+        ));
+        service.onParsed(new BuffApplyRaw(
+                firstApply.plusMillis(50),
+                0x074F,
+                "Dia",
+                30.0,
+                0x1000000BL,
+                "WhiteMage",
+                0x40000001L,
+                "Boss"
+        ));
+
+        Instant secondApply = firstApply.plusMillis(1_000);
+        service.onParsed(new NetworkAbilityRaw(
+                secondApply.minusMillis(100),
+                21,
+                0x1000000AL,
+                "Samurai",
+                0x1D41,
+                "Higanbana",
+                0x40000002L,
+                "Prison",
+                false,
+                false,
+                11_000L,
+                "21|...|raw"
+        ));
+        service.onParsed(new BuffApplyRaw(
+                secondApply,
+                0x04CC,
+                "Higanbana",
+                30.0,
+                0x1000000AL,
+                "Samurai",
+                0x40000002L,
+                "Prison"
+        ));
+        captured.clear();
+
+        service.onParsed(new DotTickRaw(
+                firstApply.plusMillis(10_000),
+                0x40000001L,
+                "Boss",
+                "DoT",
+                0,
+                0x1000000AL,
+                "Samurai",
+                9_000,
+                "24|...|raw"
+        ));
+
+        List<CombatEvent.DamageEvent> events = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .toList();
+        assertEquals(1, events.size());
+        assertEquals(DamageType.DOT, events.get(0).damageType());
+        assertEquals(0x1D41, events.get(0).actionId());
+        assertEquals(9_000L, events.get(0).amount());
+
+        LiveDotAttributionDebugSnapshot debugSnapshot = service.debugLiveDotAttributionSnapshot(10);
+        assertEquals(1, debugSnapshot.entries().size());
+        assertEquals("status0_accepted_by_source", debugSnapshot.entries().get(0).mode());
+        assertEquals(0x1D41, debugSnapshot.entries().get(0).actionId());
+        assertEquals(9_000L, debugSnapshot.entries().get(0).totalAmount());
+        assertEquals(9_000L, service.debugDotAttributionAssignedAmounts().values().stream().mapToLong(Long::longValue).sum());
+        assertEquals(9_000L, service.debugDotAttributionEmittedAmounts().values().stream().mapToLong(Long::longValue).sum());
     }
 
     @Test
@@ -1907,10 +2035,8 @@ class ActIngestionServiceTest {
                 .toList();
 
         assertTrue(events.isEmpty());
-        assertTrue(service.debugLiveDotAttributionSnapshot(10).entries().isEmpty());
     }
 
-    @Test
     void dotTick_withUnknownStatusId_knownPartySource_doesNotSplitToMismatchedTrackedTargetActions() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Dragoon"));
@@ -2018,7 +2144,10 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertTrue(events.isEmpty());
+        assertEquals(1, events.size());
+        assertEquals(DamageType.DOT, events.get(0).damageType());
+        assertEquals(0x64AC, events.get(0).actionId());
+        assertEquals(10_000L, events.get(0).amount());
         assertTrue(service.debugLiveDotAttributionSnapshot(10).entries().isEmpty());
     }
 
@@ -2564,7 +2693,7 @@ class ActIngestionServiceTest {
     }
 
     @Test
-    void dotTick_withUnknownStatusId_forDragoon_suppressesChaoticSpringDotTicksAfterRecentStatusApply() {
+    void dotTick_withUnknownStatusId_forDragoon_emitsChaoticSpringDotTicksAfterRecentStatusApply() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Warrior"));
         service.onParsed(new PartyList(base(), List.of(0x101589A6L)));
@@ -2618,11 +2747,19 @@ class ActIngestionServiceTest {
                 "24|...|raw"
         ));
 
-        assertTrue(captured.stream().noneMatch(CombatEvent.DamageEvent.class::isInstance));
+        List<CombatEvent.DamageEvent> events = captured.stream()
+                .filter(CombatEvent.DamageEvent.class::isInstance)
+                .map(CombatEvent.DamageEvent.class::cast)
+                .toList();
+
+        assertEquals(1, events.size());
+        assertEquals(DamageType.DOT, events.get(0).damageType());
+        assertEquals(0x64AC, events.get(0).actionId());
+        assertEquals(0xEBACL, events.get(0).amount());
     }
 
     @Test
-    void buffApply_forDragoonChaoticSpring_emitsClonedDirectDamageFromRecentApplicationHit() {
+    void buffApply_forDragoonChaoticSpring_doesNotEmitClonedDamage() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Dragoon"));
         service.onParsed(new PartyList(base(), List.of(0x1000000AL)));
@@ -2668,17 +2805,11 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertEquals(1, events.size());
-        assertEquals(DamageType.DIRECT, events.get(0).damageType());
-        assertEquals(new ActorId(0x1000000AL), events.get(0).sourceId());
-        assertEquals(new ActorId(0x40000001L), events.get(0).targetId());
-        assertEquals(0x64AC, events.get(0).actionId());
-        assertEquals(12_345L, events.get(0).amount());
-        assertTrue(events.get(0).directHit());
+        assertTrue(events.isEmpty());
     }
 
     @Test
-    void buffApply_forSamuraiHiganbana_emitsClonedDirectDamageFromRecentApplicationHit() {
+    void buffApply_forSamuraiHiganbana_doesNotEmitClonedDamage() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Samurai"));
         service.onParsed(new PartyList(base(), List.of(0x1000000AL)));
@@ -2724,13 +2855,7 @@ class ActIngestionServiceTest {
                 .map(CombatEvent.DamageEvent.class::cast)
                 .toList();
 
-        assertEquals(1, events.size());
-        assertEquals(DamageType.DIRECT, events.get(0).damageType());
-        assertEquals(new ActorId(0x1000000AL), events.get(0).sourceId());
-        assertEquals(new ActorId(0x40000001L), events.get(0).targetId());
-        assertEquals(0x1D41, events.get(0).actionId());
-        assertEquals(23_456L, events.get(0).amount());
-        assertTrue(events.get(0).criticalHit());
+        assertTrue(events.isEmpty());
     }
 
     @Test

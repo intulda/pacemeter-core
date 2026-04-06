@@ -1,5 +1,68 @@
 # Parity Patch Notes
 
+## 2026-04-07
+
+### Live clone+suppress rollback
+- `ActIngestionService`의 live DoT clone/suppress 규칙을 제거했다.
+  - `LIVE_DOT_APPLICATION_CLONE_STATUS_TO_ACTION = {}`
+  - `LIVE_DOT_TICK_SUPPRESSED_ACTION_IDS = {}`
+- 대상:
+  - SAM `04CC -> 1D41`
+  - DRG `0A9F -> 64AC`
+- 이유:
+  - 최근 diagnostics로 확인된 실제 병목은 `status=0 attribution` 과대가 아니라,
+    live path에서 `1D41/64AC` DoT tick 자체가 suppress되고 있었다는 점이다.
+  - 기존 `dotModeBreakdown`은 pre-validation assignment를 보고 있어서,
+    emitted live surface와 다른 수치를 남은 문제처럼 보여주고 있었다.
+
+### Diagnostics fix
+- `ActIngestionService` debug 집계를 `assigned`와 `emitted`로 분리했다.
+- `SubmissionParityReportDiagnostics`의 `dotModeBreakdown` / `dotModeByTarget`는
+  이제 `debugDotAttributionEmittedAmounts()` / `debugDotAttributionEmittedHitCounts()`를 본다.
+- 의미:
+  - 앞으로 diagnostics에서 보이는 mode total은 실제 live emit 기준이다.
+  - `1D41`의 거대한 `status0_tracked_target_split` 잔차는 emitted 문제가 아니라
+    pre-validation assignment surface였다는 점이 정리됐다.
+
+### Observed impact
+- heavy2 `fight=2`, SAM `1D41`
+  - 이전 live surface:
+    - `emittedTotal=553888`
+    - `fflogsAbilityTotal=1542816`
+    - `delta=-988928`
+  - 현재:
+    - `emittedTotal=1755776`
+    - `raw21Total=276944`
+    - `inferredDotTotal=1478832`
+    - `fflogsAbilityTotal=1542816`
+    - `delta=+212960`
+- 즉 `1D41`는 직전 과소 `-988,928`에서 `+212,960`까지 회복됐다.
+- heavy2 `fight=2`, DRG `64AC`
+  - `localTotal=2203903`
+  - `fflogsTotal=1934116`
+  - `delta=+269787`
+  - `64AC`는 여전히 남은 핵심 잔차다.
+
+### Verification
+- passed:
+  - `ActIngestionServiceTest`
+  - `SubmissionParityRegressionGateTest`
+- note:
+  - diagnostics long-run은 Windows/Gradle timeout이 걸릴 수 있으므로
+    필요한 경우 단일 diagnostic test로 수치를 다시 뽑는다.
+
+### Next step
+1. heavy2 `fight=2` DRG `64AC`를 우선 본다.
+2. `64AC` 남은 `+269,787`이 live target surface 문제인지,
+   shared GUID / FFLogs ability semantics 문제인지 다시 분리한다.
+3. `SubmissionParityReportDiagnostics`에서
+   - `64AC directVsDot`
+   - `64AC target parity`
+   - `64AC abilityVsEvents`
+   를 한 번에 다시 확인한다.
+4. `1D41`는 당분간 attribution clamp보다 현재 emitted baseline을 유지하고,
+   `64AC` 쪽을 다음 production 변경 대상으로 삼는다.
+
 ## 2026-04-01
 
 ### Priority reminder

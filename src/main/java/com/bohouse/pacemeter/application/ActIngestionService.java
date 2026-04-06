@@ -39,12 +39,8 @@ public final class ActIngestionService {
     private static final double ACTIVE_DOT_SUBSET_WEIGHT_COVERAGE_THRESHOLD = 0.50;
     private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);
     private static final Duration LIVE_DOT_APPLICATION_CLONE_WINDOW = Duration.ofSeconds(1);
-    private static final Map<Integer, Integer> LIVE_DOT_APPLICATION_CLONE_STATUS_TO_ACTION = Map.of(
-            0x04CC, 0x1D41,
-            0x0A9F, 0x64AC
-    );
-    private static final Set<Integer> LIVE_DOT_TICK_SUPPRESSED_ACTION_IDS =
-            Set.copyOf(LIVE_DOT_APPLICATION_CLONE_STATUS_TO_ACTION.values());
+    private static final Map<Integer, Integer> LIVE_DOT_APPLICATION_CLONE_STATUS_TO_ACTION = Map.of();
+    private static final Set<Integer> LIVE_DOT_TICK_SUPPRESSED_ACTION_IDS = Set.of();
     private static final Duration SELF_JOB_METADATA_GRACE = Duration.ofMillis(1500);
     private static final String SELF_JOB_PREF_NODE = "live-self-job";
     private static final String ACTOR_JOB_PREF_NODE = "live-actor-job";
@@ -85,6 +81,8 @@ public final class ActIngestionService {
     private final Map<String, Long> dotAttributionModeCounts = new HashMap<>();
     private final Map<String, Long> dotAttributionAssignedAmountByKey = new HashMap<>();
     private final Map<String, Long> dotAttributionAssignedHitCountByKey = new HashMap<>();
+    private final Map<String, Long> dotAttributionEmittedAmountByKey = new HashMap<>();
+    private final Map<String, Long> dotAttributionEmittedHitCountByKey = new HashMap<>();
     private final Deque<DotAttributionAssignment> recentDotAttributionAssignments = new ArrayDeque<>();
     private final Map<LiveDotApplicationCloneKey, RecentDamageCloneCandidate> recentDotApplicationCloneCandidates = new HashMap<>();
     private final StatusZeroDotAllocationPlanner statusZeroDotAllocationPlanner = new StatusZeroDotAllocationPlanner();
@@ -896,6 +894,42 @@ public final class ActIngestionService {
         return trackedDots.stream().noneMatch(trackedDot -> trackedDot.actionId() == recentSourceActionId);
     }
 
+    private boolean shouldSuppressKnownSourceStaleOtherTargetTrackedTargetSplit(
+            DotTickRaw dot,
+            boolean acceptedBySource,
+            List<TrackedDotState> trackedDots
+    ) {
+        if (!acceptedBySource || dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
+            return false;
+        }
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return false;
+        }
+        if (countTrackedTargetsWithActiveDots() <= 1 || trackedDots.isEmpty()) {
+            return false;
+        }
+        List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
+        if (sourceTrackedDots.isEmpty()) {
+            return false;
+        }
+        if (trackedDots.stream().noneMatch(trackedDot -> trackedDot.sourceId() != dot.sourceId())) {
+            return false;
+        }
+        SourceDotEvidence actionEvidence = unknownStatusDotActionEvidenceBySource.get(dot.sourceId());
+        SourceDotEvidence statusEvidence = unknownStatusDotStatusEvidenceBySource.get(dot.sourceId());
+        if (actionEvidence == null || statusEvidence == null) {
+            return false;
+        }
+        Instant cutoff = dot.ts().minusMillis(8_000L);
+        if (actionEvidence.appliedAt().isAfter(cutoff) || statusEvidence.appliedAt().isAfter(cutoff)) {
+            return false;
+        }
+        if (actionEvidence.targetId() == dot.targetId() || statusEvidence.targetId() == dot.targetId()) {
+            return false;
+        }
+        return actionEvidence.targetId() == statusEvidence.targetId();
+    }
+
     private boolean shouldRequireRecentExactEvidenceForKnownSourceAcceptedBySource(DotTickRaw dot) {
         if (dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
             return false;
@@ -1124,6 +1158,14 @@ public final class ActIngestionService {
 
     Map<String, Long> debugDotAttributionAssignedHitCounts() {
         return Map.copyOf(dotAttributionAssignedHitCountByKey);
+    }
+
+    Map<String, Long> debugDotAttributionEmittedAmounts() {
+        return Map.copyOf(dotAttributionEmittedAmountByKey);
+    }
+
+    Map<String, Long> debugDotAttributionEmittedHitCounts() {
+        return Map.copyOf(dotAttributionEmittedHitCountByKey);
     }
 
     public LiveDotAttributionDebugSnapshot debugLiveDotAttributionSnapshot(long lookbackSeconds) {
@@ -1717,8 +1759,8 @@ public final class ActIngestionService {
                 return;
             }
 
+            List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
             if (!acceptedBySource) {
-                List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
                 if (!sourceTrackedDots.isEmpty()) {
                     long remaining = dot.damage();
                     for (int i = 0; i < sourceTrackedDots.size(); i++) {
@@ -1743,6 +1785,7 @@ public final class ActIngestionService {
             List<TrackedDotState> trackedDots = resolveTrackedTargetDots(dot);
             if (!trackedDots.isEmpty()
                     && !suppressKnownSourceGuidMissingFallback
+                    && !shouldSuppressKnownSourceStaleOtherTargetTrackedTargetSplit(dot, acceptedBySource, trackedDots)
                     && !shouldSuppressKnownSourceMismatchedTrackedTargetSplit(dot, trackedDots)
                     && !(dot.sourceId() == UNKNOWN_ACTOR_ID && countTrackedTargetsWithActiveDots() > 1)) {
                 long remaining = dot.damage();
@@ -1847,7 +1890,11 @@ public final class ActIngestionService {
                 amount
         ));
         pruneRecentDotAttributionAssignments(attributionTs);
-        emitValidatedDotDamageEvent(tsMs, sourceId, sourceName, targetId, actionId, amount);
+        boolean emitted = emitValidatedDotDamageEvent(tsMs, sourceId, sourceName, targetId, actionId, amount);
+        if (emitted) {
+            dotAttributionEmittedAmountByKey.merge(key, amount, Long::sum);
+            dotAttributionEmittedHitCountByKey.merge(key, 1L, Long::sum);
+        }
     }
 
     private void pruneRecentDotAttributionAssignments(Instant now) {
@@ -1865,7 +1912,7 @@ public final class ActIngestionService {
                 + "|action=" + Integer.toHexString(actionId).toUpperCase();
     }
 
-    private void emitValidatedDotDamageEvent(
+    private boolean emitValidatedDotDamageEvent(
             long tsMs,
             ActorId sourceId,
             String sourceName,
@@ -1874,10 +1921,10 @@ public final class ActIngestionService {
             long amount
     ) {
         if (amount <= 0) {
-            return;
+            return false;
         }
         if (LIVE_DOT_TICK_SUPPRESSED_ACTION_IDS.contains(actionId)) {
-            return;
+            return false;
         }
         if (INVALID_DOT_ACTION_IDS.contains(actionId)) {
             logger.warn(
@@ -1888,7 +1935,7 @@ public final class ActIngestionService {
                     Long.toHexString(targetId.value()).toUpperCase(),
                     amount
             );
-            return;
+            return false;
         }
         combatEventPort.onEvent(new CombatEvent.DamageEvent(
                 tsMs,
@@ -1902,6 +1949,7 @@ public final class ActIngestionService {
                 false,
                 false
         ));
+        return true;
     }
 
     private int toTrackedDotActionId(int statusId) {
