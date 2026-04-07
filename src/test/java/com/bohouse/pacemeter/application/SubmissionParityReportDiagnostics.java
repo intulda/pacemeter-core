@@ -4018,6 +4018,76 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugHeavy2Fight2DragoonDirectVsDot_prints64acDecomposition() throws Exception {
+        printActorGuidDirectVsDot(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2DragoonWindowedLocalTotals_prints64acDamageInsideFflogsWindows() throws Exception {
+        printActorWindowedLocalTotals(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                0x0A9F,
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2DragoonHitLeak_prints64acLocalHitsOutsideFflogsWindows() throws Exception {
+        printActorHitLeakAgainstFflogsWindows(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                0x0A9F,
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2DragoonFflogsAbilityVsEvents_printsChaoticSpringSurfaceDelta() throws Exception {
+        printActorFflogsAbilityVsEvents(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                0x0A9F,
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2DragoonStatus0TargetSourceBreakdown_prints64acTargetMix() throws Exception {
+        printStatus0TargetSourceBreakdown(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2DragoonAlignedEventDiff_prints64acLocalVsFflogsSequences() throws Exception {
+        printActorAlignedEventDiff(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                0x0A9F,
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
     void debugHeavy4Fight5DragoonTargetParity_printsChaoticSpringTargetDeltas() throws Exception {
         printActorAbilityTargetParity(
                 "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
