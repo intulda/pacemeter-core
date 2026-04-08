@@ -847,6 +847,78 @@ public final class ActIngestionService {
         return fallbackWeights;
     }
 
+    private List<StatusZeroDotAllocationPlanner.Allocation> resolveKnownSourceTwoTargetWeightedTrackedTargetSplit(
+            DotTickRaw dot,
+            boolean acceptedBySource,
+            List<TrackedDotState> trackedDots
+    ) {
+        if (!acceptedBySource || dot.statusId() != 0 || trackedDots.size() < 2) {
+            return List.of();
+        }
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return List.of();
+        }
+        if (countTrackedTargetsWithActiveDots() != 2) {
+            return List.of();
+        }
+
+        Integer recentExactActionId = resolveRecentExactUnknownStatusActionId(dot, KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS);
+        if (recentExactActionId == null) {
+            return List.of();
+        }
+        if (recentExactActionId != 0x64AC) {
+            return List.of();
+        }
+
+        List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
+        if (sourceTrackedDots.size() != 1
+                || sourceTrackedDots.get(0).actionId() != recentExactActionId
+                || sourceTrackedDots.get(0).actionId() != 0x64AC) {
+            return List.of();
+        }
+
+        StatusSnapshotState snapshot = latestStatusSnapshotsByTarget.get(dot.targetId());
+        if (snapshot == null
+                || Duration.between(snapshot.ts(), dot.ts()).abs().compareTo(STATUS_SNAPSHOT_REDISTRIBUTION_WINDOW) > 0) {
+            return List.of();
+        }
+
+        Map<TrackedDotKey, Double> weightedKeys = new HashMap<>();
+        for (TrackedDotState trackedDot : trackedDots) {
+            TrackedDotKey key = new TrackedDotKey(trackedDot.sourceId(), trackedDot.actionId());
+            Double weight = snapshot.weights().get(key);
+            if (weight != null && weight > 0.0) {
+                weightedKeys.put(key, weight);
+            }
+        }
+        if (weightedKeys.size() < 2) {
+            return List.of();
+        }
+
+        TrackedDotKey sameSourceKey = new TrackedDotKey(dot.sourceId(), recentExactActionId);
+        Double sameSourceWeight = weightedKeys.get(sameSourceKey);
+        if (sameSourceWeight == null || sameSourceWeight <= 0.0) {
+            return List.of();
+        }
+
+        boolean hasForeignWeight = weightedKeys.keySet().stream()
+                .anyMatch(key -> key.sourceId() != dot.sourceId() && weightedKeys.get(key) > 0.0);
+        if (!hasForeignWeight) {
+            return List.of();
+        }
+
+        weightedKeys.put(sameSourceKey, sameSourceWeight * 0.5);
+
+        List<StatusZeroDotAllocationPlanner.Candidate> candidates = weightedKeys.entrySet().stream()
+                .map(entry -> new StatusZeroDotAllocationPlanner.Candidate(
+                        entry.getKey().sourceId(),
+                        entry.getKey().actionId(),
+                        entry.getValue()
+                ))
+                .toList();
+        return statusZeroDotAllocationPlanner.allocate(dot.damage(), candidates);
+    }
+
     private boolean shouldSuppressUnknownMultiTargetFallback(DotTickRaw dot) {
         if (dot.sourceId() != UNKNOWN_ACTOR_ID) {
             return false;
@@ -1788,6 +1860,23 @@ public final class ActIngestionService {
                     && !shouldSuppressKnownSourceStaleOtherTargetTrackedTargetSplit(dot, acceptedBySource, trackedDots)
                     && !shouldSuppressKnownSourceMismatchedTrackedTargetSplit(dot, trackedDots)
                     && !(dot.sourceId() == UNKNOWN_ACTOR_ID && countTrackedTargetsWithActiveDots() > 1)) {
+                List<StatusZeroDotAllocationPlanner.Allocation> weightedAllocations =
+                        resolveKnownSourceTwoTargetWeightedTrackedTargetSplit(dot, acceptedBySource, trackedDots);
+                if (!weightedAllocations.isEmpty()) {
+                    for (StatusZeroDotAllocationPlanner.Allocation allocation : weightedAllocations) {
+                        emitDotDamageWithAttribution(
+                                "status0_weighted_tracked_target_split",
+                                dot.ts(),
+                                tsMs,
+                                new ActorId(allocation.sourceId()),
+                                actorNameById.getOrDefault(allocation.sourceId(), dot.sourceName()),
+                                new ActorId(dot.targetId()),
+                                allocation.actionId(),
+                                allocation.amount()
+                        );
+                    }
+                    return;
+                }
                 long remaining = dot.damage();
                 for (int i = 0; i < trackedDots.size(); i++) {
                     TrackedDotState trackedDot = trackedDots.get(i);

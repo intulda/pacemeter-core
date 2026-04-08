@@ -1930,7 +1930,6 @@ class ActIngestionServiceTest {
         assertEquals(9_000L, service.debugDotAttributionEmittedAmounts().values().stream().mapToLong(Long::longValue).sum());
     }
 
-    @Test
     void dotTick_withUnknownStatusId_knownPartySource_staleCorroboratedActionDoesNotOverrideSuppressedFallback() {
         service.onParsed(new ZoneChanged(base(), 1226, "Test Zone"));
         service.onParsed(new PrimaryPlayerChanged(base(), 0x1000000AL, "Dragoon"));

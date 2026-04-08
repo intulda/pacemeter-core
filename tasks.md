@@ -265,3 +265,28 @@
    - FFLogs ability/events surface 차이인지
    먼저 분리한다.
 5. 다음 production 변경은 `status=0` clamp 재시도가 아니라 `64AC` evidence 분해 이후에만 진행한다.
+## 2026-04-09 세션 체크포인트
+
+### 현재 관찰
+- heavy2 `fight=2` DRG `64AC` weighted 경로는 same-source `64AC`보다 foreign action 쪽으로 더 많이 샌다.
+- biggest weighted foreign recipient는 SAM `1D41`이고, 그다음이 `409C`, `4094`, `9094`다.
+- heavy2 `fight=2` SAM `1D41` weighted amount는 Samurai raw tick이 아니라 DRG `64AC` raw tick에서 만들어진다.
+
+### 검증한 가설
+- weighted helper 안에서 `64AC -> foreign 1D41`만 차단
+
+### 결과
+- 기각 후 원복
+- heavy2 DRG `64AC`가 `delta=+441523`까지 다시 튐
+- gate는 통과했지만 selected-fight parity는 분명히 후퇴
+
+### 현재 production 상태
+- 채택된 `64AC` weighted helper same-source damp (`* 0.5`)만 유지
+- 원복한 `1D41` 전용 차단은 유지하지 않음
+
+### 다음 시작점
+- heavy2 `64AC` weighted foreign-action mix에서 다시 시작
+- 한 action만 막지 말고 아래 세 그룹 비교부터 재개
+  - same-source `64AC`
+  - healer DoT action (`4094`, `409C`, `9094`)
+  - Samurai `1D41`

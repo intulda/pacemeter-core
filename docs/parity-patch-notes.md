@@ -766,3 +766,46 @@
 - 현재 live attribution 관점의 의미:
   - 64AC emitted mode breakdown에는 여전히 status0_tracked_target_split이 보이지만, 이번 diagnostics만으로 또 다른 전역 suppression을 정당화할 수는 없다.
   - 다음 안전한 단계는 attribution 규칙을 건드리기 전에 FFLogs/local surface 차이를 evidence 기준으로 더 분해하는 것이다.
+## 2026-04-09 체크포인트
+
+### 확인된 사실
+- heavy2 `fight=2` SAM `1D41`의 weighted damage는 Samurai raw tick에서 나오지 않는다.
+- weighted `1D41` 버킷은 DRG `64AC` raw `status=0` tick이 foreign action으로 새면서 만들어진다.
+- 새 진단 `debugHeavy2Fight2SamuraiWeightedSourceContributors_prints1d41RawContributors`에서 확인한 것:
+  - `rawSource=구려(10256964)`
+  - `recentExact=64AC`
+  - `sourceTracked=10256964:64AC`
+- 새 진단 `debugHeavy2Fight2DragoonWeightedActionRecipients_prints64acForeignActionMix`에서 확인한 것:
+  - weighted foreign recipient 최댓값은 `1D41`
+  - 그다음이 `409C`, `4094`, `9094`
+  - same-source `64AC`보다 foreign-action 총량이 더 크다
+
+### 실패한 시도
+- weighted helper 안에서 `64AC -> foreign 1D41` 누수만 막는 아주 좁은 production 패치를 넣어봤다.
+- 결과:
+  - heavy2 DRG `64AC`가 다시 악화됐다
+  - `localTotal=2227512`
+  - `fflogsTotal=1785989`
+  - `delta=+441523`
+- 해당 패치는 즉시 원복했다.
+
+### 교차 fight 해석
+- heavy4 `fight=5`, lindwurm `fight=8`에는 같은 의미의 `weightedActionRecipients` 출력이 보이지 않는다.
+- 현재 해석:
+  - weighted foreign-action mix는 heavy2 특이 contamination 패턴이다
+  - 하지만 `1D41`만 제거하는 건 너무 좁아서 `64AC`가 다시 튄다
+
+### 현재 production 상태
+- 이전에 채택했던 production 변경만 유지한다:
+  - `64AC` weighted helper의 same-source weight damp (`* 0.5`)
+- 원복한 `1D41` 전용 차단은 유지하지 않는다.
+- 원복 후 검증:
+  - `ActIngestionServiceTest` 통과
+  - `SubmissionParityRegressionGateTest` 통과
+
+### 다음 작업
+- heavy2 `64AC` weighted foreign-action mix를 `1D41` 하나만 막지 말고 그룹 단위로 다시 분해한다.
+- 다음 production 후보는 아래 세 그룹을 설명 가능하게 분리하는 쪽이어야 한다:
+  - same-source `64AC`
+  - healer DoT action (`4094`, `409C`, `9094`)
+  - Samurai `1D41`
