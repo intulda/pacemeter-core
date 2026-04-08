@@ -72,6 +72,54 @@
    - `SubmissionParityRegressionGateTest`
    - 가능하면 rollup
 
+## 하네스 운영 규약
+- 모든 구현 세션은 아래 루프를 강제로 따른다.
+  1. `tasks.md`와 `docs/parity-patch-notes.md`의 최신 checkpoint를 먼저 확인한다.
+  2. baseline 테스트 상태를 다시 확인한다.
+  3. selected fight 진단으로 원인을 분해한다.
+  4. explainable한 가설 1개만 production에 반영한다.
+  5. 즉시 regression gate와 관련 diagnostics를 다시 확인한다.
+- 한 번에 여러 attribution 규칙을 동시에 바꾸지 않는다.
+- production 변경 전에 반드시 아래 두 문장을 설명 가능해야 한다.
+  - 왜 heavy2에는 이득인지
+  - 왜 heavy4/lindwurm/all-fights gate는 덜 건드리는지
+- 구현 중 관찰 결과가 initial hypothesis와 어긋나면, 기존 가설을 밀어붙이지 말고 진단 단계로 되돌아간다.
+
+## 응답 포맷 규약
+- 작업 결과 보고는 가능하면 아래 순서를 유지한다.
+  1. 현재 관찰
+  2. 가설
+  3. 수정 범위
+  4. 검증 결과
+  5. 남은 리스크
+- "수치가 좋아졌다"만으로 변경을 정당화하지 않는다.
+- selected fight 개선을 보고할 때는 heavy4/lindwurm/gate 영향도 함께 적는다.
+
+## 작업 요청 템플릿
+- 새 작업은 가능하면 아래 포맷으로 시작한다.
+```text
+목표:
+- 이번 턴에 줄이고 싶은 residual 또는 확인하고 싶은 현상 1개
+
+고정 제약:
+- live parity 우선
+- selected fight 단일 튜닝 금지
+- heavy4/lindwurm/all-fights gate 유지
+- explainable attribution만 허용
+
+필수 절차:
+1. tasks.md / parity notes 확인
+2. baseline 테스트 확인
+3. heavy2/heavy4/lindwurm 관련 진단
+4. 가설 1개만 수정
+5. gate 재검증
+
+완료 조건:
+- 변경 이유 설명 가능
+- gate 유지
+- 남은 리스크 명시
+```
+
 ## 허용되는 규칙 정리
 - 개발을 막는 불필요한 규칙은 제거해도 된다.
 - 다만 아래는 유지한다:

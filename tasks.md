@@ -1,5 +1,49 @@
 # paceMeter 작업 메모
 
+## 세션 하네스
+
+### 이번 저장소에서 고정할 작업 루프
+1. `tasks.md`와 `docs/parity-patch-notes.md` 최신 checkpoint 확인
+2. baseline 확인
+   - `ActIngestionServiceTest`
+   - `SubmissionParityRegressionGateTest`
+3. selected fight 진단으로 원인 분해
+4. explainable한 가설 1개만 수정
+5. 즉시 gate와 관련 diagnostics 재확인
+
+### 세션 시작 템플릿
+- 목표:
+  - 이번 턴에 줄일 residual 1개 또는 검증할 현상 1개
+- 왜 이걸 먼저 보나:
+  - heavy2 우선인지, shared GUID인지, target 오염인지 한 줄로 명시
+- 수정 전 필수 확인:
+  - baseline 테스트 상태
+  - 관련 selected fight diagnostics
+- 수정 범위:
+  - 바꾸는 메서드/규칙 1개
+- 완료 조건:
+  - gate 유지
+  - 변경 이유 설명 가능
+  - 남은 리스크 기록
+
+### 세션 종료 기록 포맷
+- 현재 관찰:
+  - 이번 턴에서 새로 확인한 사실
+- 가설:
+  - 채택한 설명 가능한 가설 1개
+- 수정 범위:
+  - 실제 수정 파일/메서드
+- 검증 결과:
+  - baseline / diagnostics / gate 결과
+- 남은 리스크:
+  - 다음 턴에 바로 이어질 unresolved point
+
+### 이번 저장소에서 하지 말 것
+- selected fight 하나만 맞추는 튜닝
+- 근거 없는 fallback 우선순위 뒤집기
+- 전역 clamp 재시도 반복
+- baseline/gate 미확인 상태로 production 변경 진행
+
 ## 2026-04-03 현재 기준
 
 ### 최우선 목표
