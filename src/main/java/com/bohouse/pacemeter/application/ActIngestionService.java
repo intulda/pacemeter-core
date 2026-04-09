@@ -30,6 +30,7 @@ public final class ActIngestionService {
     private static final long UNKNOWN_STATUS_DOT_WINDOW_MS = 90_000L;
     private static final long CORROBORATED_KNOWN_SOURCE_WINDOW_MS = 15_000L;
     private static final long KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS = 15_000L;
+    private static final long KNOWN_SOURCE_STALE_OTHER_TARGET_WINDOW_MS = 4_000L;
     private static final Duration STATUS_SNAPSHOT_REDISTRIBUTION_WINDOW = Duration.ofMillis(10000);
     private static final Duration STATUS_SIGNAL_REDISTRIBUTION_WINDOW = Duration.ofMillis(3500);
     private static final Duration LIVE_DOT_ATTRIBUTION_DEBUG_RETENTION = Duration.ofSeconds(30);
@@ -37,6 +38,9 @@ public final class ActIngestionService {
     private static final double STATUS_SIGNAL_WEIGHT_BLEND_ALPHA = 0.80;
     private static final double STATUS0_SOURCE_HINT_WEIGHT = 1.0;
     private static final double ACTIVE_DOT_SUBSET_WEIGHT_COVERAGE_THRESHOLD = 0.50;
+    private static final double FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD = 0.42;
+    private static final double FOREIGN_DOMINANT_ACTION_REDUCTION_FACTOR = 0.71;
+    private static final double KNOWN_SOURCE_TWO_TARGET_SAME_SOURCE_WEIGHT_FACTOR = 0.34;
     private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);
     private static final Duration LIVE_DOT_APPLICATION_CLONE_WINDOW = Duration.ofSeconds(1);
     private static final Map<Integer, Integer> LIVE_DOT_APPLICATION_CLONE_STATUS_TO_ACTION = Map.of();
@@ -866,14 +870,9 @@ public final class ActIngestionService {
         if (recentExactActionId == null) {
             return List.of();
         }
-        if (recentExactActionId != 0x64AC) {
-            return List.of();
-        }
-
         List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
         if (sourceTrackedDots.size() != 1
-                || sourceTrackedDots.get(0).actionId() != recentExactActionId
-                || sourceTrackedDots.get(0).actionId() != 0x64AC) {
+                || sourceTrackedDots.get(0).actionId() != recentExactActionId) {
             return List.of();
         }
 
@@ -907,7 +906,8 @@ public final class ActIngestionService {
             return List.of();
         }
 
-        weightedKeys.put(sameSourceKey, sameSourceWeight * 0.5);
+        rebalanceDominantForeignAction(weightedKeys, dot.sourceId());
+        weightedKeys.put(sameSourceKey, sameSourceWeight * KNOWN_SOURCE_TWO_TARGET_SAME_SOURCE_WEIGHT_FACTOR);
 
         List<StatusZeroDotAllocationPlanner.Candidate> candidates = weightedKeys.entrySet().stream()
                 .map(entry -> new StatusZeroDotAllocationPlanner.Candidate(
@@ -917,6 +917,76 @@ public final class ActIngestionService {
                 ))
                 .toList();
         return statusZeroDotAllocationPlanner.allocate(dot.damage(), candidates);
+    }
+
+    private void rebalanceDominantForeignAction(
+            Map<TrackedDotKey, Double> weightedKeys,
+            long currentSourceId
+    ) {
+        Map<Integer, Double> foreignActionTotals = new HashMap<>();
+        for (Map.Entry<TrackedDotKey, Double> entry : weightedKeys.entrySet()) {
+            TrackedDotKey key = entry.getKey();
+            double weight = entry.getValue();
+            if (key.sourceId() == currentSourceId || weight <= 0.0) {
+                continue;
+            }
+            foreignActionTotals.merge(key.actionId(), weight, Double::sum);
+        }
+        if (foreignActionTotals.size() < 3) {
+            return;
+        }
+
+        double foreignTotal = foreignActionTotals.values().stream().mapToDouble(Double::doubleValue).sum();
+        if (foreignTotal <= 0.0) {
+            return;
+        }
+        Map.Entry<Integer, Double> dominant = foreignActionTotals.entrySet().stream()
+                .max(Map.Entry.comparingByValue())
+                .orElse(null);
+        if (dominant == null) {
+            return;
+        }
+        double dominantShare = dominant.getValue() / foreignTotal;
+        if (dominantShare < FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD) {
+            return;
+        }
+
+        List<TrackedDotKey> dominantKeys = weightedKeys.keySet().stream()
+                .filter(key -> key.sourceId() != currentSourceId)
+                .filter(key -> key.actionId() == dominant.getKey())
+                .filter(key -> weightedKeys.get(key) > 0.0)
+                .toList();
+        List<TrackedDotKey> otherForeignKeys = weightedKeys.keySet().stream()
+                .filter(key -> key.sourceId() != currentSourceId)
+                .filter(key -> key.actionId() != dominant.getKey())
+                .filter(key -> weightedKeys.get(key) > 0.0)
+                .toList();
+        if (dominantKeys.isEmpty() || otherForeignKeys.isEmpty()) {
+            return;
+        }
+
+        double removedWeight = 0.0;
+        for (TrackedDotKey key : dominantKeys) {
+            double original = weightedKeys.get(key);
+            double adjusted = original * FOREIGN_DOMINANT_ACTION_REDUCTION_FACTOR;
+            weightedKeys.put(key, adjusted);
+            removedWeight += (original - adjusted);
+        }
+        if (removedWeight <= 0.0) {
+            return;
+        }
+
+        double otherTotal = otherForeignKeys.stream()
+                .mapToDouble(key -> weightedKeys.getOrDefault(key, 0.0))
+                .sum();
+        if (otherTotal <= 0.0) {
+            return;
+        }
+        for (TrackedDotKey key : otherForeignKeys) {
+            double base = weightedKeys.getOrDefault(key, 0.0);
+            double share = base / otherTotal;
+            weightedKeys.put(key, base + (removedWeight * share));
+        }
     }
 
     private boolean shouldSuppressUnknownMultiTargetFallback(DotTickRaw dot) {
@@ -992,7 +1062,7 @@ public final class ActIngestionService {
         if (actionEvidence == null || statusEvidence == null) {
             return false;
         }
-        Instant cutoff = dot.ts().minusMillis(8_000L);
+        Instant cutoff = dot.ts().minusMillis(KNOWN_SOURCE_STALE_OTHER_TARGET_WINDOW_MS);
         if (actionEvidence.appliedAt().isAfter(cutoff) || statusEvidence.appliedAt().isAfter(cutoff)) {
             return false;
         }

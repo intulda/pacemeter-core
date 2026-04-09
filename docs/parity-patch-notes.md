@@ -1,5 +1,90 @@
 # Parity Patch Notes
 
+## 2026-04-10
+
+### status=0 known-source two-target weighted split tuning
+- file:
+  - `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+- change:
+  - `KNOWN_SOURCE_TWO_TARGET_SAME_SOURCE_WEIGHT_FACTOR: 0.36 -> 0.34`
+- intent:
+  - Reduce over-attribution in known-source multi-target `status=0` path without skill-specific hardcoding.
+
+### Observed impact (heavy2 fight2)
+- DRG `64AC` target parity delta:
+  - `+156,977` (improved)
+- SAM `1D41` target parity delta:
+  - `+1,314,401` (improved)
+
+### Rollup / gate
+- `rollup.summary`
+  - `mape=0.0133131704`
+  - `p95=0.0298525784`
+  - `max=0.0353762818`
+- `rollup.gate pass=true`
+
+### Verification
+- passed:
+  - `ActIngestionServiceTest`
+  - `SubmissionParityRegressionGateTest`
+  - `SubmissionParityReportDiagnostics.debugParityQualityRollup_withConfiguredFflogsCredentials_printsGateAndWorstActors`
+  - reproducibility re-run:
+    - `ActIngestionServiceTest` pass
+    - `SubmissionParityRegressionGateTest` pass
+    - `rollup.gate pass=true` (`p95=0.0298525784`)
+- note:
+  - Windows Gradle `in-progress-results-*.bin` collision can occur when tests are run in parallel.
+  - Keep regression/diagnostics runs sequential.
+
+### status0 stale-other-target suppression freshness tightening
+- file:
+  - `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+- change:
+  - `KNOWN_SOURCE_STALE_OTHER_TARGET_WINDOW_MS: 8000ms -> 6000ms`
+- intent:
+  - In known-source multi-target `status=0`, suppress stale other-target tracked-target split earlier to reduce heavy2 target contamination while keeping heavy4/lindwurm impact limited.
+
+### Observed impact (heavy2 fight2)
+- DRG `64AC` target parity delta:
+  - `+154,307 -> +126,178`
+- SAM `1D41` target parity delta:
+  - `+1,314,071 -> +1,306,460`
+
+### Rollup / gate (after change)
+- `rollup.summary`
+  - `mape=0.0132341671`
+  - `p95=0.0289055431`
+  - `max=0.0353762818`
+- `rollup.gate pass=true`
+
+### stale window follow-up tuning
+- change:
+  - `KNOWN_SOURCE_STALE_OTHER_TARGET_WINDOW_MS: 6000ms -> 5000ms`
+- observed impact (heavy2 fight2):
+  - DRG `64AC` target parity delta:
+    - `+126,178 -> +110,226`
+  - SAM `1D41` target parity delta:
+    - `+1,306,460 -> +1,289,497`
+- rollup after follow-up:
+  - `mape=0.0130523726`
+  - `p95=0.0289245945`
+  - `max=0.0353762818`
+  - `rollup.gate pass=true`
+
+### stale window follow-up tuning (second step)
+- change:
+  - `KNOWN_SOURCE_STALE_OTHER_TARGET_WINDOW_MS: 5000ms -> 4000ms`
+- observed impact (heavy2 fight2):
+  - DRG `64AC` target parity delta:
+    - `+110,226 -> +93,272`
+  - SAM `1D41` target parity delta:
+    - `+1,289,497 -> +1,289,497` (flat)
+- rollup after second step:
+  - `mape=0.0129664892` (improved)
+  - `p95=0.0289618416` (slightly worsened)
+  - `max=0.0353762818` (unchanged)
+  - `rollup.gate pass=true`
+
 ## 2026-04-07
 
 ### Live clone+suppress rollback
