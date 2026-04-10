@@ -4625,6 +4625,36 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugHeavy2Fight2ActorDeltas_printsSamWhmSchDrgTotals() throws Exception {
+        printActorParityComparisons(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                List.of("Samurai", "WhiteMage", "Scholar", "Dragoon"),
+                "heavy2.fight2.actorTotals.extended"
+        );
+    }
+
+    @Test
+    void debugHeavy4Fight5ActorDeltas_printsTopJobs() throws Exception {
+        printActorParityComparisons(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                List.of("DarkKnight", "Paladin", "Dragoon", "Ninja", "Dancer", "Scholar", "Sage", "Pictomancer"),
+                "heavy4.fight5.actorTotals"
+        );
+    }
+
+    @Test
+    void debugLindwurmFight8ActorDeltas_printsTopJobs() throws Exception {
+        printActorParityComparisons(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                List.of("DarkKnight", "Dragoon", "Ninja", "Dancer", "Scholar", "Astrologian", "Pictomancer"),
+                "lindwurm.fight8.actorTotals"
+        );
+    }
+
+    @Test
     void debugHeavy2Fight2SamuraiParityBreakdown_printsRdpsComponents() throws Exception {
         SubmissionParityReportService service = buildConfiguredHeavy4Service();
         SubmissionParityReport report = service.buildReportForFight(
