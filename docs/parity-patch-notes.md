@@ -125,8 +125,25 @@
   - selected fight 이득 대비 전역 품질 손실이 커서 기각
   - 최종은 `trackedDots.size()==4 && foreignSourceCount>=3 && foreignActionCount>=3` 유지
 
+5. `trackedDots.size()` 절대값 완화 시도 (`>=3`, `>=4`)
+- 결과:
+  - heavy2 selected 일부 지표 개선 구간이 있었지만 rollup `mape` 악화
+  - `tracked>=4`는 baseline과 실질 변화 없음
+- 결론:
+  - 절대값 완화는 explainable한 전역 개선으로 이어지지 않아 기각/원복
+
+6. `foreign-dominated` 억제 시 same-source 재할당 시도
+- 변경:
+  - `status0_tracked_target_split` 진입 억제 조건에서 drop 대신
+    `status0_tracked_source_target_split` 경로로 재할당
+- 결과:
+  - heavy2 DRG `64AC` 역행 (`+32,951 -> +65,485`)
+  - rollup 악화 (`mape=0.011952358347940117`, `p95=0.026297037866080474`)
+- 결론:
+  - 의도와 반대로 오염을 증가시켜 기각/원복
+
 ## 다음 액션
 1. 현재 고정 상수(`same-source=0.00`, `foreign-dominant=0.00`)에서 회귀 안정성 유지 확인
-2. 새 suppression 조건의 `mape` 악화 actor를 먼저 식별
-3. 필요 시 threshold(`foreignSourceCount`) 1단계 미세조정
-4. 변경은 항상 1개씩, baseline/gate 즉시 재검증
+2. `trackedCount` 고정값 조건 제거: 비율 기반(`foreign dominance + evidence conflict`) gate 설계
+3. 변경은 항상 1개씩, baseline/gate 즉시 재검증
+4. heavy2 개선 시 heavy4/lindwurm/all-fights gate 동시 확인

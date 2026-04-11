@@ -11,11 +11,15 @@ import com.bohouse.pacemeter.application.port.outbound.EnrageTimeProvider;
 import com.bohouse.pacemeter.application.port.outbound.PaceProfileProvider;
 import com.bohouse.pacemeter.core.engine.CombatEngine;
 import com.bohouse.pacemeter.core.event.CombatEvent;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -23,6 +27,10 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 public class RelaySessionManager {
+    private static final Logger logger = LoggerFactory.getLogger(RelaySessionManager.class);
+    private static final long RAW_LINE_TYPE_LOG_EVERY = 50L;
+    private static final int MAX_PARSE_FAILURE_SAMPLES_PER_TYPE = 3;
+    private static final int MAX_PARSE_FAILURE_SAMPLE_LENGTH = 220;
 
     private final Map<String, RelaySession> sessions = new ConcurrentHashMap<>();
     private final PaceProfileProvider paceProfileProvider;
@@ -86,6 +94,12 @@ public class RelaySessionManager {
         private final String sessionId;
         private final CombatService combatService;
         private final ActIngestionService ingestion;
+        private final Map<Integer, Long> rawLineTypeCounts = new ConcurrentHashMap<>();
+        private final Map<Integer, Long> rawLineParseFailureCountsByType = new ConcurrentHashMap<>();
+        private final Map<Integer, ArrayDeque<String>> rawLineParseFailureSamplesByType = new HashMap<>();
+        private long rawLineCount;
+        private long rawLineParseFailureCount;
+        private long nextRawLineTypeLogAt = RAW_LINE_TYPE_LOG_EVERY;
 
         private RelaySession(String sessionId, CombatService combatService, ActIngestionService ingestion) {
             this.sessionId = sessionId;
@@ -117,10 +131,17 @@ public class RelaySessionManager {
                     if (event.rawLine() == null || event.rawLine().isBlank()) {
                         return;
                     }
+                    int rawTypeCode = extractRawLineTypeCode(event.rawLine());
+                    rawLineCount++;
+                    rawLineTypeCounts.merge(rawTypeCode, 1L, Long::sum);
                     ParsedLine parsed = parser.parse(event.rawLine());
                     if (parsed != null) {
                         ingestion.onParsed(parsed);
+                    } else {
+                        rawLineParseFailureCount++;
+                        noteParseFailure(rawTypeCode, event.rawLine());
                     }
+                    logRawLineTypeSummaryIfDue();
                 }
                 case "changePrimaryPlayer" -> {
                     if (event.ts() == null || event.playerName() == null || event.playerId() == null) return;
@@ -159,6 +180,72 @@ public class RelaySessionManager {
                 }
             }
         }
+
+        private void logRawLineTypeSummaryIfDue() {
+            if (rawLineCount < nextRawLineTypeLogAt) {
+                return;
+            }
+            String topTypes = rawLineTypeCounts.entrySet().stream()
+                    .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                    .limit(12)
+                    .map(entry -> entry.getKey() + ":" + entry.getValue())
+                    .reduce((left, right) -> left + ", " + right)
+                    .orElse("none");
+            logger.info(
+                    "[Relay] session={} rawLineTypes total={} parseFailed={} top={}",
+                    sessionId,
+                    rawLineCount,
+                    rawLineParseFailureCount,
+                    topTypes
+            );
+            if (rawLineParseFailureCount > 0) {
+                String failTop = rawLineParseFailureCountsByType.entrySet().stream()
+                        .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                        .limit(6)
+                        .map(entry -> entry.getKey() + ":" + entry.getValue())
+                        .reduce((left, right) -> left + ", " + right)
+                        .orElse("none");
+                logger.info(
+                        "[Relay] session={} parseFailByType total={} top={}",
+                        sessionId,
+                        rawLineParseFailureCount,
+                        failTop
+                );
+                rawLineParseFailureCountsByType.entrySet().stream()
+                        .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                        .limit(3)
+                        .forEach(entry -> {
+                            ArrayDeque<String> samples = rawLineParseFailureSamplesByType.get(entry.getKey());
+                            if (samples == null || samples.isEmpty()) {
+                                return;
+                            }
+                            String joined = String.join(" || ", samples);
+                            logger.info(
+                                    "[Relay] session={} parseFailSamples type={} samples={}",
+                                    sessionId,
+                                    entry.getKey(),
+                                    joined
+                            );
+                        });
+            }
+            nextRawLineTypeLogAt += RAW_LINE_TYPE_LOG_EVERY;
+        }
+
+        private void noteParseFailure(int rawTypeCode, String rawLine) {
+            rawLineParseFailureCountsByType.merge(rawTypeCode, 1L, Long::sum);
+            ArrayDeque<String> samples = rawLineParseFailureSamplesByType.computeIfAbsent(
+                    rawTypeCode,
+                    ignored -> new ArrayDeque<>()
+            );
+            if (samples.size() >= MAX_PARSE_FAILURE_SAMPLES_PER_TYPE) {
+                return;
+            }
+            String normalized = rawLine.replace("\n", "\\n").replace("\r", "\\r");
+            if (normalized.length() > MAX_PARSE_FAILURE_SAMPLE_LENGTH) {
+                normalized = normalized.substring(0, MAX_PARSE_FAILURE_SAMPLE_LENGTH) + "...";
+            }
+            samples.addLast(normalized);
+        }
     }
 
     public record RelayEnvelope(
@@ -187,5 +274,18 @@ public class RelaySessionManager {
 
     private static long valueOrDefault(Long value, long defaultValue) {
         return value != null ? value : defaultValue;
+    }
+
+    private static int extractRawLineTypeCode(String rawLine) {
+        if (rawLine == null || rawLine.isBlank()) {
+            return -1;
+        }
+        int separatorIndex = rawLine.indexOf('|');
+        String typeToken = separatorIndex >= 0 ? rawLine.substring(0, separatorIndex) : rawLine;
+        try {
+            return Integer.parseInt(typeToken);
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
     }
 }

@@ -21,6 +21,7 @@
 
 ### 환경
 - `.gradle-home` 단일 사용으로 통일
+- `.gradle-home` 외 Gradle 캐시 디렉터리(예: `.gradle-home-run`, `.gradle-home-ascii*`) 신규 생성 금지
 - `.gradle-home-ascii*` 삭제 완료
 
 ### 현재 production 상수
@@ -78,3 +79,27 @@
 2. heavy2 `1D41`의 남은 tracked_target_split 누수(특히 dual-target lifecycle) 추가 분해
 3. 전역 mape를 악화시키지 않는 evidence gate 후보 1개만 설계
 4. baseline + gate + selected diagnostics 재검증
+
+## 2026-04-12 체크포인트
+
+### 오늘 실험 요약
+- baseline 재확인:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- 시도 1: `trackedDots.size()==4` 완화(`>=3`, `>=4` 등)
+  - 결과: heavy2 selected 일부 개선처럼 보이나 rollup `mape` 악화
+  - 조치: 기각/원복
+- 시도 2: `foreign-dominated` 억제 시 drop 대신 `status0_tracked_source_target_split` 재할당
+  - 결과: heavy2 `64AC` 역행(`+32,951 -> +65,485`), `mape/p95` 악화
+  - 조치: 기각/원복
+
+### 현재 유지 상태
+- production 규칙은 이전 안정 상태 유지
+- heavy2 fight2 핵심 잔차:
+  - DRG `64AC`: `+32,951`
+  - SAM `1D41`: `+1,139,355`
+
+### 내일 시작 TODO
+1. `trackedCount` 절대값 조건 제거 방향으로 재설계
+2. `foreign dominance + evidence conflict` 비율 기반 gate 가설 1개만 적용
+3. 즉시 `ActIngestionServiceTest` + `SubmissionParityRegressionGateTest` + heavy2/heavy4/lindwurm diagnostics 재검증

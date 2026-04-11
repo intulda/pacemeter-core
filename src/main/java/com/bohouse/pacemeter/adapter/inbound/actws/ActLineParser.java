@@ -56,12 +56,16 @@ public final class ActLineParser {
             try { opcode = Integer.parseInt(p[2], 16); }
             catch (NumberFormatException e) { return null; }
 
-            if (!isDamageTextOpcode(opcode)) return null;
+            if (!isDamageTextOpcode(opcode)) {
+                return new OpaqueRawLine(ts, typeCode, Integer.toHexString(opcode).toUpperCase(), line);
+            }
 
             String msg = p[4];
             String normalizedMessage = normalizeDamageTextMessage(msg);
             long amount = extractLong(AMOUNT_KR_V2, normalizedMessage, 1, -1);
-            if (amount <= 0) return null;
+            if (amount <= 0) {
+                return new OpaqueRawLine(ts, typeCode, Integer.toHexString(opcode).toUpperCase(), line);
+            }
 
             String source = normalizeCombatTextName(extractString(SOURCE_KR_V2, normalizedMessage, 1));
             String targetSection = normalizedMessage;
@@ -138,9 +142,17 @@ public final class ActLineParser {
             return new CombatantAdded(ts, id, name, jobId, ownerId, currentHp, maxHp, line);
         }
 
-        // 261 Add: key/value combatant payload
+        // 261 Add/Change: key/value combatant payload
         if (typeCode == 261) {
-            if (p.length < 6 || !"Add".equals(p[2])) return null;
+            if (p.length < 3) return null;
+            String subtype = p[2];
+            if (!"Add".equals(subtype)) {
+                // Keep Change and other 261 variants visible for pipeline diagnostics.
+                return new OpaqueRawLine(ts, typeCode, subtype, line);
+            }
+            if (p.length < 6) {
+                return new OpaqueRawLine(ts, typeCode, subtype, line);
+            }
             long id = parseHexLong(p[3]);
             Map<String, String> fields = parseKeyValueFields(p, 4);
             String name = fields.getOrDefault("Name", "");
@@ -177,33 +189,36 @@ public final class ActLineParser {
         }
 
         if (typeCode == 37) {
-            if (p.length < 24) return null;
-            long targetId = parseHexLong(p[2]);
-            int effectCount = (int) parseHexLong(p[18]);
-            if (effectCount <= 0) {
-                return null;
-            }
-            int offset = 19;
-            List<DotStatusSignalRaw.StatusSignal> signals = new ArrayList<>();
-            for (int effectIndex = 0; effectIndex < effectCount && offset + 3 < p.length - 1; effectIndex++) {
-                long packedStatus = parseHexLong(p[offset]);
-                int statusId = (int) (packedStatus & 0xFFFFL);
-                if (!DOT_SIGNAL_STATUS_IDS.contains(statusId)) {
-                    offset += 4;
-                    continue;
+            // Legacy status-signal layout.
+            if (p.length >= 24) {
+                long targetId = parseHexLong(p[2]);
+                int effectCount = (int) parseHexLong(p[18]);
+                if (effectCount > 0) {
+                    int offset = 19;
+                    List<DotStatusSignalRaw.StatusSignal> signals = new ArrayList<>();
+                    for (int effectIndex = 0; effectIndex < effectCount && offset + 3 < p.length - 1; effectIndex++) {
+                        long packedStatus = parseHexLong(p[offset]);
+                        int statusId = (int) (packedStatus & 0xFFFFL);
+                        if (!DOT_SIGNAL_STATUS_IDS.contains(statusId)) {
+                            offset += 4;
+                            continue;
+                        }
+                        long sourceId = parseHexLong(p[offset + 3]);
+                        if (sourceId == 0) {
+                            offset += 4;
+                            continue;
+                        }
+                        signals.add(new DotStatusSignalRaw.StatusSignal(statusId, sourceId));
+                        offset += 4;
+                    }
+                    if (!signals.isEmpty()) {
+                        return new DotStatusSignalRaw(ts, targetId, List.copyOf(signals), line);
+                    }
                 }
-                long sourceId = parseHexLong(p[offset + 3]);
-                if (sourceId == 0) {
-                    offset += 4;
-                    continue;
-                }
-                signals.add(new DotStatusSignalRaw.StatusSignal(statusId, sourceId));
-                offset += 4;
             }
-            if (signals.isEmpty()) {
-                return null;
-            }
-            return new DotStatusSignalRaw(ts, targetId, List.copyOf(signals), line);
+
+            // Non-signal type37 variants are kept as opaque for now.
+            return new OpaqueRawLine(ts, typeCode, "", line);
         }
 
         if (typeCode == 38) {
@@ -289,6 +304,20 @@ public final class ActLineParser {
             long targetId = parseHexLong(p[2]);
             String targetName = p[3];
             return new NetworkDeath(ts, targetId, targetName);
+        }
+
+        if (typeCode == 31) {
+            return new OpaqueRawLine(ts, typeCode, "", line);
+        }
+
+        if (typeCode == 34 || typeCode == 260 || typeCode == 272) {
+            return new OpaqueRawLine(ts, typeCode, "", line);
+        }
+
+        // 264: compact action line seen in relay/live logs.
+        // Keep as opaque for now to avoid mutating attribution behavior.
+        if (typeCode == 264) {
+            return new OpaqueRawLine(ts, typeCode, "", line);
         }
 
         return null;
@@ -421,4 +450,5 @@ public final class ActLineParser {
         }
         return fields;
     }
+
 }
