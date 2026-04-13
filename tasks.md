@@ -103,3 +103,39 @@
 1. `trackedCount` 절대값 조건 제거 방향으로 재설계
 2. `foreign dominance + evidence conflict` 비율 기반 gate 가설 1개만 적용
 3. 즉시 `ActIngestionServiceTest` + `SubmissionParityRegressionGateTest` + heavy2/heavy4/lindwurm diagnostics 재검증
+
+## 2026-04-14 체크포인트
+
+### 오늘 결정
+- `trackedDots.size()==4` 강제 조건은 production에서 제거 유지
+- 직전 실험으로 들어갔던 `shouldSuppressKnownSourceMissingExactSingleTrackedTargetSplit` 제거
+  - 사유: `trackedDots.size()==1` 기반 단일 상황 suppress는 과도한 구조 종속 리스크가 큼
+- `status0_tracked_target_split` 억제는 ratio/evidence 기반만 유지
+  - `KNOWN_SOURCE_FOREIGN_DOMINANT_SOURCE_SHARE_THRESHOLD = 0.70`
+  - `KNOWN_SOURCE_FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD = 0.70`
+
+### OpaqueRawLine 판단
+- `QpaureRawLine`는 코드베이스에 없음
+- `OpaqueRawLine`는 유지
+  - 파서에서 미모델/부분파싱 라인을 `null`로 유실하지 않고 보존
+  - ingestion에서는 `instanceof OpaqueRawLine` 즉시 return으로 안전 무시
+  - 파서 회귀 테스트(`ActLineParserTest`) 통과 확인
+
+### 재검증 결과
+- 테스트:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+  - `ActLineParserTest` pass
+- rollup:
+  - `mape=0.011888730720603377`
+  - `p95=0.025951827200127585`
+  - `max=0.03537628179947446`
+  - `pass=true`
+- heavy2 fight2 핵심 잔차:
+  - DRG `64AC`: `+32,951`
+  - SAM `1D41`: `+1,139,355`
+
+### 다음 턴 시작 TODO
+1. `status0_tracked_target_split`의 남은 이산 컷(`sourceTrackedDots.size()!=1` 등)을 score/ratio 연속 기준으로 치환 가능한지 진단
+2. heavy2/heavy4/lindwurm + heavy2 all-fights gate 동시 확인
+3. 가설 1개만 반영 후 즉시 baseline/gate 재검증

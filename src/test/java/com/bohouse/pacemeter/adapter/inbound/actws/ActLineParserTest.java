@@ -202,8 +202,8 @@ class ActLineParserTest {
 
         ParsedLine result = parser.parse(line);
 
-        assertInstanceOf(StatusSnapshotRaw.class, result);
-        StatusSnapshotRaw raw = (StatusSnapshotRaw) result;
+        assertInstanceOf(CombatantStatusSnapshotRaw.class, result);
+        CombatantStatusSnapshotRaw raw = (CombatantStatusSnapshotRaw) result;
         assertEquals(0x100B73ACL, raw.actorId());
         assertEquals("생쥐", raw.actorName());
         assertTrue(raw.statuses().stream().anyMatch(status -> status.statusId() == 0x0030 && status.sourceId() == 0x100B73ACL));
@@ -234,7 +234,9 @@ class ActLineParserTest {
 
         ParsedLine result = parser.parse(line);
 
-        assertNull(result);
+        assertInstanceOf(OpaqueRawLine.class, result);
+        OpaqueRawLine opaque = (OpaqueRawLine) result;
+        assertEquals(37, opaque.typeCode());
     }
 
     // ── 무시 대상 ──
@@ -278,9 +280,14 @@ class ActLineParserTest {
     }
 
     @Test
-    void parse_typeCode260_returnsNull() {
+    void parse_typeCode260_returnsOpaqueRawLine() {
         String line = "260|" + TS + "|some|data|here|more";
-        assertNull(parser.parse(line));
+        ParsedLine result = parser.parse(line);
+        assertInstanceOf(OpaqueRawLine.class, result);
+        OpaqueRawLine opaque = (OpaqueRawLine) result;
+        assertEquals(260, opaque.typeCode());
+        assertEquals("", opaque.subtype());
+        assertEquals(line, opaque.rawLine());
     }
 
     // ── 엣지 케이스 ──

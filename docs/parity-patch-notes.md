@@ -147,3 +147,29 @@
 2. `trackedCount` 고정값 조건 제거: 비율 기반(`foreign dominance + evidence conflict`) gate 설계
 3. 변경은 항상 1개씩, baseline/gate 즉시 재검증
 4. heavy2 개선 시 heavy4/lindwurm/all-fights gate 동시 확인
+
+## 2026-04-14 업데이트
+
+### 반영/정리
+- `trackedDots.size()==4` 강제 조건 제거 상태 유지
+- 실험 suppress(`shouldSuppressKnownSourceMissingExactSingleTrackedTargetSplit`) 제거
+  - 이유: `trackedDots.size()==1` 기반 단일 구조 종속이 커서 일반화 리스크 큼
+- known-source foreign-dominant 억제는 ratio 기준 유지
+  - `KNOWN_SOURCE_FOREIGN_DOMINANT_SOURCE_SHARE_THRESHOLD = 0.70`
+  - `KNOWN_SOURCE_FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD = 0.70`
+
+### 파서 라인 타입 판단
+- `QpaureRawLine` 없음
+- `OpaqueRawLine` 유지:
+  - 파서의 미모델/부분파싱 라인 유실 방지
+  - ingestion 안전 무시 (`if (line instanceof OpaqueRawLine) return;`)
+  - `ActLineParserTest` 통과
+
+### 최신 검증 수치
+- gate: `pass=true`
+- `mape=0.011888730720603377`
+- `p95=0.025951827200127585`
+- `max=0.03537628179947446`
+- heavy2 fight2:
+  - DRG `64AC`: `+32,951`
+  - SAM `1D41`: `+1,139,355`

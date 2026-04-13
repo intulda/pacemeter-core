@@ -39,6 +39,8 @@ public final class ActIngestionService {
     private static final double STATUS0_SOURCE_HINT_WEIGHT = 1.0;
     private static final double ACTIVE_DOT_SUBSET_WEIGHT_COVERAGE_THRESHOLD = 0.50;
     private static final double FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD = 0.42;
+    private static final double KNOWN_SOURCE_FOREIGN_DOMINANT_SOURCE_SHARE_THRESHOLD = 0.70;
+    private static final double KNOWN_SOURCE_FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD = 0.70;
     private static final double FOREIGN_DOMINANT_ACTION_REDUCTION_FACTOR = 0.00;
     private static final double KNOWN_SOURCE_TWO_TARGET_SAME_SOURCE_WEIGHT_FACTOR = 0.00;
     private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);
@@ -1046,24 +1048,19 @@ public final class ActIngestionService {
             boolean acceptedBySource,
             List<TrackedDotState> trackedDots
     ) {
-        if (!acceptedBySource || dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
+        KnownSourceTrackedTargetSplitFeatures features =
+                analyzeKnownSourceTrackedTargetSplit(dot, acceptedBySource, trackedDots);
+        if (!features.eligible()) {
             return false;
         }
-        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+        if (features.sourceTrackedDots().isEmpty()) {
             return false;
         }
-        if (countTrackedTargetsWithActiveDots() <= 1 || trackedDots.isEmpty()) {
+        if (features.foreignSourceCount() == 0L) {
             return false;
         }
-        List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
-        if (sourceTrackedDots.isEmpty()) {
-            return false;
-        }
-        if (trackedDots.stream().noneMatch(trackedDot -> trackedDot.sourceId() != dot.sourceId())) {
-            return false;
-        }
-        SourceDotEvidence actionEvidence = unknownStatusDotActionEvidenceBySource.get(dot.sourceId());
-        SourceDotEvidence statusEvidence = unknownStatusDotStatusEvidenceBySource.get(dot.sourceId());
+        SourceDotEvidence actionEvidence = features.actionEvidence();
+        SourceDotEvidence statusEvidence = features.statusEvidence();
         if (actionEvidence == null || statusEvidence == null) {
             return false;
         }
@@ -1092,31 +1089,24 @@ public final class ActIngestionService {
             boolean acceptedBySource,
             List<TrackedDotState> trackedDots
     ) {
-        if (!acceptedBySource || dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
+        KnownSourceTrackedTargetSplitFeatures features =
+                analyzeKnownSourceTrackedTargetSplit(dot, acceptedBySource, trackedDots);
+        if (!features.eligible()) {
             return false;
         }
-        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+        if (features.recentExactActionId() != null) {
             return false;
         }
-        if (countTrackedTargetsWithActiveDots() <= 1 || trackedDots.isEmpty()) {
-            return false;
-        }
-        if (trackedDots.size() != 4) {
-            return false;
-        }
-        if (resolveRecentExactUnknownStatusActionId(dot, KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS) != null) {
-            return false;
-        }
-        List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
+        List<TrackedDotState> sourceTrackedDots = features.sourceTrackedDots();
         if (sourceTrackedDots.size() != 1) {
             return false;
         }
-        Integer recentSourceActionId = resolveRecentSourceUnknownStatusActionId(dot);
+        Integer recentSourceActionId = features.recentSourceActionId();
         if (recentSourceActionId == null || sourceTrackedDots.get(0).actionId() != recentSourceActionId) {
             return false;
         }
-        SourceDotEvidence actionEvidence = unknownStatusDotActionEvidenceBySource.get(dot.sourceId());
-        SourceDotEvidence statusEvidence = unknownStatusDotStatusEvidenceBySource.get(dot.sourceId());
+        SourceDotEvidence actionEvidence = features.actionEvidence();
+        SourceDotEvidence statusEvidence = features.statusEvidence();
         if (actionEvidence == null || statusEvidence == null) {
             return false;
         }
@@ -1130,9 +1120,50 @@ public final class ActIngestionService {
         if (actionEvidence.targetId() != statusEvidence.targetId()) {
             return false;
         }
+        long foreignSourceCount = features.foreignSourceCount();
+        long distinctSourceCount = features.distinctSourceCount();
+        if (distinctSourceCount <= 0) {
+            return false;
+        }
+        long foreignActionCount = features.foreignActionCount();
+        long distinctActionCount = features.distinctActionCount();
+        if (distinctActionCount <= 0) {
+            return false;
+        }
+        double foreignSourceShare = (double) foreignSourceCount / (double) distinctSourceCount;
+        double foreignActionShare = (double) foreignActionCount / (double) distinctActionCount;
+        return foreignSourceShare >= KNOWN_SOURCE_FOREIGN_DOMINANT_SOURCE_SHARE_THRESHOLD
+                && foreignActionShare >= KNOWN_SOURCE_FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD;
+    }
+
+    private KnownSourceTrackedTargetSplitFeatures analyzeKnownSourceTrackedTargetSplit(
+            DotTickRaw dot,
+            boolean acceptedBySource,
+            List<TrackedDotState> trackedDots
+    ) {
+        if (!acceptedBySource || dot.statusId() != 0 || isFriendlyTarget(dot.targetId())) {
+            return KnownSourceTrackedTargetSplitFeatures.ineligible();
+        }
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return KnownSourceTrackedTargetSplitFeatures.ineligible();
+        }
+        if (countTrackedTargetsWithActiveDots() <= 1 || trackedDots.isEmpty()) {
+            return KnownSourceTrackedTargetSplitFeatures.ineligible();
+        }
+
+        List<TrackedDotState> sourceTrackedDots = resolveTrackedSourceDots(dot);
+        Integer recentSourceActionId = resolveRecentSourceUnknownStatusActionId(dot);
+        Integer recentExactActionId = resolveRecentExactUnknownStatusActionId(dot, KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS);
+        SourceDotEvidence actionEvidence = unknownStatusDotActionEvidenceBySource.get(dot.sourceId());
+        SourceDotEvidence statusEvidence = unknownStatusDotStatusEvidenceBySource.get(dot.sourceId());
+
         long foreignSourceCount = trackedDots.stream()
                 .map(TrackedDotState::sourceId)
                 .filter(sourceId -> sourceId != dot.sourceId())
+                .distinct()
+                .count();
+        long distinctSourceCount = trackedDots.stream()
+                .map(TrackedDotState::sourceId)
                 .distinct()
                 .count();
         long foreignActionCount = trackedDots.stream()
@@ -1140,7 +1171,23 @@ public final class ActIngestionService {
                 .map(TrackedDotState::actionId)
                 .distinct()
                 .count();
-        return foreignSourceCount >= 3 && foreignActionCount >= 3;
+        long distinctActionCount = trackedDots.stream()
+                .map(TrackedDotState::actionId)
+                .distinct()
+                .count();
+
+        return new KnownSourceTrackedTargetSplitFeatures(
+                true,
+                sourceTrackedDots,
+                recentSourceActionId,
+                recentExactActionId,
+                actionEvidence,
+                statusEvidence,
+                foreignSourceCount,
+                distinctSourceCount,
+                foreignActionCount,
+                distinctActionCount
+        );
     }
 
     private long countTrackedTargetsWithActiveDots() {
@@ -2472,6 +2519,33 @@ public final class ActIngestionService {
     private record LiveDotApplicationCloneKey(long sourceId, long targetId, int actionId) {}
     private record TrackedDotKey(long sourceId, int actionId) {}
     private record TrackedDotState(long sourceId, String sourceName, int actionId, Instant expiresAt) {}
+    private record KnownSourceTrackedTargetSplitFeatures(
+            boolean eligible,
+            List<TrackedDotState> sourceTrackedDots,
+            Integer recentSourceActionId,
+            Integer recentExactActionId,
+            SourceDotEvidence actionEvidence,
+            SourceDotEvidence statusEvidence,
+            long foreignSourceCount,
+            long distinctSourceCount,
+            long foreignActionCount,
+            long distinctActionCount
+    ) {
+        private static KnownSourceTrackedTargetSplitFeatures ineligible() {
+            return new KnownSourceTrackedTargetSplitFeatures(
+                    false,
+                    List.of(),
+                    null,
+                    null,
+                    null,
+                    null,
+                    0L,
+                    0L,
+                    0L,
+                    0L
+            );
+        }
+    }
     private record StatusSignalEvidence(Instant ts, long sourceId, int actionId) {}
     private record StatusSnapshotState(Instant ts, Map<TrackedDotKey, Double> weights) {}
     private record SnapshotRedistributedDot(long sourceId, int actionId, long amount) {}

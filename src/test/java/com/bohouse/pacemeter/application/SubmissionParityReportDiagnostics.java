@@ -3652,6 +3652,70 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugTrackedTargetSplitCandidateCoverageAcrossSelectedFights_printsShare() throws Exception {
+        printTrackedTargetSplitCandidateCoverage(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Samurai",
+                0x1D41,
+                "heavy2.fight2.sam"
+        );
+        printTrackedTargetSplitCandidateCoverage(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                "heavy2.fight2.drg"
+        );
+        printTrackedTargetSplitCandidateCoverage(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "Dragoon",
+                0x64AC,
+                "heavy4.fight5.drg"
+        );
+        printTrackedTargetSplitCandidateCoverage(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "Dragoon",
+                0x64AC,
+                "lindwurm.fight8.drg"
+        );
+    }
+
+    @Test
+    void debugTrackedTargetSplitCoverageMatrixAcrossSelectedFights_printsCrossValidationMatrix() throws Exception {
+        printTrackedTargetSplitCoverageMatrix(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Samurai",
+                0x1D41,
+                "heavy2.fight2.sam"
+        );
+        printTrackedTargetSplitCoverageMatrix(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                "heavy2.fight2.drg"
+        );
+        printTrackedTargetSplitCoverageMatrix(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "Dragoon",
+                0x64AC,
+                "heavy4.fight5.drg"
+        );
+        printTrackedTargetSplitCoverageMatrix(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "Dragoon",
+                0x64AC,
+                "lindwurm.fight8.drg"
+        );
+    }
+
+    @Test
     void debugTrackedTargetSplitEvidenceAgeAcrossSelectedFights_printsStaleTargetMismatchBuckets() throws Exception {
         printTrackedTargetSplitEvidenceAgeBuckets(
                 "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
@@ -9007,6 +9071,366 @@ class SubmissionParityReportDiagnostics {
                         entry.getValue().damageTotal(),
                         entry.getValue().sampleOtherTargets()
                 ));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void printTrackedTargetSplitCandidateCoverage(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int guid,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+        long localActorId = report.combat().actors().stream()
+                .filter(actor -> comparison.localName().equals(actor.name()))
+                .mapToLong(actor -> actor.actorId().value())
+                .findFirst()
+                .orElseThrow();
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        Method resolveTrackedTargetDots = ActIngestionService.class.getDeclaredMethod("resolveTrackedTargetDots", DotTickRaw.class);
+        resolveTrackedTargetDots.setAccessible(true);
+        Method resolveTrackedSourceDots = ActIngestionService.class.getDeclaredMethod("resolveTrackedSourceDots", DotTickRaw.class);
+        resolveTrackedSourceDots.setAccessible(true);
+        Method resolveRecentSourceUnknownStatusActionId = ActIngestionService.class.getDeclaredMethod(
+                "resolveRecentSourceUnknownStatusActionId",
+                DotTickRaw.class
+        );
+        resolveRecentSourceUnknownStatusActionId.setAccessible(true);
+        Method resolveRecentExactUnknownStatusActionId = ActIngestionService.class.getDeclaredMethod(
+                "resolveRecentExactUnknownStatusActionId",
+                DotTickRaw.class,
+                long.class
+        );
+        resolveRecentExactUnknownStatusActionId.setAccessible(true);
+        Method countTrackedTargetsWithActiveDots = ActIngestionService.class.getDeclaredMethod("countTrackedTargetsWithActiveDots");
+        countTrackedTargetsWithActiveDots.setAccessible(true);
+
+        ActLineParser parser = new ActLineParser();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        TrackedTargetSplitEvidenceStats total = new TrackedTargetSplitEvidenceStats();
+        TrackedTargetSplitEvidenceStats candidate = new TrackedTargetSplitEvidenceStats();
+        Map<String, StructureStats> candidateBuckets = new HashMap<>();
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed instanceof DotTickRaw dot
+                    && dot.statusId() == 0
+                    && dot.damage() > 0
+                    && dot.sourceId() == localActorId) {
+                List<Object> trackedTargetDots = (List<Object>) resolveTrackedTargetDots.invoke(ingestion, dot);
+                List<Object> trackedSourceDots = (List<Object>) resolveTrackedSourceDots.invoke(ingestion, dot);
+                Integer recentSourceActionId = (Integer) resolveRecentSourceUnknownStatusActionId.invoke(ingestion, dot);
+                Integer recentExactActionId = (Integer) resolveRecentExactUnknownStatusActionId.invoke(ingestion, dot, 15_000L);
+                long activeTargets = ((Number) countTrackedTargetsWithActiveDots.invoke(ingestion)).longValue();
+
+                String trackedTargetKey = dotAttributionAssignmentKey(
+                        "status0_tracked_target_split",
+                        localActorId,
+                        dot.targetId(),
+                        guid
+                );
+                long assignedBefore = ingestion.debugDotAttributionAssignedAmounts()
+                        .getOrDefault(trackedTargetKey, 0L);
+                ingestion.onParsed(parsed);
+                long assignedAfter = ingestion.debugDotAttributionAssignedAmounts()
+                        .getOrDefault(trackedTargetKey, 0L);
+                long assignedDelta = assignedAfter - assignedBefore;
+                if (assignedDelta <= 0L) {
+                    continue;
+                }
+
+                total = total.add(dot.damage(), assignedDelta);
+
+                Set<Integer> foreignActions = trackedTargetDots.stream()
+                        .map(dotState -> {
+                            try {
+                                return trackedDotStateActionId(dotState);
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                        })
+                        .filter(actionId -> actionId != guid)
+                        .collect(Collectors.toCollection(TreeSet::new));
+                boolean sameSourceHasGuid = trackedSourceDots.stream().anyMatch(dotState -> {
+                    try {
+                        return trackedDotStateActionId(dotState) == guid;
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+                boolean candidateHit = recentExactActionId == null
+                        && trackedSourceDots.size() == 1
+                        && sameSourceHasGuid
+                        && foreignActions.size() >= 2;
+                if (candidateHit) {
+                    candidate = candidate.add(dot.damage(), assignedDelta);
+                    String bucket = "activeTargets=%d|trackedCount=%d|foreignActions=%d|recentSource=%s".formatted(
+                            activeTargets,
+                            trackedTargetDots.size(),
+                            foreignActions.size(),
+                            formatGuid(recentSourceActionId)
+                    );
+                    candidateBuckets.compute(
+                            bucket,
+                            (ignored, existing) -> {
+                                StructureStats stats = existing == null ? new StructureStats() : existing;
+                                return stats.add(assignedDelta, "");
+                            }
+                    );
+                }
+                continue;
+            }
+
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        double assignedShare = total.assignedTotal() == 0L
+                ? 0.0
+                : (candidate.assignedTotal() * 100.0) / total.assignedTotal();
+        System.out.printf(
+                "%s trackedTargetSplitCandidateCoverage fight=%d actor=%s guid=%s totalHits=%d totalAssigned=%d candidateHits=%d candidateAssigned=%d assignedShare=%.2f%%%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(guid),
+                total.hitCount(),
+                total.assignedTotal(),
+                candidate.hitCount(),
+                candidate.assignedTotal(),
+                assignedShare
+        );
+        candidateBuckets.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue().damageTotal(), left.getValue().damageTotal()))
+                .limit(8)
+                .forEach(entry -> System.out.printf(
+                        "  %s assigned=%d hits=%d%n",
+                        entry.getKey(),
+                        entry.getValue().damageTotal(),
+                        entry.getValue().hitCount()
+                ));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void printTrackedTargetSplitCoverageMatrix(
+            String submissionId,
+            int fightId,
+            String actorType,
+            int guid,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        SubmissionParityReport.ActorParityComparison comparison = report.comparisons().stream()
+                .filter(c -> actorType.equals(c.fflogsType()) || actorType.equals(c.localName()))
+                .findFirst()
+                .orElseThrow();
+        long localActorId = report.combat().actors().stream()
+                .filter(actor -> comparison.localName().equals(actor.name()))
+                .mapToLong(actor -> actor.actorId().value())
+                .findFirst()
+                .orElseThrow();
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        Method resolveTrackedTargetDots = ActIngestionService.class.getDeclaredMethod("resolveTrackedTargetDots", DotTickRaw.class);
+        resolveTrackedTargetDots.setAccessible(true);
+        Method resolveRecentExactUnknownStatusActionId = ActIngestionService.class.getDeclaredMethod(
+                "resolveRecentExactUnknownStatusActionId",
+                DotTickRaw.class,
+                long.class
+        );
+        resolveRecentExactUnknownStatusActionId.setAccessible(true);
+        Method countTrackedTargetsWithActiveDots = ActIngestionService.class.getDeclaredMethod("countTrackedTargetsWithActiveDots");
+        countTrackedTargetsWithActiveDots.setAccessible(true);
+
+        ActLineParser parser = new ActLineParser();
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        long totalAssigned = 0L;
+        long totalHits = 0L;
+        Map<String, StructureStats> matrix = new HashMap<>();
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed instanceof DotTickRaw dot
+                    && dot.statusId() == 0
+                    && dot.damage() > 0
+                    && dot.sourceId() == localActorId) {
+                List<Object> trackedTargetDots = (List<Object>) resolveTrackedTargetDots.invoke(ingestion, dot);
+                Integer recentExactActionId = (Integer) resolveRecentExactUnknownStatusActionId.invoke(ingestion, dot, 15_000L);
+                long activeTargets = ((Number) countTrackedTargetsWithActiveDots.invoke(ingestion)).longValue();
+
+                String trackedTargetKey = dotAttributionAssignmentKey(
+                        "status0_tracked_target_split",
+                        localActorId,
+                        dot.targetId(),
+                        guid
+                );
+                long assignedBefore = ingestion.debugDotAttributionAssignedAmounts().getOrDefault(trackedTargetKey, 0L);
+                ingestion.onParsed(parsed);
+                long assignedAfter = ingestion.debugDotAttributionAssignedAmounts().getOrDefault(trackedTargetKey, 0L);
+                long assignedDelta = assignedAfter - assignedBefore;
+                if (assignedDelta <= 0L) {
+                    continue;
+                }
+
+                totalAssigned += assignedDelta;
+                totalHits += 1L;
+                Set<Long> foreignSources = trackedTargetDots.stream()
+                        .map(dotState -> {
+                            try {
+                                return trackedDotStateSourceId(dotState);
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                        })
+                        .filter(sourceId -> sourceId != localActorId)
+                        .collect(Collectors.toCollection(TreeSet::new));
+                Set<Integer> foreignActions = trackedTargetDots.stream()
+                        .map(dotState -> {
+                            try {
+                                return trackedDotStateActionId(dotState);
+                            } catch (Exception e) {
+                                throw new RuntimeException(e);
+                            }
+                        })
+                        .filter(actionId -> actionId != guid)
+                        .collect(Collectors.toCollection(TreeSet::new));
+                String exactState;
+                if (recentExactActionId == null) {
+                    exactState = "null";
+                } else if (recentExactActionId == guid) {
+                    exactState = "same";
+                } else {
+                    exactState = "other";
+                }
+                String key = "exact=%s|activeTargets=%s|tracked=%d|foreignSources=%d|foreignActions=%d".formatted(
+                        exactState,
+                        activeTargets >= 3 ? "3+" : Long.toString(activeTargets),
+                        trackedTargetDots.size(),
+                        foreignSources.size(),
+                        foreignActions.size()
+                );
+                matrix.compute(
+                        key,
+                        (ignored, existing) -> {
+                            StructureStats stats = existing == null ? new StructureStats() : existing;
+                            return stats.add(assignedDelta, "");
+                        }
+                );
+                continue;
+            }
+
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        System.out.printf(
+                "%s trackedTargetSplitCoverageMatrix fight=%d actor=%s guid=%s totalHits=%d totalAssigned=%d%n",
+                label,
+                fightId,
+                comparison.localName(),
+                formatGuid(guid),
+                totalHits,
+                totalAssigned
+        );
+        final long totalAssignedFinal = totalAssigned;
+        matrix.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue().damageTotal(), left.getValue().damageTotal()))
+                .limit(12)
+                .forEach(entry -> {
+                    long assigned = entry.getValue().damageTotal();
+                    double share = totalAssignedFinal == 0L ? 0.0 : (assigned * 100.0) / totalAssignedFinal;
+                    System.out.printf(
+                            "  %s assigned=%d hits=%d share=%.2f%%%n",
+                            entry.getKey(),
+                            assigned,
+                            entry.getValue().hitCount(),
+                            share
+                    );
+                });
     }
 
     @SuppressWarnings("unchecked")
