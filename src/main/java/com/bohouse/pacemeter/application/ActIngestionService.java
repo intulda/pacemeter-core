@@ -41,6 +41,7 @@ public final class ActIngestionService {
     private static final double FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD = 0.42;
     private static final double KNOWN_SOURCE_FOREIGN_DOMINANT_SOURCE_SHARE_THRESHOLD = 0.70;
     private static final double KNOWN_SOURCE_FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD = 0.70;
+    private static final double KNOWN_SOURCE_FOREIGN_DOMINANCE_SCORE_THRESHOLD = 0.70;
     private static final double FOREIGN_DOMINANT_ACTION_REDUCTION_FACTOR = 0.00;
     private static final double KNOWN_SOURCE_TWO_TARGET_SAME_SOURCE_WEIGHT_FACTOR = 0.00;
     private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);
@@ -89,6 +90,8 @@ public final class ActIngestionService {
     private final Map<String, Long> dotAttributionAssignedHitCountByKey = new HashMap<>();
     private final Map<String, Long> dotAttributionEmittedAmountByKey = new HashMap<>();
     private final Map<String, Long> dotAttributionEmittedHitCountByKey = new HashMap<>();
+    private final Map<String, Long> knownSourceTrackedTargetSplitProbeCountByKey = new HashMap<>();
+    private final Map<String, Long> knownSourceTrackedTargetSplitProbeAmountByKey = new HashMap<>();
     private final Deque<DotAttributionAssignment> recentDotAttributionAssignments = new ArrayDeque<>();
     private final Map<LiveDotApplicationCloneKey, RecentDamageCloneCandidate> recentDotApplicationCloneCandidates = new HashMap<>();
     private final StatusZeroDotAllocationPlanner statusZeroDotAllocationPlanner = new StatusZeroDotAllocationPlanner();
@@ -177,6 +180,8 @@ public final class ActIngestionService {
         dotAttributionModeCounts.clear();
         dotAttributionAssignedAmountByKey.clear();
         dotAttributionAssignedHitCountByKey.clear();
+        knownSourceTrackedTargetSplitProbeCountByKey.clear();
+        knownSourceTrackedTargetSplitProbeAmountByKey.clear();
         recentDotAttributionAssignments.clear();
         recentDotApplicationCloneCandidates.clear();
         actorNameById.clear();
@@ -237,6 +242,8 @@ public final class ActIngestionService {
             dotAttributionModeCounts.clear();
             dotAttributionAssignedAmountByKey.clear();
             dotAttributionAssignedHitCountByKey.clear();
+            knownSourceTrackedTargetSplitProbeCountByKey.clear();
+            knownSourceTrackedTargetSplitProbeAmountByKey.clear();
             recentDotAttributionAssignments.clear();
             recentDotApplicationCloneCandidates.clear();
             combatService.clearCombatantContext();
@@ -1089,51 +1096,227 @@ public final class ActIngestionService {
             boolean acceptedBySource,
             List<TrackedDotState> trackedDots
     ) {
+        KnownSourceForeignDominanceDecision decision =
+                evaluateKnownSourceForeignDominatedTrackedTargetSplit(dot, acceptedBySource, trackedDots);
+        recordKnownSourceTrackedTargetSplitProbe(decision, dot.damage());
+        return decision.suppress();
+    }
+
+    private KnownSourceForeignDominanceDecision evaluateKnownSourceForeignDominatedTrackedTargetSplit(
+            DotTickRaw dot,
+            boolean acceptedBySource,
+            List<TrackedDotState> trackedDots
+    ) {
         KnownSourceTrackedTargetSplitFeatures features =
                 analyzeKnownSourceTrackedTargetSplit(dot, acceptedBySource, trackedDots);
+        int activeTargets = Math.toIntExact(countTrackedTargetsWithActiveDots());
+        int trackedTargetCount = trackedDots.size();
+        List<TrackedDotState> sourceTrackedDots = features.sourceTrackedDots();
         if (!features.eligible()) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "ineligible",
+                    trackedTargetCount,
+                    0,
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         if (features.recentExactActionId() != null) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "recent_exact",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
-        List<TrackedDotState> sourceTrackedDots = features.sourceTrackedDots();
         if (sourceTrackedDots.size() != 1) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "source_tracked_not_single",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         Integer recentSourceActionId = features.recentSourceActionId();
         if (recentSourceActionId == null || sourceTrackedDots.get(0).actionId() != recentSourceActionId) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "source_action_mismatch",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         SourceDotEvidence actionEvidence = features.actionEvidence();
         SourceDotEvidence statusEvidence = features.statusEvidence();
         if (actionEvidence == null || statusEvidence == null) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "missing_evidence",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         Instant recentCutoff = dot.ts().minusMillis(KNOWN_SOURCE_STALE_OTHER_TARGET_WINDOW_MS);
         if (actionEvidence.appliedAt().isBefore(recentCutoff) || statusEvidence.appliedAt().isBefore(recentCutoff)) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "stale_evidence",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         if (actionEvidence.targetId() == dot.targetId() || statusEvidence.targetId() == dot.targetId()) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "same_target_evidence",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         if (actionEvidence.targetId() != statusEvidence.targetId()) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "evidence_target_disagree",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         long foreignSourceCount = features.foreignSourceCount();
         long distinctSourceCount = features.distinctSourceCount();
         if (distinctSourceCount <= 0) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "no_distinct_source",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         long foreignActionCount = features.foreignActionCount();
         long distinctActionCount = features.distinctActionCount();
         if (distinctActionCount <= 0) {
-            return false;
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "no_distinct_action",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    -1.0,
+                    -1.0,
+                    -1.0
+            );
         }
         double foreignSourceShare = (double) foreignSourceCount / (double) distinctSourceCount;
         double foreignActionShare = (double) foreignActionCount / (double) distinctActionCount;
-        return foreignSourceShare >= KNOWN_SOURCE_FOREIGN_DOMINANT_SOURCE_SHARE_THRESHOLD
-                && foreignActionShare >= KNOWN_SOURCE_FOREIGN_DOMINANT_ACTION_SHARE_THRESHOLD;
+        if (foreignSourceShare < 0.50 || foreignActionShare < 0.50) {
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "share_floor",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    foreignSourceShare,
+                    foreignActionShare,
+                    -1.0
+            );
+        }
+        double foreignDominanceScore = computeKnownSourceForeignDominanceScore(
+                foreignSourceShare,
+                foreignActionShare
+        );
+        if (foreignDominanceScore < KNOWN_SOURCE_FOREIGN_DOMINANCE_SCORE_THRESHOLD) {
+            return KnownSourceForeignDominanceDecision.notSuppressed(
+                    "score_below_threshold",
+                    trackedTargetCount,
+                    sourceTrackedDots.size(),
+                    activeTargets,
+                    foreignSourceShare,
+                    foreignActionShare,
+                    foreignDominanceScore
+            );
+        }
+        return KnownSourceForeignDominanceDecision.suppressed(
+                "suppress",
+                trackedTargetCount,
+                sourceTrackedDots.size(),
+                activeTargets,
+                foreignSourceShare,
+                foreignActionShare,
+                foreignDominanceScore
+        );
+    }
+
+    private void recordKnownSourceTrackedTargetSplitProbe(
+            KnownSourceForeignDominanceDecision decision,
+            long amount
+    ) {
+        String key = "reason=" + decision.reason()
+                + "|suppressed=" + decision.suppress()
+                + "|trackedTargets=" + cardinalityBucket(decision.trackedTargetCount(), 4)
+                + "|sourceTracked=" + cardinalityBucket(decision.sourceTrackedCount(), 3)
+                + "|activeTargets=" + cardinalityBucket(decision.activeTargetCount(), 4)
+                + "|sourceShare=" + ratioBucket(decision.foreignSourceShare())
+                + "|actionShare=" + ratioBucket(decision.foreignActionShare())
+                + "|score=" + ratioBucket(decision.foreignDominanceScore());
+        knownSourceTrackedTargetSplitProbeCountByKey.merge(key, 1L, Long::sum);
+        if (amount > 0) {
+            knownSourceTrackedTargetSplitProbeAmountByKey.merge(key, amount, Long::sum);
+        }
+    }
+
+    private String cardinalityBucket(int value, int top) {
+        if (value <= 0) {
+            return "0";
+        }
+        if (value >= top) {
+            return top + "+";
+        }
+        return Integer.toString(value);
+    }
+
+    private String ratioBucket(double value) {
+        if (value < 0.0) {
+            return "na";
+        }
+        double clamped = Math.max(0.0, Math.min(1.0, value));
+        double floor = Math.floor(clamped * 10.0) / 10.0;
+        double ceil = Math.min(1.0, floor + 0.1);
+        return String.format(Locale.ROOT, "%.1f-%.1f", floor, ceil);
+    }
+
+    private double computeKnownSourceForeignDominanceScore(
+            double foreignSourceShare,
+            double foreignActionShare
+    ) {
+        if (foreignSourceShare <= 0.0 || foreignActionShare <= 0.0) {
+            return 0.0;
+        }
+        // Harmonic mean penalizes one-sided dominance and keeps behavior near prior dual-threshold gate.
+        return (2.0 * foreignSourceShare * foreignActionShare)
+                / (foreignSourceShare + foreignActionShare);
     }
 
     private KnownSourceTrackedTargetSplitFeatures analyzeKnownSourceTrackedTargetSplit(
@@ -1416,6 +1599,14 @@ public final class ActIngestionService {
 
     Map<String, Long> debugDotAttributionEmittedHitCounts() {
         return Map.copyOf(dotAttributionEmittedHitCountByKey);
+    }
+
+    Map<String, Long> debugKnownSourceTrackedTargetSplitProbeCounts() {
+        return Map.copyOf(knownSourceTrackedTargetSplitProbeCountByKey);
+    }
+
+    Map<String, Long> debugKnownSourceTrackedTargetSplitProbeAmounts() {
+        return Map.copyOf(knownSourceTrackedTargetSplitProbeAmountByKey);
     }
 
     public LiveDotAttributionDebugSnapshot debugLiveDotAttributionSnapshot(long lookbackSeconds) {
@@ -2543,6 +2734,58 @@ public final class ActIngestionService {
                     0L,
                     0L,
                     0L
+            );
+        }
+    }
+    private record KnownSourceForeignDominanceDecision(
+            boolean suppress,
+            String reason,
+            int trackedTargetCount,
+            int sourceTrackedCount,
+            int activeTargetCount,
+            double foreignSourceShare,
+            double foreignActionShare,
+            double foreignDominanceScore
+    ) {
+        private static KnownSourceForeignDominanceDecision suppressed(
+                String reason,
+                int trackedTargetCount,
+                int sourceTrackedCount,
+                int activeTargetCount,
+                double foreignSourceShare,
+                double foreignActionShare,
+                double foreignDominanceScore
+        ) {
+            return new KnownSourceForeignDominanceDecision(
+                    true,
+                    reason,
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargetCount,
+                    foreignSourceShare,
+                    foreignActionShare,
+                    foreignDominanceScore
+            );
+        }
+
+        private static KnownSourceForeignDominanceDecision notSuppressed(
+                String reason,
+                int trackedTargetCount,
+                int sourceTrackedCount,
+                int activeTargetCount,
+                double foreignSourceShare,
+                double foreignActionShare,
+                double foreignDominanceScore
+        ) {
+            return new KnownSourceForeignDominanceDecision(
+                    false,
+                    reason,
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargetCount,
+                    foreignSourceShare,
+                    foreignActionShare,
+                    foreignDominanceScore
             );
         }
     }

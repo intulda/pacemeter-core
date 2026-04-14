@@ -12906,6 +12906,131 @@ class SubmissionParityReportDiagnostics {
                 });
     }
 
+    @Test
+    void debugKnownSourceTrackedTargetSplitProbeBuckets_forSelectedFights_printsTopReasons() throws Exception {
+        printKnownSourceTrackedTargetSplitProbeBuckets(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "heavy2.fight2"
+        );
+        printKnownSourceTrackedTargetSplitProbeBuckets(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "heavy4.fight5"
+        );
+        printKnownSourceTrackedTargetSplitProbeBuckets(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "lindwurm.fight8"
+        );
+    }
+
+    private void printKnownSourceTrackedTargetSplitProbeBuckets(
+            String submissionId,
+            int fightId,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Long> counts = ingestion.debugKnownSourceTrackedTargetSplitProbeCounts();
+        Map<String, Long> amounts = ingestion.debugKnownSourceTrackedTargetSplitProbeAmounts();
+        long totalHits = counts.values().stream().mapToLong(Long::longValue).sum();
+        long totalAmount = amounts.values().stream().mapToLong(Long::longValue).sum();
+        long suppressHits = counts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|suppressed=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+        long suppressAmount = amounts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|suppressed=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+
+        double suppressHitRatio = totalHits == 0L ? 0.0 : (suppressHits * 100.0) / totalHits;
+        double suppressAmountRatio = totalAmount == 0L ? 0.0 : (suppressAmount * 100.0) / totalAmount;
+        System.out.printf(
+                "%s knownSourceTrackedTargetSplitProbe totals hits=%d amount=%d suppressHits=%d(%.2f%%) suppressAmount=%d(%.2f%%)%n",
+                label,
+                totalHits,
+                totalAmount,
+                suppressHits,
+                suppressHitRatio,
+                suppressAmount,
+                suppressAmountRatio
+        );
+
+        System.out.printf("%s knownSourceTrackedTargetSplitProbe topByAmount%n", label);
+        amounts.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(15)
+                .forEach(entry -> System.out.printf(
+                        "  amount=%d hits=%d key=%s%n",
+                        entry.getValue(),
+                        counts.getOrDefault(entry.getKey(), 0L),
+                        entry.getKey()
+                ));
+
+        System.out.printf("%s knownSourceTrackedTargetSplitProbe topSuppressByAmount%n", label);
+        amounts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|suppressed=true|"))
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(12)
+                .forEach(entry -> System.out.printf(
+                        "  amount=%d hits=%d key=%s%n",
+                        entry.getValue(),
+                        counts.getOrDefault(entry.getKey(), 0L),
+                        entry.getKey()
+                ));
+    }
+
     private static void setField(Object target, String fieldName, Object value) throws Exception {
         Field field = target.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);

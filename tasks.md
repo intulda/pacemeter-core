@@ -139,3 +139,171 @@
 1. `status0_tracked_target_split`의 남은 이산 컷(`sourceTrackedDots.size()!=1` 등)을 score/ratio 연속 기준으로 치환 가능한지 진단
 2. heavy2/heavy4/lindwurm + heavy2 all-fights gate 동시 확인
 3. 가설 1개만 반영 후 즉시 baseline/gate 재검증
+
+## 2026-04-14 추가 실험 (원복)
+
+### 가설
+- `status0_tracked_target_split` 억제에
+  - `foreignSourceCount>=3 && foreignActionCount>=3`
+  - `foreign share >= 0.70`
+  - `recentExact=null` + `sourceTrackedDots=1/recentSourceAction 일치`
+  - stale same-target evidence 조건
+  을 추가하면 heavy2 `1D41/64AC`를 동시 감소시킬 수 있다고 가정.
+
+### 관찰
+- heavy2 fight2 target parity:
+  - DRG `64AC`: `+32,951 -> -13,976`
+  - SAM `1D41`: `+1,139,355 -> +1,092,425`
+- tracked_target_split coverage 감소:
+  - heavy2 SAM: `hits 39 -> 37`, `assigned 353,004 -> 333,456`
+  - heavy2 DRG: `hits 27 -> 25`, `assigned 222,643 -> 205,933`
+- heavy4/lindwurm tracked_target_split coverage는 실질 동일.
+
+### 회귀
+- gate: `pass=true` 유지
+- rollup:
+  - `mape=0.01203218732534237` (기준선 `0.011888730720603377` 대비 악화)
+  - `p95=0.025790177051519213` (소폭 개선)
+  - `max=0.03537628179947446` (동일)
+
+### 결론
+- selected fight 개선 대비 전역 `mape` 악화로 기각.
+- production 코드 원복 완료.
+
+## 2026-04-14 재설계 1단계 (진행중)
+
+### 가설
+- `foreignSourceShare>=0.70 && foreignActionShare>=0.70` 이산 컷을
+  연속 score(`harmonic mean`)로 바꾸면 이후 튜닝 공간을 확보할 수 있다.
+
+### 변경
+- `shouldSuppressKnownSourceForeignDominatedTrackedTargetSplit`:
+  - foreign dominance 판단을 `computeKnownSourceForeignDominanceScore()`로 치환
+  - 보수적 하한(`source/action share >= 0.50`) 유지
+  - threshold는 `0.70`으로 시작
+
+### 검증
+- `ActIngestionServiceTest` pass
+- `SubmissionParityRegressionGateTest` pass
+- heavy2 fight2:
+  - DRG `64AC`: `+32,951` (동일)
+  - SAM `1D41`: `+1,139,355` (동일)
+- coverage matrix:
+  - heavy2/heavy4/lindwurm `status0_tracked_target_split` 동일
+- rollup:
+  - `mape=0.011888730720603377`
+  - `p95=0.025951827200127585`
+  - `max=0.03537628179947446`
+  - `pass=true`
+
+### 해석
+- 구조는 연속 스코어 기반으로 전환됐지만, 현재 threshold에서는 동작이 기준선과 동일.
+- 다음 턴은 threshold/score 가중치 1개만 조정해 heavy2 이득과 gate/rollup 보존을 탐색.
+
+## 2026-04-14 재설계 2단계 (기각/원복)
+
+### 가설
+- foreign dominance score threshold를 `0.70 -> 0.66`으로 낮추면
+  heavy2의 `status0_tracked_target_split` 일부를 추가 억제해 `1D41`를 줄일 수 있다.
+
+### 관찰
+- heavy2 fight2:
+  - SAM `1D41`: `+1,139,355 -> +1,119,785` (개선)
+  - DRG `64AC`: `+32,951` (변화 없음)
+- coverage:
+  - heavy2 SAM tracked_target_split `hits 39 -> 37`, `assigned 353,004 -> 333,434`
+  - heavy2 DRG/heavy4/lindwurm는 실질 변화 없음
+
+### 회귀
+- gate: `pass=true` 유지
+- rollup:
+  - `mape=0.011993527799304437` (악화)
+  - `p95=0.02594914590214228` (소폭 개선)
+  - `max=0.03537628179947446` (동일)
+
+### 결론
+- selected fight 단일 개선 대비 전역 `mape` 악화로 기각.
+- threshold `0.70` 원복, baseline/gate/rollup 기준선 복귀 확인 완료.
+
+## 2026-04-14 재설계 3단계 (기각/원복)
+
+### 가설
+- foreign-dominant suppress를 `activeTargets==2`(dual-target lifecycle)로 제한하면
+  heavy2 특이 케이스만 타격하고 전역 부작용을 줄일 수 있다.
+
+### 결과
+- heavy2/heavy4/lindwurm coverage matrix, heavy2 핵심 잔차, rollup 모두 변화 없음.
+- 의미 있는 동작 변화가 없어 기각/원복.
+
+## 2026-04-14 재설계 4단계 (진단 계측 추가)
+
+### 목적
+- `status0_tracked_target_split`의 foreign-dominant suppress가
+  어떤 근거(reason)에서 걸리는지/안 걸리는지 정량 근거를 먼저 확보.
+- production attribution 동작은 변경하지 않고 evidence 분해만 강화.
+
+### 변경
+- `ActIngestionService`에 known-source tracked-target-split probe 계측 추가:
+  - `debugKnownSourceTrackedTargetSplitProbeCounts()`
+  - `debugKnownSourceTrackedTargetSplitProbeAmounts()`
+- foreign-dominant suppress 판단을 내부 decision 구조로 분해:
+  - reason(`ineligible`, `recent_exact`, `source_action_mismatch`, `share_floor`, `score_below_threshold`, `suppress` 등)
+  - context bucket(`trackedTargets`, `sourceTracked`, `activeTargets`)
+  - ratio/score bucket(`sourceShare`, `actionShare`, `score`)
+- 계측은 hit count/assigned amount만 누적하며,
+  기존 suppress 결과(true/false)와 분기 순서는 동일 유지.
+
+### 검증
+- `ActIngestionServiceTest` pass
+- `SubmissionParityRegressionGateTest` pass
+
+### 해석
+- 이번 단계는 보정 규칙 추가가 아니라 원인 분해용 텔레메트리 확보 단계.
+- 다음 턴에서 heavy2/heavy4/lindwurm 동일 지점에 대해
+  suppress reason 분포를 비교해 explainable 가설 1개만 선정 가능.
+
+## 2026-04-14 재설계 5단계 (기각/원복)
+
+### 관찰 (probe)
+- selected fights probe 요약:
+  - heavy2 fight2: `hits=162`, `amount=4,758,059`, `suppressed=32,534(0.68%)`
+  - heavy4 fight5: `hits=71`, `amount=2,456,222`, `suppressed=0`
+  - lindwurm fight8: `hits=83`, `amount=2,496,786`, `suppressed=0`
+- heavy2 상위 reason은
+  - `ineligible(activeTargets=1/sourceTracked=0)` 대량
+  - `recent_exact(activeTargets=2/sourceTracked=1)` 대량
+  - 기존 `score>=0.70 suppress`는 실질 1 hit만 발생
+
+### 가설
+- `recent_exact + sourceTracked 단일 일치`를 suppress하면 heavy2 오염을 줄일 수 있다고 가정.
+
+### 결과
+- gate 실패:
+  - rollup max APE: `0.05775146607716398` (기준 0.05 초과)
+  - heavy2 all-fights fight2 p95: `0.05521012132054555` (기준 0.055 초과)
+- heavy2 fight2 `1D41` target parity도 악화:
+  - `delta=+1,147,111` (기준선 `+1,139,355` 대비 악화)
+
+### 조치
+- 가설 즉시 원복 완료.
+- production 동작은 재설계 4단계(비침습 계측) 상태로 복귀.
+
+## 2026-04-15 이어하기 메모
+
+### 현재 안전 상태
+- production 규칙 변경 없음(재설계 4단계 계측만 유지)
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+
+### 확정 관찰
+- heavy2 fight2 `status0_tracked_target_split` probe:
+  - `hits=162`, `amount=4,758,059`
+  - suppress 실효: `32,534(0.68%)`
+- heavy4/lindwurm는 suppress 실효 `0`
+- 단순 suppress 확장은 gate 깨짐(재설계 5단계에서 기각/원복 완료)
+
+### 다음 시작점 (1가설 원칙)
+1. `recent_exact(activeTargets=2, sourceTracked=1)` 구간만 분리 진단
+2. suppress가 아니라 attribution 경로 선택(분배 방식) 후보 1개만 실험
+3. 즉시 `ActIngestionServiceTest` + `SubmissionParityRegressionGateTest` + heavy2 target/mode 재검증

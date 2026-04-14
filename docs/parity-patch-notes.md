@@ -173,3 +173,124 @@
 - heavy2 fight2:
   - DRG `64AC`: `+32,951`
   - SAM `1D41`: `+1,139,355`
+
+### 2026-04-14 추가 가설 실험 (기각/원복)
+- 변경 시도:
+  - `shouldSuppressKnownSourceForeignDominatedTrackedTargetSplit`에
+    - `foreignSourceCount>=3 && foreignActionCount>=3` 최소 cardinality
+    - `foreign share >= 0.70` 유지
+    - stale same-target evidence 분기 추가
+- 관찰:
+  - heavy2 fight2:
+    - DRG `64AC`: `+32,951 -> -13,976`
+    - SAM `1D41`: `+1,139,355 -> +1,092,425`
+  - tracked_target_split coverage:
+    - heavy2 SAM `hits 39 -> 37`, `assigned 353,004 -> 333,456`
+    - heavy2 DRG `hits 27 -> 25`, `assigned 222,643 -> 205,933`
+  - heavy4/lindwurm coverage matrix는 실질 변화 없음
+- rollup:
+  - `mape=0.01203218732534237` (악화)
+  - `p95=0.025790177051519213` (소폭 개선)
+  - `max=0.03537628179947446` (동일)
+  - gate: `pass=true`
+- 결론:
+  - selected fight 개선 대비 전역 `mape` 악화로 기각.
+  - production 원복.
+
+### 2026-04-14 재설계 1단계
+- 목표:
+  - `status0_tracked_target_split`의 foreign-dominant 억제 조건을
+    이산 컷에서 연속 score 기준으로 전환.
+- 반영:
+  - `shouldSuppressKnownSourceForeignDominatedTrackedTargetSplit`에서
+    `foreign dominance score = harmonic mean(foreignSourceShare, foreignActionShare)` 도입
+  - 초기 threshold `0.70`, 보수 하한 `share >= 0.50`
+- 결과:
+  - baseline/gate/selected diagnostics 수치 변화 없음
+  - heavy2 fight2:
+    - DRG `64AC`: `+32,951` (동일)
+    - SAM `1D41`: `+1,139,355` (동일)
+  - rollup:
+    - `mape=0.011888730720603377`
+    - `p95=0.025951827200127585`
+    - `max=0.03537628179947446`
+    - `pass=true`
+- 메모:
+  - 구조 전환 완료, threshold 튜닝은 다음 턴에서 1가설씩 진행.
+
+### 2026-04-14 재설계 2단계 (기각/원복)
+- 변경 시도:
+  - `KNOWN_SOURCE_FOREIGN_DOMINANCE_SCORE_THRESHOLD = 0.70 -> 0.66`
+- 관찰:
+  - heavy2 fight2:
+    - SAM `1D41`: `+1,139,355 -> +1,119,785` 개선
+    - DRG `64AC`: `+32,951` 변화 없음
+  - heavy2 SAM tracked_target_split coverage:
+    - `hits 39 -> 37`
+    - `assigned 353,004 -> 333,434`
+  - heavy2 DRG/heavy4/lindwurm coverage는 실질 변화 없음
+- rollup:
+  - `mape=0.011993527799304437` (악화)
+  - `p95=0.02594914590214228` (소폭 개선)
+  - `max=0.03537628179947446` (동일)
+  - gate `pass=true`
+- 결론:
+  - selected fight 개선 대비 전역 `mape` 악화로 기각.
+  - threshold `0.70` 원복.
+
+### 2026-04-14 재설계 3단계 (기각/원복)
+- 변경 시도:
+  - foreign-dominant suppress에 `activeTargets==2` 제한 추가
+- 결과:
+  - heavy2/heavy4/lindwurm coverage matrix, heavy2 `1D41/64AC`, rollup 수치 모두 변화 없음
+- 결론:
+  - 실질 영향 없는 조건으로 판단, 원복.
+
+### 2026-04-14 재설계 4단계 (비침습 계측)
+- 목표:
+  - `status0_tracked_target_split`의 foreign-dominant suppress 판정 근거를
+    reason/score bucket 단위로 수집해 다음 가설을 evidence 기반으로 선택.
+- 반영:
+  - `ActIngestionService`에 probe 계측 추가:
+    - `debugKnownSourceTrackedTargetSplitProbeCounts()`
+    - `debugKnownSourceTrackedTargetSplitProbeAmounts()`
+  - suppress 판정을 내부 decision 구조로 분해:
+    - reason: `ineligible`, `recent_exact`, `source_tracked_not_single`,
+      `source_action_mismatch`, `missing_evidence`, `stale_evidence`,
+      `same_target_evidence`, `evidence_target_disagree`, `share_floor`,
+      `score_below_threshold`, `suppress`
+    - context/ratio bucket: trackedTargets, sourceTracked, activeTargets,
+      sourceShare/actionShare/score
+- 검증:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- 메모:
+  - attribution 결과 자체는 바꾸지 않는 진단 계측 단계.
+  - 다음 변경은 probe 결과 기준으로 heavy2 이득 + heavy4/lindwurm/gate 보존 가능한 1가설만 선택.
+
+### 2026-04-14 재설계 5단계 (기각/원복)
+- probe 관찰:
+  - heavy2 fight2: `hits=162`, `amount=4,758,059`, `suppressed=32,534(0.68%)`
+  - heavy4 fight5: `hits=71`, `amount=2,456,222`, `suppressed=0`
+  - lindwurm fight8: `hits=83`, `amount=2,496,786`, `suppressed=0`
+  - heavy2 상위 reason은 `ineligible(activeTargets=1)` + `recent_exact(activeTargets=2)`이며,
+    기존 foreign-dominant score suppress는 실질 커버리지가 매우 낮음.
+- 변경 시도:
+  - `recent_exact + sourceTracked 단일 일치`를 suppress하도록 확장
+- 회귀:
+  - rollup max APE: `0.05775146607716398` (gate fail)
+  - heavy2 all-fights fight2 p95: `0.05521012132054555` (gate fail)
+  - heavy2 fight2 `1D41` delta도 악화(`+1,147,111`)
+- 결론:
+  - 가설 기각 및 즉시 원복.
+  - production은 재설계 4단계 상태 유지.
+
+## 2026-04-15 핸드오프
+
+- 현재 상태:
+  - production은 비침습 probe 계측만 반영된 상태
+  - baseline/gate 통과 상태 복귀 확인 완료
+- 다음 우선순위:
+  1. heavy2의 `recent_exact(activeTargets=2, sourceTracked=1)` 구간을 suppress 없이 분해
+  2. attribution 경로 선택 가설 1개만 반영
+  3. heavy2/heavy4/lindwurm + heavy2 all-fights gate 즉시 재검증
