@@ -4446,6 +4446,30 @@ class SubmissionParityReportDiagnostics {
     }
 
     @Test
+    void debugHeavy2Fight2SamuraiTargetTimeline_printsLocalVsFflogsTargets() throws Exception {
+        printActorTargetTimeline(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Samurai",
+                0x1D41,
+                0x04CC,
+                "heavy2.fight2.sam"
+        );
+    }
+
+    @Test
+    void debugHeavy2Fight2DragoonTargetTimeline_printsLocalVsFflogsTargets() throws Exception {
+        printActorTargetTimeline(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "Dragoon",
+                0x64AC,
+                0x0A9F,
+                "heavy2.fight2.drg"
+        );
+    }
+
+    @Test
     void debugHeavy2Fight2DragoonStatus0TargetSourceBreakdown_prints64acTargetMix() throws Exception {
         printStatus0TargetSourceBreakdown(
                 "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
@@ -4499,6 +4523,30 @@ class SubmissionParityReportDiagnostics {
                 List.of("chaotic spring"),
                 Set.of(0x64AC, 0x0A9F),
                 "heavy4.fight5.drg"
+        );
+    }
+
+    @Test
+    void debugHeavy4Fight5DragoonFflogsAbilityVsEvents_printsChaoticSpringSurfaceDelta() throws Exception {
+        printActorFflogsAbilityVsEvents(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "Dragoon",
+                0x64AC,
+                0x0A9F,
+                "heavy4.fight5.drg"
+        );
+    }
+
+    @Test
+    void debugLindwurmFight8DragoonFflogsAbilityVsEvents_printsChaoticSpringSurfaceDelta() throws Exception {
+        printActorFflogsAbilityVsEvents(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "Dragoon",
+                0x64AC,
+                0x0A9F,
+                "lindwurm.fight8.drg"
         );
     }
 
@@ -12676,8 +12724,24 @@ class SubmissionParityReportDiagnostics {
                 .toList();
 
         long eventTotal = events.stream().mapToLong(FflogsApiClient.DamageEventEntry::amount).sum();
+        long absoluteDelta = Math.abs(eventTotal - abilityTotal);
+        long normalizationDenominator = Math.max(abilityTotal, eventTotal);
+        double agreementScore = normalizationDenominator == 0L
+                ? 1.0
+                : Math.max(0.0, 1.0 - ((double) absoluteDelta / (double) normalizationDenominator));
+        double eventToAbilityRatio = abilityTotal == 0L
+                ? (eventTotal == 0L ? 1.0 : Double.POSITIVE_INFINITY)
+                : (double) eventTotal / (double) abilityTotal;
+        String confidenceBucket;
+        if (agreementScore >= 0.97) {
+            confidenceBucket = "high";
+        } else if (agreementScore >= 0.90) {
+            confidenceBucket = "medium";
+        } else {
+            confidenceBucket = "low";
+        }
         System.out.printf(
-                "%s fflogsAbilityVsEvents fight=%d actor=%s primary=%s fallback=%s abilityTotal=%d eventTotal=%d delta=%d hits=%d%n",
+                "%s fflogsAbilityVsEvents fight=%d actor=%s primary=%s fallback=%s abilityTotal=%d eventTotal=%d delta=%d hits=%d agreement=%.4f ratio=%.4f confidence=%s%n",
                 label,
                 fightId,
                 comparison.localName(),
@@ -12686,7 +12750,10 @@ class SubmissionParityReportDiagnostics {
                 abilityTotal,
                 eventTotal,
                 eventTotal - abilityTotal,
-                events.size()
+                events.size(),
+                agreementScore,
+                eventToAbilityRatio,
+                confidenceBucket
         );
         events.stream()
                 .limit(12)

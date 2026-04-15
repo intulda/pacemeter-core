@@ -933,6 +933,38 @@ public final class ActIngestionService {
         return statusZeroDotAllocationPlanner.allocate(dot.damage(), candidates);
     }
 
+    private List<StatusZeroDotAllocationPlanner.Allocation> resolveSnapshotWeightedTrackedSubsetAllocations(
+            DotTickRaw dot,
+            List<TrackedDotState> trackedSubset
+    ) {
+        if (trackedSubset.size() < 2) {
+            return List.of();
+        }
+        StatusSnapshotState snapshot = latestStatusSnapshotsByTarget.get(dot.targetId());
+        if (snapshot == null
+                || Duration.between(snapshot.ts(), dot.ts()).abs().compareTo(STATUS_SNAPSHOT_REDISTRIBUTION_WINDOW) > 0) {
+            return List.of();
+        }
+        List<StatusZeroDotAllocationPlanner.Candidate> candidates = trackedSubset.stream()
+                .map(trackedDot -> {
+                    Double weight = snapshot.weights().get(new TrackedDotKey(trackedDot.sourceId(), trackedDot.actionId()));
+                    if (weight == null || weight <= 0.0) {
+                        return null;
+                    }
+                    return new StatusZeroDotAllocationPlanner.Candidate(
+                            trackedDot.sourceId(),
+                            trackedDot.actionId(),
+                            weight
+                    );
+                })
+                .filter(Objects::nonNull)
+                .toList();
+        if (candidates.size() < 2) {
+            return List.of();
+        }
+        return statusZeroDotAllocationPlanner.allocate(dot.damage(), candidates);
+    }
+
     private void rebalanceDominantForeignAction(
             Map<TrackedDotKey, Double> weightedKeys,
             long currentSourceId
@@ -1027,6 +1059,91 @@ public final class ActIngestionService {
         return snapshot.weights().keySet().stream()
                 .filter(key -> isPartyMember(key.sourceId()))
                 .noneMatch(key -> key.sourceId() == dot.sourceId());
+    }
+
+    private List<TrackedDotState> resolveKnownSourceDualTargetForeignOnlyTrackedSplit(
+            DotTickRaw dot,
+            boolean acceptedBySource,
+            List<TrackedDotState> trackedDots,
+            List<TrackedDotState> sourceTrackedDots
+    ) {
+        if (!acceptedBySource || dot.statusId() != 0) {
+            return List.of();
+        }
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return List.of();
+        }
+        if (countTrackedTargetsWithActiveDots() != 2) {
+            return List.of();
+        }
+        if (trackedDots.size() < 3 || sourceTrackedDots.size() != 1) {
+            return List.of();
+        }
+        Integer recentExactActionId = resolveRecentExactUnknownStatusActionId(
+                dot,
+                KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS
+        );
+        if (recentExactActionId != null) {
+            return List.of();
+        }
+        TrackedDotState sameSourceTrackedDot = sourceTrackedDots.get(0);
+        Integer recentSourceActionId = resolveRecentSourceUnknownStatusActionId(dot);
+        if (recentSourceActionId == null || sameSourceTrackedDot.actionId() != recentSourceActionId) {
+            return List.of();
+        }
+        List<TrackedDotState> foreignTrackedDots = trackedDots.stream()
+                .filter(trackedDot -> trackedDot.sourceId() != dot.sourceId())
+                .toList();
+        return foreignTrackedDots.size() >= 2 ? foreignTrackedDots : List.of();
+    }
+
+    private List<TrackedDotState> resolveKnownSourceSingleTargetForeignOnlyTrackedSplit(
+            DotTickRaw dot,
+            boolean acceptedBySource,
+            List<TrackedDotState> trackedDots,
+            List<TrackedDotState> sourceTrackedDots
+    ) {
+        if (!acceptedBySource || dot.statusId() != 0) {
+            return List.of();
+        }
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return List.of();
+        }
+        if (countTrackedTargetsWithActiveDots() != 1) {
+            return List.of();
+        }
+        if (trackedDots.size() < 4 || sourceTrackedDots.size() != 1) {
+            return List.of();
+        }
+        Integer recentExactActionId = resolveRecentExactUnknownStatusActionId(
+                dot,
+                KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS
+        );
+        if (recentExactActionId != null) {
+            return List.of();
+        }
+        TrackedDotState sameSourceTrackedDot = sourceTrackedDots.get(0);
+        Integer recentSourceActionId = resolveRecentSourceUnknownStatusActionId(dot);
+        if (recentSourceActionId == null || sameSourceTrackedDot.actionId() != recentSourceActionId) {
+            return List.of();
+        }
+        long foreignSourceCount = trackedDots.stream()
+                .map(TrackedDotState::sourceId)
+                .filter(sourceId -> sourceId != dot.sourceId())
+                .distinct()
+                .count();
+        long foreignActionCount = trackedDots.stream()
+                .map(TrackedDotState::actionId)
+                .filter(actionId -> actionId != recentSourceActionId)
+                .distinct()
+                .count();
+        if (foreignSourceCount < 3 || foreignActionCount < 3) {
+            return List.of();
+        }
+        List<TrackedDotState> foreignTrackedDots = trackedDots.stream()
+                .filter(trackedDot -> trackedDot.sourceId() != dot.sourceId())
+                .toList();
+        return foreignTrackedDots.size() >= 2 ? foreignTrackedDots : List.of();
     }
 
     private boolean shouldPreferCorroboratedKnownSourceAttribution(DotTickRaw dot) {
@@ -1717,7 +1834,6 @@ public final class ActIngestionService {
                 statusAppliedAt = statusApplication.appliedAt();
             }
         }
-
         if (actionId != null && statusMappedActionId != null && actionId.equals(statusMappedActionId)) {
             return actionId;
         }
@@ -2243,6 +2359,75 @@ public final class ActIngestionService {
                                 new ActorId(dot.targetId()),
                                 allocation.actionId(),
                                 allocation.amount()
+                        );
+                    }
+                    return;
+                }
+                List<TrackedDotState> foreignOnlyTrackedDots =
+                        resolveKnownSourceDualTargetForeignOnlyTrackedSplit(
+                                dot,
+                                acceptedBySource,
+                                trackedDots,
+                                sourceTrackedDots
+                        );
+                if (!foreignOnlyTrackedDots.isEmpty()) {
+                    List<StatusZeroDotAllocationPlanner.Allocation> weightedForeignOnlyAllocations =
+                            resolveSnapshotWeightedTrackedSubsetAllocations(dot, foreignOnlyTrackedDots);
+                    if (!weightedForeignOnlyAllocations.isEmpty()) {
+                        for (StatusZeroDotAllocationPlanner.Allocation allocation : weightedForeignOnlyAllocations) {
+                            emitDotDamageWithAttribution(
+                                    "status0_weighted_tracked_target_split_foreign_only_dual_target",
+                                    dot.ts(),
+                                    tsMs,
+                                    new ActorId(allocation.sourceId()),
+                                    actorNameById.getOrDefault(allocation.sourceId(), dot.sourceName()),
+                                    new ActorId(dot.targetId()),
+                                    allocation.actionId(),
+                                    allocation.amount()
+                            );
+                        }
+                        return;
+                    }
+                    long remaining = dot.damage();
+                    for (int i = 0; i < foreignOnlyTrackedDots.size(); i++) {
+                        TrackedDotState trackedDot = foreignOnlyTrackedDots.get(i);
+                        long allocated = remaining / (foreignOnlyTrackedDots.size() - i);
+                        remaining -= allocated;
+                        emitDotDamageWithAttribution(
+                                "status0_tracked_target_split_foreign_only_dual_target",
+                                dot.ts(),
+                                tsMs,
+                                new ActorId(trackedDot.sourceId()),
+                                trackedDot.sourceName(),
+                                new ActorId(dot.targetId()),
+                                trackedDot.actionId(),
+                                allocated
+                        );
+                    }
+                    return;
+                }
+                List<TrackedDotState> singleTargetForeignOnlyTrackedDots =
+                        resolveKnownSourceSingleTargetForeignOnlyTrackedSplit(
+                                dot,
+                                acceptedBySource,
+                                trackedDots,
+                                sourceTrackedDots
+                        );
+                if (!singleTargetForeignOnlyTrackedDots.isEmpty()) {
+                    long remaining = dot.damage();
+                    for (int i = 0; i < singleTargetForeignOnlyTrackedDots.size(); i++) {
+                        TrackedDotState trackedDot = singleTargetForeignOnlyTrackedDots.get(i);
+                        long allocated = remaining / (singleTargetForeignOnlyTrackedDots.size() - i);
+                        remaining -= allocated;
+                        emitDotDamageWithAttribution(
+                                "status0_tracked_target_split_foreign_only_single_target",
+                                dot.ts(),
+                                tsMs,
+                                new ActorId(trackedDot.sourceId()),
+                                trackedDot.sourceName(),
+                                new ActorId(dot.targetId()),
+                                trackedDot.actionId(),
+                                allocated
                         );
                     }
                     return;

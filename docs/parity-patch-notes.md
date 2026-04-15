@@ -294,3 +294,22 @@
   1. heavy2의 `recent_exact(activeTargets=2, sourceTracked=1)` 구간을 suppress 없이 분해
   2. attribution 경로 선택 가설 1개만 반영
   3. heavy2/heavy4/lindwurm + heavy2 all-fights gate 즉시 재검증
+
+## 2026-04-16 핸드오프
+
+- baseline(원복 기준):
+  - `mape=0.011072703994523023`
+  - `p95=0.025664526617876063`
+  - `max=0.03537628179947446`
+  - `pass=true`
+- selected fight 기준:
+  - heavy2 fight2 DRG `64AC`: `delta=-6,274`
+  - heavy2 fight2 SAM `1D41`: `delta=+1,035,044`
+- 오늘 기각된 가설:
+  - `status0_tracked_target_split_foreign_only_*`를 snapshot weighted evidence-only로 제한
+  - 결과: heavy2 `64AC`/`1D41` 동시 악화 + `mape` 악화로 원복
+- 다음 턴 시작 순서:
+  1. `tasks.md` 최신 체크포인트 확인
+  2. baseline (`ActIngestionServiceTest`, `SubmissionParityRegressionGateTest`) 재확인
+  3. heavy2/heavy4/lindwurm에서 `64AC` target/event semantics 복원 가설 1개만 적용
+  4. 즉시 rollup + selected diagnostics 재검증

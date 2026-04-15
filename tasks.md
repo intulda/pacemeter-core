@@ -307,3 +307,268 @@
 1. `recent_exact(activeTargets=2, sourceTracked=1)` 구간만 분리 진단
 2. suppress가 아니라 attribution 경로 선택(분배 방식) 후보 1개만 실험
 3. 즉시 `ActIngestionServiceTest` + `SubmissionParityRegressionGateTest` + heavy2 target/mode 재검증
+
+## 2026-04-15 실험 추가 (기각/원복)
+
+### baseline 복귀 재확인
+- `ActIngestionServiceTest` pass
+- `SubmissionParityRegressionGateTest` pass
+- rollup:
+  - `mape=0.011072703994523023`
+  - `p95=0.025664526617876063`
+  - `max=0.03537628179947446`
+  - `pass=true`
+
+### heavy2 fight2 현재 기준
+- SAM `1D41`: `delta=+1,035,044`
+- DRG `64AC`: `delta=-6,274`
+
+### 기각 1: fallback weighted 우선 분배
+- 변경:
+  - `status0_fallback_tracked_target_split` 앞에
+    `status0_fallback_weighted_tracked_target_split` 분기 추가
+    (unknown status + multi-target에서 snapshot weight 사용)
+- 결과:
+  - SAM `1D41` 악화: `+1,151,974`
+  - DRG `64AC` 악화: `-54,679`
+  - actor totals 역행
+- 조치: 원복
+
+### 기각 2: recentExact 기반 exact-only split
+- 변경:
+  - `status0_exact_same_source_tracked_target_split` 분기 추가
+    (accepted known-source + multi-target + recentExact 일치 시 exact action만 분배)
+- 결과:
+  - rollup 악화:
+    - `mape=0.011842769505729739`
+    - `p95=0.02780317682261673`
+  - heavy2 악화:
+    - SAM `1D41`: `+1,057,823`
+    - DRG `64AC`: `+104,817`
+- 조치: 원복
+
+### 다음 우선순위
+1. `heavy2.fight2.sam`의 fallback 오염 구간(`accepted=false`, `sourceTracked=0`, `recentExact/recentSource=null`)에 한정해 evidence 분해
+2. suppress 확대가 아닌, source-evidence 부재 fallback의 explainable 분기 1개만 실험
+3. 즉시 baseline/gate/selected 재검증
+
+## 2026-04-15 추가 실험 2 (기각/원복)
+
+### 가설
+- unknown status fallback에서
+  `activeTargets>1` + `recentExact/recentSource 모두 없음` + `sourceTracked=0` 케이스를 suppress하면
+  heavy2 `1D41` 오염을 줄일 수 있다고 가정.
+
+### 결과
+- gate 실패:
+  - `rollup pass=false`
+  - `mape=0.01269655421707582`
+  - `p95=0.031178025400181254`
+- heavy2 fight2:
+  - SAM `1D41`: `+799,243` (표면상 개선)
+  - DRG `64AC`: `-131,494` (과보정 악화)
+- heavy2 actor totals는 SAM/DRG/WHM/SCH 동시 역행.
+
+### 조치
+- 규칙 즉시 원복.
+- 원복 후 기준선 복귀 확인:
+  - `rollup mape=0.011072703994523023`
+  - `p95=0.025664526617876063`
+  - `max=0.03537628179947446`
+  - heavy2 `1D41=+1,035,044`, `64AC=-6,274`
+
+## 2026-04-15 추가 실험 3 (기각/원복)
+
+### 가설
+- fallback `status0_tracked_target_split`에서
+  `accepted=false/sourceTracked=0/recent evidence 없음/activeTargets>1` 구간만
+  equal split 대신 `expiresAt` 기반 가중 분배를 적용하면 stale 오염을 줄일 수 있다고 가정.
+
+### 결과
+- gate는 통과했지만 전역/selected 동시 악화:
+  - `mape=0.011686906041190595` (악화)
+  - SAM `1D41`: `+1,185,243` (악화)
+  - DRG `64AC`: `-52,018` (악화)
+- 조치: 즉시 원복
+
+### 원복 후 복귀 확인
+- `rollup mape=0.011072703994523023`
+- `p95=0.025664526617876063`
+- heavy2 `1D41=+1,035,044`, `64AC=-6,274`
+
+## 2026-04-15 추가 실험 4 (기각/원복)
+
+### 가설
+- fallback `status0_tracked_target_split`에서
+  source job이 unknown-status DoT whitelist 밖이고,
+  `recentExact/recentSource` 근거가 없으며 sourceTracked도 없는 multi-target 케이스만 suppress.
+
+### 결과
+- gate는 통과했지만 selected 동시 악화:
+  - `mape=0.011221629276891581` (악화)
+  - `p95=0.02555281693406692` (소폭 개선)
+  - SAM `1D41`: `+993,868` (개선)
+  - DRG `64AC`: `-47,447` (악화)
+- heavy2 actor totals에서도 DRG/WHM/SCH가 역행.
+
+### 조치
+- 규칙 즉시 원복.
+- 원복 후 기준선 복귀 확인:
+  - `rollup mape=0.011072703994523023`
+  - `p95=0.025664526617876063`
+  - heavy2 `1D41=+1,035,044`, `64AC=-6,274`
+
+## 2026-04-15 추가 실험 5 (무효/원복)
+
+### 가설
+- `resolveRecentSourceUnknownStatusActionId`에서 by-source map 미히트 시
+  target-scoped source evidence(`unknownStatusDotAction/StatusEvidenceBySource`)를 보조로 사용하면
+  fallback 진입 전 evidence 복원률이 늘어날 수 있다고 가정.
+
+### 결과
+- rollup/selected 지표가 baseline과 완전히 동일:
+  - `mape=0.011072703994523023`
+  - `p95=0.025664526617876063`
+  - SAM `1D41=+1,035,044`
+  - DRG `64AC=-6,274`
+
+### 조치
+- 동작 변화가 없어 코드 원복(복잡도 증가 방지).
+
+## 2026-04-16 추가 실험 6 (기각/원복)
+
+### 가설
+- `status0_fallback_tracked_target_split`에서
+  `accepted=false + sourceTracked=0 + recentExact/recentSource=null + activeTargets>1 + source=partyMember`
+  인 근거 부재 known-source fallback만 suppress하면 heavy2 오염을 줄일 수 있다고 가정.
+
+### 결과
+- heavy2 selected는 개선:
+  - SAM `1D41`: `+1,035,044 -> +706,222`
+  - DRG `64AC`: `-6,274 -> -164,710` (과보정)
+- 전역 품질 크게 악화, gate 실패:
+  - `mape=0.013439955422916669`
+  - `p95=0.03488555031539117`
+  - `max=0.03750632472618677`
+  - `pass=false`
+
+### 조치
+- 규칙 즉시 원복.
+- 원복 후 baseline 재확인:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` + selected diagnostics pass
+  - rollup `mape=0.011072703994523023`, `p95=0.025664526617876063`, `max=0.03537628179947446`, `pass=true`
+
+## 2026-04-16 타임라인 대조 체크포인트 (진단 우선순위 재정렬)
+
+### 관찰 1: heavy2 fight2 1D41/64AC는 "시간축 누수"보다 "이벤트 의미/타깃 의미" 차이가 큼
+- SAM `1D41` direct vs dot:
+  - `emittedTotal=1,588,932`, `raw21Total=276,944`, `inferredDotTotal=1,311,988`
+  - `fflogsAbilityTotal=1,542,816`, `delta=+46,116` (ability total 기준으로는 근접)
+- DRG `64AC` direct vs dot:
+  - `emittedTotal=1,927,842`, `raw21Total=967,058`, `inferredDotTotal=960,784`
+  - `fflogsAbilityTotal=1,785,989`, `delta=+141,853`
+
+### 관찰 2: heavy2 fight2 DRG는 FFLogs window 바깥 누수 0
+- `hitLeakVsFflogsWindows`:
+  - `outsideWindowHits=0`
+  - `outsideWindowDamage=0`
+- 즉, 과집계의 주원인은 "window 밖 이벤트"가 아님.
+
+### 관찰 3: status=0 분배가 타깃별 로컬 합을 크게 밀어올림
+- heavy2 fight2 SAM target mix:
+  - 레드 핫: `status0Assigned=686,889 / localEmitted=798,260`
+  - 딥 블루: `status0Assigned=496,752 / localEmitted=648,223`
+  - 수중 감옥: `status0Assigned=128,347 / localEmitted=142,449`
+- heavy2 fight2 DRG target mix:
+  - 레드 핫: `status0Assigned=692,721 / localEmitted=1,340,269`
+  - 딥 블루: `status0Assigned=190,050 / localEmitted=415,659`
+  - 수중 감옥: `status0Assigned=78,013 / localEmitted=171,914`
+
+### 결론 (우선순위)
+1. `시간창 suppress` 계열은 우선순위 하향
+2. 다음은 `target semantics / event semantics` 분리 진단을 먼저 고정
+3. production 가설은 `status=0 attribution 근거 복원`만 1개씩 유지
+
+## 2026-04-16 타임라인 대조 추가 (confidence 축 고정)
+
+### baseline 재확인
+- `ActIngestionServiceTest` pass
+- `SubmissionParityRegressionGateTest` pass
+- rollup:
+  - `mape=0.011072703994523023`
+  - `p95=0.025664526617876063`
+  - `max=0.03537628179947446`
+  - `pass=true`
+
+### heavy2 fight2 target timeline (local vs fflogs)
+- SAM `1D41`:
+  - local targets:
+    - 레드 핫 `798,260` (68 hits)
+    - 딥 블루 `648,223` (48 hits)
+    - 수중 감옥 `142,449` (16 hits)
+  - fflogs targets:
+    - `B` `222,742` (10 hits)
+    - `11` `302,942` (10 hits)
+    - `18` `28,204` (2 hits)
+- DRG `64AC`:
+  - local targets:
+    - 레드 핫 `1,340,269` (82 hits)
+    - 딥 블루 `415,659` (23 hits)
+    - 수중 감옥 `171,914` (12 hits)
+  - fflogs targets:
+    - `B` `1,295,096` (32 hits)
+    - `11` `451,218` (10 hits)
+    - `18` `187,802` (4 hits)
+
+### fflogsAbilityVsEvents confidence (동일 지표로 교차비교)
+- heavy2 fight2 SAM `1D41`:
+  - `abilityTotal=1,542,816`
+  - `eventTotal=553,888`
+  - `agreement=0.3590`, `ratio=0.3590`, `confidence=low`
+- heavy2 fight2 DRG `64AC`:
+  - `abilityTotal=1,785,989`
+  - `eventTotal=1,934,116`
+  - `agreement=0.9234`, `ratio=1.0829`, `confidence=medium`
+- heavy4 fight5 DRG `64AC`:
+  - `abilityTotal=1,823,449`
+  - `eventTotal=1,738,722`
+  - `agreement=0.9535`, `ratio=0.9535`, `confidence=medium`
+- lindwurm fight8 DRG `64AC`:
+  - `abilityTotal=1,434,142`
+  - `eventTotal=1,454,918`
+  - `agreement=0.9857`, `ratio=1.0145`, `confidence=high`
+
+### 우선순위 결론
+1. `1D41`은 low-confidence 구간이 커서, 즉시 production 분배 튜닝 대상이 아님
+2. `64AC`는 heavy2/heavy4/lind 비교가 가능하므로, shared GUID/target semantics 분해를 먼저 진행
+3. 다음 production 변경은 `status=0` 분배식이 아니라, evidence 복원(특히 target/event semantics 정합) 1가설만 적용
+
+## 2026-04-16 추가 실험 7 (기각/원복)
+
+### 가설
+- `status0_tracked_target_split_foreign_only_*`의 무근거 equal split이 heavy2 `64AC` target semantics를 흔든다고 보고,
+  foreign-only 경로를 `snapshot weighted evidence`가 있을 때만 허용.
+  (weighted evidence가 없으면 일반 `status0_tracked_target_split`로 폴백)
+
+### 관찰
+- heavy2 fight2 DRG `64AC`:
+  - `delta=-6,274 -> -29,211` (절대오차 악화)
+- heavy2 fight2 SAM `1D41`:
+  - `delta=+1,035,044 -> +1,060,714` (악화)
+- rollup:
+  - `mape=0.01109501889418931` (악화)
+  - `p95=0.02555281693406692` (개선)
+  - gate는 `pass=true` 유지
+
+### 해석
+- heavy2 `64AC`를 개선하지 못했고 `1D41`까지 동반 악화.
+- 전역 mape도 악화되어 채택 근거 부족.
+
+### 조치
+- 변경 즉시 원복.
+- 원복 후 baseline 복귀 확인:
+  - rollup: `mape=0.011072703994523023`, `p95=0.025664526617876063`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2:
+    - DRG `64AC=-6,274`
+    - SAM `1D41=+1,035,044`
