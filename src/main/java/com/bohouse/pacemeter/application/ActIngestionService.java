@@ -876,7 +876,7 @@ public final class ActIngestionService {
         if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
             return List.of();
         }
-        if (countTrackedTargetsWithActiveDots() != 2) {
+        if (countTrackedTargetsWithActiveDots() < 2) {
             return List.of();
         }
 
@@ -1073,7 +1073,7 @@ public final class ActIngestionService {
         if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
             return List.of();
         }
-        if (countTrackedTargetsWithActiveDots() != 2) {
+        if (countTrackedTargetsWithActiveDots() < 2) {
             return List.of();
         }
         if (trackedDots.size() < 3 || sourceTrackedDots.size() != 1) {

@@ -572,3 +572,193 @@
   - heavy2 fight2:
     - DRG `64AC=-6,274`
     - SAM `1D41=+1,035,044`
+
+## 2026-04-16 이어가기 진단 재확인 (production 변경 없음)
+
+### baseline 재확인
+- `ActIngestionServiceTest` pass
+- `SubmissionParityRegressionGateTest` pass
+
+### selected fight 재확인
+- heavy2 fight2 SAM `1D41` target timeline:
+  - local: 레드 핫 `798,260`, 딥 블루 `648,223`, 수중 감옥 `142,449`
+  - fflogs event: `B=222,742`, `11=302,942`, `18=28,204`
+- heavy2 fight2 DRG `64AC` target timeline:
+  - local: 레드 핫 `1,340,269`, 딥 블루 `415,659`, 수중 감옥 `171,914`
+  - fflogs event: `B=1,295,096`, `11=451,218`, `18=187,802`
+
+### fflogs ability vs events confidence
+- heavy2 fight2 SAM `1D41`:
+  - `abilityTotal=1,542,816`, `eventTotal=553,888`, `agreement=0.3590`, `ratio=0.3590`, `confidence=low`
+- heavy2 fight2 DRG `64AC`:
+  - `abilityTotal=1,785,989`, `eventTotal=1,934,116`, `agreement=0.9234`, `ratio=1.0829`, `confidence=medium`
+- heavy4 fight5 DRG `64AC`:
+  - `abilityTotal=1,823,449`, `eventTotal=1,738,722`, `agreement=0.9535`, `ratio=0.9535`, `confidence=medium`
+- lindwurm fight8 DRG `64AC`:
+  - `abilityTotal=1,434,142`, `eventTotal=1,454,918`, `agreement=0.9857`, `ratio=1.0145`, `confidence=high`
+
+### known-source tracked_target_split probe 재확인
+- heavy2 fight2:
+  - `hits=162`, `amount=4,758,059`
+  - `suppressHits=1(0.62%)`, `suppressAmount=32,534(0.68%)`
+  - top reasons(금액):
+    - `ineligible(activeTargets=1/sourceTracked=0)` 우세
+    - `recent_exact(activeTargets=2/sourceTracked=1)` 우세
+- heavy4 fight5:
+  - `hits=71`, `amount=2,456,222`, `suppress=0`
+- lindwurm fight8:
+  - `hits=83`, `amount=2,496,786`, `suppress=0`
+
+### heavy2 mode breakdown 재확인
+- SAM `1D41` 상위 mode:
+  - `status0_tracked_target_split(target=딥 블루) amount=240,775`
+  - `status0_fallback_tracked_target_split(target=레드 핫) amount=231,105`
+  - `status0_snapshot_redistribution(target=레드 핫) amount=147,432`
+- DRG `64AC` 상위 mode:
+  - `status0_tracked_target_split(target=레드 핫) amount=189,725`
+  - `status0_fallback_tracked_target_split(target=레드 핫) amount=158,436`
+  - `status0_accepted_by_source(target=레드 핫) amount=145,753`
+
+### 결론
+- 현재 병목 축은 이전과 동일:
+  - `1D41`: low-confidence(`ability vs events`) + status0 split 다중 경로
+  - `64AC`: high/medium confidence 구간 비교 가능, 다만 status0 split 기여가 여전히 큼
+- 다음 턴은 suppress 확장이 아니라,
+  `ineligible(activeTargets=1/sourceTracked=0) -> activeTargets=2` 전이 구간에서
+  action/target evidence 복원 가설 1개만 적용 후 gate 재검증.
+
+## 2026-04-16 activeTargets 조건 수정 (진행)
+
+### 배경
+- `activeTargets == 2` 고정은 보스+잡몹(adds)처럼 `3+` active target 구간을 구조적으로 배제.
+- dual-target 특화로 시작한 조건이 일반화 측면에서 과도하게 좁았음.
+
+### 변경
+- 파일: `ActIngestionService.java`
+- 아래 2개 분기의 active target 조건을 `==2`에서 `>=2` 의미로 완화:
+  - `resolveKnownSourceTwoTargetWeightedTrackedTargetSplit`
+  - `resolveKnownSourceDualTargetForeignOnlyTrackedSplit`
+- 구현은 guard를 `countTrackedTargetsWithActiveDots() < 2 -> return`으로 변경.
+
+### 검증
+- `ActIngestionServiceTest` pass
+- `SubmissionParityRegressionGateTest` pass
+
+### 메모
+- 이번 변경은 evidence 분기의 적용 대상을 `dual-target only`에서 `multi-target(2+)`로 확장.
+- 다음 턴에 selected diagnostics(heavy2/heavy4/lindwurm, mode/target/probe)를 재확인해
+  `3+` 구간에서의 실제 동작 변화와 부작용 여부를 추가 확인.
+
+## 2026-04-16 activeTargets 2+ 확장 재검증 (채택 유지)
+
+### 변경(유지)
+- `ActIngestionService.java`
+  - `resolveKnownSourceTwoTargetWeightedTrackedTargetSplit`: `activeTargets != 2` 제거, `activeTargets < 2`만 배제
+  - `resolveKnownSourceDualTargetForeignOnlyTrackedSplit`: `activeTargets != 2` 제거, `activeTargets < 2`만 배제
+
+### baseline / gate
+- `ActIngestionServiceTest` pass
+- `SubmissionParityRegressionGateTest` pass
+- rollup:
+  - `mape=0.010996830747457277` (기준선 `0.011072703994523023` 대비 개선)
+  - `p95=0.025614369256908187` (기준선 `0.025664526617876063` 대비 개선)
+  - `max=0.03537628179947446` (동일)
+  - `pass=true`
+
+### selected fight 관찰 (heavy2 fight2)
+- SAM `1D41` target timeline:
+  - local: 레드 핫 `798,260`, 딥 블루 `648,223`, 수중 감옥 `135,325`
+  - fflogs event total: `553,888`
+  - delta: `+1,027,920` (기준선 `+1,035,044` 대비 개선 `-7,124`)
+- DRG `64AC` target timeline:
+  - local: 레드 핫 `1,340,269`, 딥 블루 `415,659`, 수중 감옥 `164,790`
+  - fflogs event total: `1,934,116`
+  - delta: `-13,398` (기준선 `-6,274` 대비 역행 `-7,124`)
+- 해석:
+  - `1D41` 개선분과 `64AC` 역행분이 동일 크기로 상쇄되어
+    `|1D41| + |64AC|` 합산 절대오차는 실질 동일.
+
+### mode/probe
+- heavy2 `knownSourceTrackedTargetSplitProbe` totals:
+  - `hits=162`, `amount=4,758,059`, suppress `0.68%` (기준선과 동일)
+- heavy4/lindwurm probe totals도 기준선과 동일(suppress 0)
+- heavy2 mode breakdown 변화는 `수중 감옥` 축의 일부 amount 이동(약 `7,124`) 외 구조적 분포는 유사.
+
+### 결론
+- 전역 gate/rollup 악화 없이 유지되고, adds 포함 multi-target(2+) 구간을 구조적으로 배제하지 않게 됨.
+- selected 합산절대오차는 동률이라 수치 이득은 제한적이지만, 모델 제약 관점에서 변경 유지.
+- 다음 1가설은 suppression 확장이 아니라
+  `activeTargets>=2 + sourceTracked=1 + recentSourceAction 일치`에서
+  `target semantics` 근거 복원(특히 수중 감옥 축) 1개만 적용해 heavy2 `64AC` 역행분 회수 시도.
+
+## 2026-04-16 추가 실험 8 (기각/원복)
+
+### 가설
+- `status0_tracked_target_split` 진입에서
+  `known-source + activeTargets>=2 + sourceTracked=1 + recentSourceAction 일치`일 때
+  `recentSourceAction`과 actionId가 같은 tracked 후보를 우선 분배하면
+  heavy2 target semantics를 개선할 수 있다고 가정.
+
+### 변경 시도
+- 신규 분기 `status0_recent_source_action_tracked_target_split` 추가:
+  - 기존 weighted split 다음, foreign-only split 이전에 적용
+  - 일치 후보가 있으면 해당 후보들로 분배 후 return
+
+### 결과
+- gate 실패:
+  - `mape=0.013249754126077247`
+  - `p95=0.03167808136812332` (`0.03` 초과)
+  - `max=0.03537628179947446`
+  - `pass=false`
+- selected도 동반 악화:
+  - heavy2 SAM `1D41` local total `1,773,954` (과대 확대)
+  - heavy2 DRG `64AC` local total `2,123,692` (과대 확대)
+
+### 조치
+- 변경 즉시 원복.
+- 원복 후 재확인:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+  - rollup 복귀:
+    - `mape=0.010996830747457277`
+    - `p95=0.025614369256908187`
+    - `max=0.03537628179947446`
+    - `pass=true`
+
+## 2026-04-16 내일 이어하기 핸드오프
+
+### 현재 안전 상태(내일 시작 기준)
+- production 유지 변경:
+  - `activeTargets == 2` 고정 제거 (`<2`만 배제) 2개 분기
+- baseline/gate:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+
+### 오늘 확정된 기각 포인트
+- `status0_recent_source_action_tracked_target_split` (recentSourceAction 우선 강제 분배):
+  - gate fail (`p95=0.03167808136812332`)
+  - heavy2 `1D41/64AC` 동반 과집계
+  - 즉시 원복 완료
+
+### 문제 구조 요약
+- heavy2 `1D41`는 `ability vs events` confidence가 낮아 분배 튜닝 시 상쇄 이동 리스크 큼
+- heavy2 `64AC`는 target semantics(레드 핫/딥 블루/수중 감옥) 축 이동이 핵심
+- suppress/우선분배 계열은 “근거 복원”보다 “질량 이동”으로 귀결되는 경향
+
+### 내일 첫 절차(고정)
+1. `tasks.md` / `docs/parity-patch-notes.md` 확인
+2. baseline 재확인:
+   - `./gradlew.bat test --tests com.bohouse.pacemeter.application.ActIngestionServiceTest --no-daemon`
+   - `./gradlew.bat test --tests com.bohouse.pacemeter.application.SubmissionParityRegressionGateTest --no-daemon`
+3. selected diagnostics 재확인(heavy2/heavy4/lindwurm)
+4. production 변경은 1가설만 허용
+
+### 내일 권장 1가설 방향
+- suppress/가중치 조정 금지.
+- `activeTargets` 전이(특히 adds 등장/퇴장) 구간에서
+  `source-action-target evidence` 누락을 복원/계측하는 비침습 1가설 우선.
+- 성공 기준:
+  - gate 유지
+  - heavy2 `64AC`의 수중 감옥 축 역행 완화
+  - heavy4/lindwurm 악화 없음
