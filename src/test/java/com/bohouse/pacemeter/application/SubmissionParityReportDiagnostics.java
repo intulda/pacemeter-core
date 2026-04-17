@@ -12992,6 +12992,25 @@ class SubmissionParityReportDiagnostics {
         );
     }
 
+    @Test
+    void debugKnownSourceForeignOnlySplitProbeBuckets_forSelectedFights_printsTopReasons() throws Exception {
+        printKnownSourceForeignOnlySplitProbeBuckets(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "heavy2.fight2"
+        );
+        printKnownSourceForeignOnlySplitProbeBuckets(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "heavy4.fight5"
+        );
+        printKnownSourceForeignOnlySplitProbeBuckets(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "lindwurm.fight8"
+        );
+    }
+
     private void printKnownSourceTrackedTargetSplitProbeBuckets(
             String submissionId,
             int fightId,
@@ -13088,6 +13107,112 @@ class SubmissionParityReportDiagnostics {
         System.out.printf("%s knownSourceTrackedTargetSplitProbe topSuppressByAmount%n", label);
         amounts.entrySet().stream()
                 .filter(entry -> entry.getKey().contains("|suppressed=true|"))
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(12)
+                .forEach(entry -> System.out.printf(
+                        "  amount=%d hits=%d key=%s%n",
+                        entry.getValue(),
+                        counts.getOrDefault(entry.getKey(), 0L),
+                        entry.getKey()
+                ));
+    }
+
+    private void printKnownSourceForeignOnlySplitProbeBuckets(
+            String submissionId,
+            int fightId,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Long> counts = ingestion.debugKnownSourceForeignOnlySplitProbeCounts();
+        Map<String, Long> amounts = ingestion.debugKnownSourceForeignOnlySplitProbeAmounts();
+        long totalHits = counts.values().stream().mapToLong(Long::longValue).sum();
+        long totalAmount = amounts.values().stream().mapToLong(Long::longValue).sum();
+        long includeHits = counts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|included=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+        long includeAmount = amounts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|included=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+
+        double includeHitRatio = totalHits == 0L ? 0.0 : (includeHits * 100.0) / totalHits;
+        double includeAmountRatio = totalAmount == 0L ? 0.0 : (includeAmount * 100.0) / totalAmount;
+        System.out.printf(
+                "%s knownSourceForeignOnlySplitProbe totals hits=%d amount=%d includeHits=%d(%.2f%%) includeAmount=%d(%.2f%%)%n",
+                label,
+                totalHits,
+                totalAmount,
+                includeHits,
+                includeHitRatio,
+                includeAmount,
+                includeAmountRatio
+        );
+
+        System.out.printf("%s knownSourceForeignOnlySplitProbe topByAmount%n", label);
+        amounts.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(18)
+                .forEach(entry -> System.out.printf(
+                        "  amount=%d hits=%d key=%s%n",
+                        entry.getValue(),
+                        counts.getOrDefault(entry.getKey(), 0L),
+                        entry.getKey()
+                ));
+
+        System.out.printf("%s knownSourceForeignOnlySplitProbe topIncludedByAmount%n", label);
+        amounts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|included=true|"))
                 .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
                 .limit(12)
                 .forEach(entry -> System.out.printf(

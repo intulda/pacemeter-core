@@ -92,6 +92,8 @@ public final class ActIngestionService {
     private final Map<String, Long> dotAttributionEmittedHitCountByKey = new HashMap<>();
     private final Map<String, Long> knownSourceTrackedTargetSplitProbeCountByKey = new HashMap<>();
     private final Map<String, Long> knownSourceTrackedTargetSplitProbeAmountByKey = new HashMap<>();
+    private final Map<String, Long> knownSourceForeignOnlySplitProbeCountByKey = new HashMap<>();
+    private final Map<String, Long> knownSourceForeignOnlySplitProbeAmountByKey = new HashMap<>();
     private final Deque<DotAttributionAssignment> recentDotAttributionAssignments = new ArrayDeque<>();
     private final Map<LiveDotApplicationCloneKey, RecentDamageCloneCandidate> recentDotApplicationCloneCandidates = new HashMap<>();
     private final StatusZeroDotAllocationPlanner statusZeroDotAllocationPlanner = new StatusZeroDotAllocationPlanner();
@@ -182,6 +184,8 @@ public final class ActIngestionService {
         dotAttributionAssignedHitCountByKey.clear();
         knownSourceTrackedTargetSplitProbeCountByKey.clear();
         knownSourceTrackedTargetSplitProbeAmountByKey.clear();
+        knownSourceForeignOnlySplitProbeCountByKey.clear();
+        knownSourceForeignOnlySplitProbeAmountByKey.clear();
         recentDotAttributionAssignments.clear();
         recentDotApplicationCloneCandidates.clear();
         actorNameById.clear();
@@ -244,6 +248,8 @@ public final class ActIngestionService {
             dotAttributionAssignedHitCountByKey.clear();
             knownSourceTrackedTargetSplitProbeCountByKey.clear();
             knownSourceTrackedTargetSplitProbeAmountByKey.clear();
+            knownSourceForeignOnlySplitProbeCountByKey.clear();
+            knownSourceForeignOnlySplitProbeAmountByKey.clear();
             recentDotAttributionAssignments.clear();
             recentDotApplicationCloneCandidates.clear();
             combatService.clearCombatantContext();
@@ -919,7 +925,6 @@ public final class ActIngestionService {
         if (!hasForeignWeight) {
             return List.of();
         }
-
         rebalanceDominantForeignAction(weightedKeys, dot.sourceId());
         weightedKeys.put(sameSourceKey, sameSourceWeight * KNOWN_SOURCE_TWO_TARGET_SAME_SOURCE_WEIGHT_FACTOR);
 
@@ -1067,16 +1072,60 @@ public final class ActIngestionService {
             List<TrackedDotState> trackedDots,
             List<TrackedDotState> sourceTrackedDots
     ) {
+        int trackedTargetCount = trackedDots.size();
+        int sourceTrackedCount = sourceTrackedDots.size();
+        int activeTargets = Math.toIntExact(countTrackedTargetsWithActiveDots());
+        int sourceActionHint = sourceTrackedCount == 1 ? sourceTrackedDots.get(0).actionId() : 0;
         if (!acceptedBySource || dot.statusId() != 0) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "dual",
+                    "ineligible",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "dual",
+                    "invalid_source",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
-        if (countTrackedTargetsWithActiveDots() < 2) {
+        if (activeTargets < 2) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "dual",
+                    "active_targets_lt2",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         if (trackedDots.size() < 3 || sourceTrackedDots.size() != 1) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "dual",
+                    "tracked_or_source_cardinality",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         Integer recentExactActionId = resolveRecentExactUnknownStatusActionId(
@@ -1084,17 +1133,60 @@ public final class ActIngestionService {
                 KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS
         );
         if (recentExactActionId != null) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "dual",
+                    "recent_exact_present",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         TrackedDotState sameSourceTrackedDot = sourceTrackedDots.get(0);
         Integer recentSourceActionId = resolveRecentSourceUnknownStatusActionId(dot);
         if (recentSourceActionId == null || sameSourceTrackedDot.actionId() != recentSourceActionId) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "dual",
+                    "recent_source_mismatch",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         List<TrackedDotState> foreignTrackedDots = trackedDots.stream()
                 .filter(trackedDot -> trackedDot.sourceId() != dot.sourceId())
                 .toList();
-        return foreignTrackedDots.size() >= 2 ? foreignTrackedDots : List.of();
+        if (foreignTrackedDots.size() < 2) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "dual",
+                    "foreign_candidates_lt2",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    foreignTrackedDots.size(),
+                    dot.sourceId(),
+                    recentSourceActionId
+            ), dot.damage());
+            return List.of();
+        }
+        recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.included(
+                "dual",
+                "include",
+                trackedTargetCount,
+                sourceTrackedCount,
+                activeTargets,
+                foreignTrackedDots.size(),
+                dot.sourceId(),
+                recentSourceActionId
+        ), dot.damage());
+        return foreignTrackedDots;
     }
 
     private List<TrackedDotState> resolveKnownSourceSingleTargetForeignOnlyTrackedSplit(
@@ -1103,16 +1195,60 @@ public final class ActIngestionService {
             List<TrackedDotState> trackedDots,
             List<TrackedDotState> sourceTrackedDots
     ) {
+        int trackedTargetCount = trackedDots.size();
+        int sourceTrackedCount = sourceTrackedDots.size();
+        int activeTargets = Math.toIntExact(countTrackedTargetsWithActiveDots());
+        int sourceActionHint = sourceTrackedCount == 1 ? sourceTrackedDots.get(0).actionId() : 0;
         if (!acceptedBySource || dot.statusId() != 0) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "single",
+                    "ineligible",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "single",
+                    "invalid_source",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
-        if (countTrackedTargetsWithActiveDots() != 1) {
+        if (activeTargets != 1) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "single",
+                    "active_targets_not1",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         if (trackedDots.size() < 4 || sourceTrackedDots.size() != 1) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "single",
+                    "tracked_or_source_cardinality",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         Integer recentExactActionId = resolveRecentExactUnknownStatusActionId(
@@ -1120,11 +1256,31 @@ public final class ActIngestionService {
                 KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS
         );
         if (recentExactActionId != null) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "single",
+                    "recent_exact_present",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         TrackedDotState sameSourceTrackedDot = sourceTrackedDots.get(0);
         Integer recentSourceActionId = resolveRecentSourceUnknownStatusActionId(dot);
         if (recentSourceActionId == null || sameSourceTrackedDot.actionId() != recentSourceActionId) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "single",
+                    "recent_source_mismatch",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    sourceActionHint
+            ), dot.damage());
             return List.of();
         }
         long foreignSourceCount = trackedDots.stream()
@@ -1138,12 +1294,45 @@ public final class ActIngestionService {
                 .distinct()
                 .count();
         if (foreignSourceCount < 3 || foreignActionCount < 3) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "single",
+                    "foreign_source_or_action_cardinality",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    0,
+                    dot.sourceId(),
+                    recentSourceActionId
+            ), dot.damage());
             return List.of();
         }
         List<TrackedDotState> foreignTrackedDots = trackedDots.stream()
                 .filter(trackedDot -> trackedDot.sourceId() != dot.sourceId())
                 .toList();
-        return foreignTrackedDots.size() >= 2 ? foreignTrackedDots : List.of();
+        if (foreignTrackedDots.size() < 2) {
+            recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.excluded(
+                    "single",
+                    "foreign_candidates_lt2",
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargets,
+                    foreignTrackedDots.size(),
+                    dot.sourceId(),
+                    recentSourceActionId
+            ), dot.damage());
+            return List.of();
+        }
+        recordKnownSourceForeignOnlySplitProbe(KnownSourceForeignOnlySplitDecision.included(
+                "single",
+                "include",
+                trackedTargetCount,
+                sourceTrackedCount,
+                activeTargets,
+                foreignTrackedDots.size(),
+                dot.sourceId(),
+                recentSourceActionId
+        ), dot.damage());
+        return foreignTrackedDots;
     }
 
     private boolean shouldPreferCorroboratedKnownSourceAttribution(DotTickRaw dot) {
@@ -1402,6 +1591,39 @@ public final class ActIngestionService {
         if (amount > 0) {
             knownSourceTrackedTargetSplitProbeAmountByKey.merge(key, amount, Long::sum);
         }
+    }
+
+    private void recordKnownSourceForeignOnlySplitProbe(
+            KnownSourceForeignOnlySplitDecision decision,
+            long amount
+    ) {
+        String key = "split=" + decision.splitType()
+                + "|reason=" + decision.reason()
+                + "|included=" + decision.included()
+                + "|trackedTargets=" + cardinalityBucket(decision.trackedTargetCount(), 4)
+                + "|sourceTracked=" + cardinalityBucket(decision.sourceTrackedCount(), 3)
+                + "|activeTargets=" + cardinalityBucket(decision.activeTargetCount(), 4)
+                + "|foreignCandidates=" + cardinalityBucket(decision.foreignCandidateCount(), 4)
+                + "|source=" + sourceBucket(decision.sourceId())
+                + "|sourceAction=" + actionBucket(decision.sourceActionId());
+        knownSourceForeignOnlySplitProbeCountByKey.merge(key, 1L, Long::sum);
+        if (amount > 0) {
+            knownSourceForeignOnlySplitProbeAmountByKey.merge(key, amount, Long::sum);
+        }
+    }
+
+    private String sourceBucket(long sourceId) {
+        if (sourceId <= 0 || sourceId == UNKNOWN_ACTOR_ID) {
+            return "na";
+        }
+        return Long.toHexString(sourceId).toUpperCase(Locale.ROOT);
+    }
+
+    private String actionBucket(int actionId) {
+        if (actionId <= 0) {
+            return "na";
+        }
+        return Integer.toHexString(actionId).toUpperCase(Locale.ROOT);
     }
 
     private String cardinalityBucket(int value, int top) {
@@ -1724,6 +1946,14 @@ public final class ActIngestionService {
 
     Map<String, Long> debugKnownSourceTrackedTargetSplitProbeAmounts() {
         return Map.copyOf(knownSourceTrackedTargetSplitProbeAmountByKey);
+    }
+
+    Map<String, Long> debugKnownSourceForeignOnlySplitProbeCounts() {
+        return Map.copyOf(knownSourceForeignOnlySplitProbeCountByKey);
+    }
+
+    Map<String, Long> debugKnownSourceForeignOnlySplitProbeAmounts() {
+        return Map.copyOf(knownSourceForeignOnlySplitProbeAmountByKey);
     }
 
     public LiveDotAttributionDebugSnapshot debugLiveDotAttributionSnapshot(long lookbackSeconds) {
@@ -2971,6 +3201,63 @@ public final class ActIngestionService {
                     foreignSourceShare,
                     foreignActionShare,
                     foreignDominanceScore
+            );
+        }
+    }
+    private record KnownSourceForeignOnlySplitDecision(
+            String splitType,
+            boolean included,
+            String reason,
+            int trackedTargetCount,
+            int sourceTrackedCount,
+            int activeTargetCount,
+            int foreignCandidateCount,
+            long sourceId,
+            int sourceActionId
+    ) {
+        private static KnownSourceForeignOnlySplitDecision included(
+                String splitType,
+                String reason,
+                int trackedTargetCount,
+                int sourceTrackedCount,
+                int activeTargetCount,
+                int foreignCandidateCount,
+                long sourceId,
+                int sourceActionId
+        ) {
+            return new KnownSourceForeignOnlySplitDecision(
+                    splitType,
+                    true,
+                    reason,
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargetCount,
+                    foreignCandidateCount,
+                    sourceId,
+                    sourceActionId
+            );
+        }
+
+        private static KnownSourceForeignOnlySplitDecision excluded(
+                String splitType,
+                String reason,
+                int trackedTargetCount,
+                int sourceTrackedCount,
+                int activeTargetCount,
+                int foreignCandidateCount,
+                long sourceId,
+                int sourceActionId
+        ) {
+            return new KnownSourceForeignOnlySplitDecision(
+                    splitType,
+                    false,
+                    reason,
+                    trackedTargetCount,
+                    sourceTrackedCount,
+                    activeTargetCount,
+                    foreignCandidateCount,
+                    sourceId,
+                    sourceActionId
             );
         }
     }
