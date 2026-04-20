@@ -1236,3 +1236,826 @@
    - 다음은 `fallback/tracked_target_split` evidence gate 1개만 시도
 4. 적용 즉시 재검증
    - rollup + selected + gate
+
+## 2026-04-18 추가 실험 22 (`foreign_only_single_target` snapshot weighted 우선, 기각/원복)
+
+### 가설
+- `status0_tracked_target_split_foreign_only_single_target`는 현재 equal split이라
+  근거 없는 임의 분배가 남는다.
+- dual 경로처럼 snapshot weighted 분배를 우선 적용하면
+  heavy2 `1D41/64AC` 오염을 줄이면서 heavy4/lind 영향은 제한될 수 있다고 가정.
+
+### 변경
+- `ActIngestionService.emitDotDamage`의 `singleTargetForeignOnlyTrackedDots` 분기에서
+  `resolveSnapshotWeightedTrackedSubsetAllocations(...)`를 먼저 시도.
+- 성공 시 신규 mode `status0_weighted_tracked_target_split_foreign_only_single_target`로 배정,
+  실패 시 기존 equal split fallback 유지.
+
+### 결과
+- baseline/gate:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+  - rollup: `mape=0.010943409925028494`, `p95=0.02555281693406692`, `max=0.03537628179947446`, `pass=true`
+- selected:
+  - heavy2 fight2
+    - SAM `1D41`: `+1,027,920 -> +1,049,499` (악화)
+    - DRG `64AC`: `-13,398 -> -44,816` (악화)
+  - heavy4 fight5 DRG `64AC`: `+707,783` (동일)
+  - lindwurm fight8 DRG `64AC` surface: `delta=20,776` (동일)
+- probe:
+  - foreign-only include totals는 baseline과 동일
+    (`heavy2 includeAmount=759,669`, `heavy4/lind includeAmount=0`)
+  - 신규 weighted-single mode가 heavy2에서 실제 발동됨
+    - `1D41 amount=43,883`
+    - `64AC amount=55,460`
+
+### 조치
+- heavy2 핵심 residual 동시 악화로 기각, 즉시 원복.
+- 원복 후 복귀 재확인(권한 확장 재실행 포함):
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2:
+    - `1D41=+1,027,920`
+    - `64AC=-13,398`
+
+## 2026-04-18 전환 결정 기록 (`dot 사용 이력` evidence 축)
+
+### 전환 이유
+- 기존 `suppress/weight/cardinality` 미세 조정은 반복 탐색 대비 실효가 낮음.
+  - `known-source tracked_target_split` suppress 실효: heavy2에서도 `0.68%` 수준.
+  - selected 개선 시 heavy4/lindwurm/rollup 역행이 반복됨.
+- 반면 `status=0` 병목은 “누가 썼는지”보다
+  `source-target-action` 시간축 근거 부재에서 발생하므로,
+  다음 레버는 `dot 사용 이력(apply/remove/최근 evidence)` 기반으로 옮기는 것이 합리적.
+
+### 근거
+- heavy2 fight2 핵심 잔차는 여전히
+  - `SAM 1D41 = +1,027,920`
+  - `DRG 64AC = -13,398`
+- 큰 질량 구간:
+  - `knownSourceTrackedTargetSplitProbe amount=4,758,059`
+  - `knownSourceForeignOnlySplitProbe includeAmount=759,669` (heavy4/lind는 0)
+- 즉, 전역 clamp보다 evidence 복원 축이 레버리지/설명력 모두 높음.
+
+## 2026-04-18 추가 실험 23 (`single foreign-only`에 source-target usage evidence gate, 무효/원복)
+
+### 가설
+- `status0_tracked_target_split_foreign_only_single_target` include 직전에
+  동일 `source-target-action` 최근 사용 근거가 있으면 include를 막아
+  heavy2 오염을 줄일 수 있다고 가정.
+
+### 변경
+- `resolveKnownSourceSingleTargetForeignOnlyTrackedSplit`에
+  source-target 최근 usage evidence(action/status application + source evidence) 체크를 추가.
+- 근거가 있으면 probe reason `source_target_usage_present`로 제외.
+
+### 결과
+- baseline/gate 통과.
+- 그러나 selected/probe/rollup 모두 baseline과 완전 동일:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+  - foreign-only include totals 동일(`heavy2=759,669`, heavy4/lind=0)
+- `source_target_usage_present` bucket 실발동이 없어 실효 커버리지 0으로 판단.
+
+### 조치
+- 복잡도 증가 대비 효과가 없어 즉시 원복.
+- production 코드는 baseline 상태 유지.
+
+## 2026-04-18 추가 실험 24 (`single foreign-only` source lifecycle fresh gate, 기각/원복)
+
+### 가설
+- `status0_tracked_target_split_foreign_only_single_target`에서
+  same-source tracked DoT의 만료가 아직 충분히 남아 있으면
+  (`expiresAt > now + 4s`) foreign-only include를 막아
+  `dot 사용 이력` 근거로 오염을 줄일 수 있다고 가정.
+
+### 변경
+- `resolveKnownSourceSingleTargetForeignOnlyTrackedSplit`에
+  `source_lifecycle_fresh` 제외 조건 추가:
+  - `sourceTracked=1` + `recentSourceAction 일치` 이후
+  - same-source tracked dot lifecycle이 fresh면 include 금지.
+
+### 결과
+- baseline/gate는 통과했지만 전역/selected 동시 악화:
+  - rollup:
+    - `mape=0.011318050284553606` (악화)
+    - `p95=0.025596116284919656` (소폭 개선)
+    - `max=0.03537628179947446` (동일)
+    - `pass=true`
+  - heavy2 fight2:
+    - SAM `1D41`: `+1,027,920 -> +1,088,941` (악화)
+    - DRG `64AC`: `-13,398 -> -16,959` (악화)
+- probe 변화:
+  - heavy2 foreign-only includeAmount `759,669 -> 403,479`로 감소
+  - 제외 reason `source_lifecycle_fresh` 신규 발생
+    - `1D41 amount=289,279`
+    - `64AC amount=66,911`
+- 해석:
+  - include 감소 자체는 성공했지만, 제거된 질량이 `status0_tracked_target_split` 계열로 이동하며
+    heavy2 핵심 residual이 오히려 악화.
+
+### 조치
+- selected/rollup 동시 악화로 즉시 기각 및 원복.
+- 원복 후 baseline 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2:
+    - `1D41=+1,027,920`
+    - `64AC=-13,398`
+
+## 2026-04-19 추가 실험 25 (`foreign-only` 후보 usage-evidence 필터, 기각/원복)
+
+### 가설
+- include 자체를 줄이는 대신, `foreign-only`로 진입한 뒤
+  후보 foreign tracked dot을 `source-target-action 최근 usage evidence`로 필터링하면
+  잘못된 재배치를 줄이면서 heavy2 `64AC/1D41`를 동시에 개선할 수 있다고 가정.
+
+### 변경
+- `resolveKnownSourceDualTargetForeignOnlyTrackedSplit`
+- `resolveKnownSourceSingleTargetForeignOnlyTrackedSplit`
+  - foreign 후보 목록 생성 후
+    `filterForeignOnlyCandidatesByTargetUsageEvidence(...)` 적용
+  - 필터 후 후보가 `>=2`이면 필터된 집합 사용, 아니면 기존 집합 유지.
+- helper:
+  - `hasRecentUsageOnTarget(targetId, sourceId, actionId, cutoff)`
+  - action/status application + source evidence를 함께 확인.
+
+### 결과
+- baseline/gate는 통과.
+- selected:
+  - heavy2 fight2 DRG `64AC`: `-13,398 -> -10,108` (개선)
+  - heavy2 fight2 SAM `1D41`: `+1,027,920 -> +1,029,179` (악화)
+  - heavy4 fight5 DRG `64AC`: `+707,783` (동일)
+  - lindwurm fight8 DRG surface: `delta=20,776` (동일)
+- rollup/gate:
+  - `mape=0.011016570814692213` (악화)
+  - `p95=0.025638245870164406` (악화)
+  - `max=0.03537628179947446` (동일)
+  - `pass=true`
+- foreign-only include totals/probe는 baseline과 실질 동일(`includeAmount=759,669`).
+
+### 해석
+- 후보 usage-evidence 필터는 일부 `64AC`에는 이득을 줬지만,
+  `1D41`/전역 품질을 동시에 보존하지 못함.
+- 특히 include 총량이 거의 안 변해, 핵심 오염 경로 질량을 충분히 재편하지 못함.
+
+### 조치
+- rollup 악화 + selected 동시 개선 실패로 기각, 즉시 원복.
+- 원복 후 baseline 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2:
+    - `1D41=+1,027,920`
+    - `64AC=-13,398`
+
+## 2026-04-19 추가 실험 26 (`single foreign-only` snapshot same-source weight gate 재검증, 기각/원복)
+
+### 가설
+- `single foreign-only include`에서
+  현재 타깃 snapshot에 same-source weight가 충분히 남아있으면(`>=0.40`)
+  foreign-only를 막으면 전이 말단 과분리를 줄일 수 있다고 가정.
+
+### 변경
+- `resolveKnownSourceSingleTargetForeignOnlyTrackedSplit`에
+  `same_source_snapshot_present` 제외 조건 추가:
+  - `snapshot.weights[(source, recentSourceAction)] >= 0.40`이면 include 금지.
+
+### 결과
+- baseline/gate는 통과했지만 실험 24와 동일 패턴으로 악화:
+  - heavy2 foreign-only includeAmount `759,669 -> 403,479` 감소
+  - heavy2 fight2:
+    - SAM `1D41`: `+1,027,920 -> +1,088,941` (악화)
+    - DRG `64AC`: `-13,398 -> -16,959` (악화)
+  - rollup:
+    - `mape=0.011318050284553606` (악화)
+    - `p95=0.025596116284919656` (소폭 개선)
+    - `max=0.03537628179947446` (동일)
+    - `pass=true`
+- heavy4/lind selected는 표면상 동일이나,
+  heavy4에도 `same_source_snapshot_present` 제외 bucket이 신규 관측됨(`amount=78,598`).
+
+### 해석
+- include 자체를 줄이는 축은 재현 가능하지만,
+  줄어든 질량이 다른 분배 경로로 이동해 heavy2 핵심 residual/rollup을 동시에 악화.
+- 동일 가설군(실험 24/26)은 현재 구조에서 비채택으로 확정.
+
+### 조치
+- 즉시 원복.
+- 원복 후 baseline 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2:
+    - `1D41=+1,027,920`
+    - `64AC=-13,398`
+
+## 2026-04-20 추가 실험 27 (`single foreign-only` mixed reallocation with same-source, 기각/원복)
+
+### 가설
+- suppress가 아니라 `single foreign-only` 분기 내부에서
+  same-source를 후보에 재포함한 mixed split을 적용하면,
+  질량이 다른 경로로 튀는 부작용 없이 heavy2 핵심 residual을 줄일 수 있다고 가정.
+
+### 변경
+- 신규 helper 추가:
+  - `resolveKnownSourceSingleTargetMixedForeignOnlyAllocations(...)`
+  - 조건: `foreign>=2`, `sourceTracked=1`, snapshot fresh.
+- 분배 방식:
+  - foreign 후보 snapshot weight를 사용
+  - same-source snapshot weight를 재포함
+  - same-source share를 `[0.20, 0.60]`으로 clamp 후 planner 배분.
+- 적용 위치:
+  - `emitDotDamage`의 `singleTargetForeignOnlyTrackedDots` 분기에서
+    mixed allocation 우선 시도, 실패 시 기존 equal split fallback.
+
+### 결과
+- baseline/gate는 통과.
+- 하지만 selected/rollup 동시 악화:
+  - heavy2 fight2:
+    - SAM `1D41`: `+1,027,920 -> +1,157,877` (대폭 악화)
+    - DRG `64AC`: `-13,398 -> -54,825` (악화)
+  - rollup:
+    - `mape=0.011503908024723827` (악화)
+    - `p95=0.02555281693406692` (소폭 개선)
+    - `max=0.03537628179947446` (동일)
+    - `pass=true`
+- mode 발동 확인:
+  - `status0_mixed_tracked_target_split_foreign_only_single_target`가
+    heavy2 `1D41/64AC`에서 실발동.
+
+### 해석
+- “같은 분기 안에서 재배치” 접근도 현재 조건/클램프에서는
+  heavy2 핵심 residual을 동시에 악화시킴.
+- mixed 재배치 자체는 가능하지만, 현재 구현은 same-source 재주입량이 과해
+  `1D41` 과대 축을 증폭.
+
+### 조치
+- 즉시 기각/원복.
+- 원복 후 baseline 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2:
+    - `1D41=+1,027,920`
+    - `64AC=-13,398`
+
+## 2026-04-20 추가 실험 28 (`tracked_target_split` single-target snapshot-weighted fallback, 무효/원복)
+
+### 가설
+- 대질량 bucket(`tracked_target_split` ineligible/sourceTracked=0/activeTargets=1)을
+  직접 타격하기 위해,
+  generic `tracked_target_split` 진입 직전에 single-target snapshot-weighted fallback을 넣으면
+  heavy2 오염을 줄일 수 있다고 가정.
+
+### 변경
+- `emitDotDamage`에서 `singleTargetForeignOnly` 다음, equal `tracked_target_split` 직전에
+  아래 조건의 snapshot-weighted fallback 분기 추가:
+  - `acceptedBySource`, `status=0`, `activeTargets==1`,
+  - `trackedDots>=4`, `sourceTrackedDots.isEmpty()`,
+  - `recentExact=null`
+  - 분기 mode: `status0_snapshot_weighted_tracked_target_split_single_target`
+
+### 결과
+- baseline/gate/selected/probe가 baseline과 완전히 동일(무효):
+  - rollup: `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2: `1D41=+1,027,920`, `64AC=-13,398`
+  - 신규 mode `status0_snapshot_weighted_tracked_target_split_single_target` 발동 0
+- 해석:
+  - 해당 위치/조건에서는 실제로 분기가 타지 않거나 후보가 형성되지 않아 실효 커버리지 0.
+
+### 조치
+- 코드 복잡도만 증가시키므로 즉시 원복.
+- 원복 후 baseline(`ActIngestionServiceTest`, `SubmissionParityRegressionGateTest`) 재확인 pass.
+
+## 2026-04-20 추가 실험 29 (`ineligible/sourceTracked=0/activeTargets=1` 버킷 분리 리팩토링 시도, 무효/원복)
+
+### 가설
+- heavy2 대질량 bucket
+  (`status0_tracked_target_split`의 `ineligible + sourceTracked=0 + activeTargets=1 + trackedTargets>=4`)
+  을 전용 mode로 분리하고 evidence-weighted 분배를 적용하면
+  FFLogs companion live rDPS에 더 가까워질 수 있다고 가정.
+
+### 변경
+- 시도한 구조:
+  - 버킷 판별 helper
+  - 버킷 전용 weighted allocation helper(action/status application, recent signal, expiresAt 기반 가중)
+  - mode `status0_ineligible_single_target_weighted_split`로 emit
+- 적용 위치:
+  - `tracked_target_split` equal split 직전.
+
+### 결과
+- baseline/gate/selected/probe가 baseline과 완전히 동일(무효):
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+  - 신규 mode `status0_ineligible_single_target_weighted_split` 발동 0
+- 해석:
+  - 현재 위치/조건에서는 실제 런타임 커버리지가 없었음.
+  - “버킷 분리” 방향은 맞지만, 이 삽입 지점에서는 해당 버킷을 잡지 못함.
+
+### 조치
+- 실효 0 + 코드 복잡도 증가로 즉시 원복.
+- 원복 후 baseline(`ActIngestionServiceTest`, `SubmissionParityRegressionGateTest`) 재확인 pass.
+
+## 2026-04-20 추가 실험 30 (`guid-missing single-target` guard 이전 버킷 분리 + evidence fallback, 무효/원복)
+
+### 가설
+- 기존 버킷 분기 미발동 원인은 `suppressKnownSourceGuidMissingFallback` guard 뒤에 있어서라고 보고,
+  guard 이전에서 `single-target + sourceTracked=0 + tracked>=4 + recentExact=null` 버킷을 먼저 잡으면
+  실효 커버리지가 생길 것이라고 가정.
+
+### 변경
+- guard 이전 pre-hook 추가:
+  - `shouldUseGuidMissingSingleTargetWeightedBucket(...)`
+  - 우선 `resolveSnapshotWeightedTrackedSubsetAllocations(...)`
+  - snapshot 실패 시 `resolveGuidMissingSingleTargetEvidenceAllocations(...)`로 fallback
+  - mode 후보:
+    - `status0_guid_missing_single_target_weighted_split`
+    - `status0_guid_missing_single_target_evidence_weighted_split`
+
+### 결과
+- baseline는 통과.
+- selected/rollup 수치는 baseline과 완전 동일:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+- 신규 mode 두 개 모두 발동 0(실효 커버리지 없음).
+
+### 해석
+- guard 위치를 옮겨도 해당 버킷이 이 지점에서 실질적으로 형성되지 않음.
+- “버킷 분리 방향” 자체는 맞지만, 현재 분기 트리에서 타격 지점이 여전히 틀림.
+
+### 조치
+- 코드 복잡도만 증가하므로 즉시 원복.
+- 원복 후 baseline(`ActIngestionServiceTest`, `SubmissionParityRegressionGateTest`) 재확인 pass.
+
+## 2026-04-20 리팩토링 체크포인트 31 (`emitDotDamage` 분기 추출, 동작 불변 확인)
+
+### 전환 이유/근거
+- 최근 실험 28~30이 모두 `mode fire=0`으로 무효였고, 동일 가설군 반복으로는 병목 분기를 제대로 타격하지 못함.
+- 원인은 파라미터가 아니라 `status=0` 분기 트리의 guard/순서/조기 return 결합으로 판단.
+- 따라서 다음 단계는 규칙 튜닝보다 먼저, 분기 책임을 헬퍼 단위로 분리해
+  “어디서 실제로 떨어지는지”를 좁힐 수 있는 구조로 정리하는 것이 합리적.
+
+### 변경
+- `ActIngestionService.emitDotDamage` 내부 인라인 분기를 아래 헬퍼로 추출:
+  - `tryEmitStatus0CorroboratedKnownSource`
+  - `tryEmitStatus0SnapshotRedistribution`
+  - `tryEmitStatus0UnacceptedSourceTrackedSplit`
+  - `tryEmitStatus0KnownSourceTrackedRouting`
+  - `tryEmitStatusAcceptedBySource`
+  - `tryEmitStatus0FallbackTrackedSplit`
+- 분기 순서/조건/모드명/분배 수식은 기존과 동일 유지(구조 분리만 수행).
+
+### 검증
+- baseline tests:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- selected + rollup diagnostics:
+  - heavy2 fight2 SAM `1D41`: `+1,027,920` (동일)
+  - heavy2 fight2 DRG `64AC`: `-13,398` (동일)
+  - heavy4 fight5 DRG `64AC`: `+707,783` (동일)
+  - lindwurm fight8 DRG surface: `delta=20,776` (동일)
+  - rollup: `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true` (동일)
+
+### 결론
+- 리팩토링 전환은 채택.
+- 다음 변경은 이 구조 위에서 “실제로 발동하는 단일 버킷” 1개만 대상으로 진행.
+
+## 2026-04-20 추가 실험 32 (`status0_fallback_tracked_target_split` single-target known-source>=4 suppress, 무효/원복)
+
+### 현재 관찰
+- mode/probe 재확인:
+  - heavy2 fight2 SAM `1D41`은 `status0_tracked_target_split` + `status0_fallback_tracked_target_split`가 주요 과대 축.
+  - heavy4 fight5 DRG `64AC`는 fallback 비중이 거의 없고 `snapshot_redistribution + tracked_target_split` 중심.
+
+### 가설
+- `unknown status=0`에서 `known-source + activeTargets=1 + trackedTargets>=4` fallback만 차단하면
+  heavy2 과대를 줄이고 heavy4/lind 영향은 작을 수 있다고 가정.
+
+### 수정 범위
+- `tryEmitStatus0FallbackTrackedSplit(...)` 초기에 아래 조건이면 `return`:
+  - `unknownStatusDot`
+  - `sourceId` known party
+  - `countTrackedTargetsWithActiveDots()==1`
+  - `trackedDots.size()>=4`
+
+### 검증 결과
+- selected + rollup + gate 결과가 baseline과 완전 동일(실효 0):
+  - heavy2 fight2 SAM `1D41`: `+1,027,920` (동일)
+  - heavy2 fight2 DRG `64AC`: `-13,398` (동일)
+  - heavy4 fight5 DRG `64AC`: `+707,783` (동일)
+  - lindwurm fight8 DRG surface: `delta=20,776` (동일)
+  - rollup: `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true` (동일)
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+
+### 남은 리스크/조치
+- 해당 조건은 실제 fallback 발동 구간과 불일치해 커버리지 0으로 판단.
+- 즉시 원복 완료.
+
+## 2026-04-20 추가 실험 33 (`known-source single-target no-exact` weighted split, 기각/원복)
+
+### 현재 관찰
+- `ineligible+activeTargets=1` 버킷을 직접 줄이기 위해
+  `tracked_target_split` 직전에 `snapshot-weighted` 우선 분기를 넣어 실효 커버리지를 확인.
+
+### 가설
+- `accepted known-source + activeTargets=1 + tracked>=4 + recentExact=null` 구간은
+  equal split보다 snapshot-weighted 분배가 오염을 줄여 heavy2 residual을 줄일 수 있다고 가정.
+
+### 수정 범위
+- `tryEmitStatus0KnownSourceTrackedRouting`에 분기 추가:
+  - helper `resolveKnownSourceSingleTargetNoExactWeightedTrackedTargetSplit(...)`
+  - mode: `status0_weighted_tracked_target_split_single_target_no_exact`
+
+### 검증 결과
+- gate/rollup은 통과 및 소폭 개선:
+  - `mape=0.01099019057459621`, `p95=0.025094314520958304`, `max=0.03537628179947446`, `pass=true`
+- 하지만 heavy2 핵심 residual 변화 없음:
+  - heavy2 fight2 SAM `1D41=+1,027,920` (동일)
+  - heavy2 fight2 DRG `64AC=-13,398` (동일)
+- 신규 mode 발동은 heavy2가 아니라 heavy4에서만 소량 관측:
+  - heavy4 `status0_weighted_tracked_target_split_single_target_no_exact` amount `4,651` (1 hit)
+  - heavy4 target delta `+707,783 -> +692,784` (heavy2 병목과 무관한 변화)
+
+### 남은 리스크/조치
+- 목표(heavy2 병목 해소) 대비 타격 지점이 어긋났다고 판단.
+- 복잡도 증가만 남기지 않기 위해 즉시 원복.
+- 원복 후 baseline (`ActIngestionServiceTest`, `SubmissionParityRegressionGateTest`) pass 재확인.
+
+## 2026-04-20 추가 실험 34 (`single-target recent-exact` source-anchor, gate fail/원복)
+
+### 현재 관찰
+- heavy2 `ineligible + activeTargets=1 + tracked>=4`에서
+  foreign action(특히 `1D41`)로 누수되는 분배를 직접 줄이기 위해
+  equal split 대신 source-action 앵커링을 시도.
+
+### 가설
+- `known-source + recentExact + sourceTracked 단일일치 + activeTargets=1 + tracked>=4`이면
+  source-action으로 전량 앵커링해 cross-job 누수를 줄일 수 있다고 가정.
+
+### 수정 범위
+- `tryEmitStatus0KnownSourceTrackedRouting`에 아래 분기 추가:
+  - `resolveKnownSourceSingleTargetRecentExactAnchor(...)`
+  - mode: `status0_single_target_recent_exact_source_anchor`
+  - 조건 충족 시 `dot.damage()` 전량을 source/action으로 emit.
+
+### 검증 결과
+- 가설은 강하게 과교정되어 gate fail:
+  - rollup: `mape=0.012832537116896624`, `p95=0.031244145274622596`, `max=0.03537628179947446`, `pass=false`
+- selected 악화:
+  - heavy2 fight2 SAM `1D41`: `+1,027,920 -> +1,180,589` (악화)
+  - heavy2 fight2 DRG `64AC`: `-13,398 -> +97,232` (악화)
+  - heavy4 fight5 DRG `64AC`: `+707,783 -> +846,216` (악화)
+- mode 발동:
+  - heavy2 `1D41`: `status0_single_target_recent_exact_source_anchor` 다수 발동
+  - heavy2 `64AC`: same mode 발동(`amount=226,768`)
+  - heavy4 `64AC`: same mode 발동(`amount=184,579`)
+
+### 조치
+- 즉시 원복.
+- 원복 후 baseline 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+
+## 2026-04-20 추가 실험 35 (`64AC` single-target split에서 foreign `1D41` 제외, 기각/원복)
+
+### 현재 관찰
+- heavy2 DRG evidence에서 `activeTargets=1`, `tracked>=4`일 때 tracked set에 `1D41`이 동반되어
+  `64AC` split 일부가 SAM으로 누수되는 패턴이 반복 관측.
+- 같은 조건에서 heavy4/lind는 `1D41` 동반이 거의 없어 영향 분리 가능성이 있다고 판단.
+
+### 가설
+- `recentExact=64AC` 단일타깃 구간에서 foreign `1D41`만 split 후보에서 제외하면
+  heavy2 `1D41` 과대와 `64AC` 오차를 동시에 줄일 수 있다고 가정.
+
+### 수정 범위
+- `tryEmitStatus0KnownSourceTrackedRouting`에 전용 분기 추가:
+  - helper `resolveKnownSourceSingleTargetExcludedForeignRecentExactTrackedDots(...)`
+  - 조건:
+    - known-source, `status=0`
+    - `activeTargets==1`, `tracked>=4`, `sourceTracked==1`
+    - `recentExact==64AC` and foreign tracked에 `1D41` 존재
+  - mode: `status0_tracked_target_split_excluding_foreign_recent_exact_action`
+
+### 검증 결과
+- heavy2 selected는 개선:
+  - heavy2 fight2 DRG `64AC`: `-13,398 -> +5,499`
+  - heavy2 fight2 SAM `1D41`: `+1,027,920 -> +971,226`
+- heavy4/lind selected는 수치 변화 거의 없음:
+  - heavy4 fight5 DRG `64AC`: `+707,783` (동일)
+  - lindwurm fight8 DRG surface: `delta=20,776` (동일)
+- 하지만 전역 rollup 악화:
+  - `mape=0.01106431353441662` (악화)
+  - `p95=0.02574741581083996` (악화)
+  - `max=0.03537628179947446` (동일)
+  - `pass=true`
+
+### 조치
+- selected 개선 대비 전역 품질 악화로 기각.
+- 즉시 원복 후 baseline (`ActIngestionServiceTest`, `SubmissionParityRegressionGateTest`) pass 재확인.
+
+## 2026-04-20 추가 실험 36 (`second application` 조건 결합한 foreign `1D41` 제외, 기각/원복)
+
+### 현재 관찰
+- 웹 리서치 제안(“second application 전 split 금지”)을
+  기존 실험 35의 편향 조건(`64AC + foreign 1D41`)에 결합해 적용 범위를 더 줄였음.
+
+### 가설
+- `recentExact=64AC` 케이스에서 source/action의 최근 distinct application target이 2개 미만이면
+  multi-target 전이 증거가 부족하다고 보고 foreign `1D41` 제외 split을 적용하면
+  heavy2는 유지 개선하면서 rollup 악화를 줄일 수 있다고 가정.
+
+### 수정 범위
+- helper 추가:
+  - `countRecentDistinctApplicationTargetsForSourceAction(...)`
+  - `resolveKnownSourceSingleTargetExcludedForeignRecentExactTrackedDots(...)`에 second-application 조건 결합
+- mode:
+  - `status0_tracked_target_split_excluding_foreign_recent_exact_action`
+
+### 검증 결과
+- 결과가 실험 35와 동일:
+  - rollup: `mape=0.01106431353441662`, `p95=0.02574741581083996`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2:
+    - `64AC=-13,398 -> +5,499` (개선)
+    - `1D41=+1,027,920 -> +971,226` (개선)
+  - heavy4/lind selected 표면 변화 없음
+- 즉, second-application 조건이 실제 발동 집합을 좁히지 못해 전역 악화 문제도 그대로 유지.
+
+### 조치
+- rollup 악화 유지로 기각, 즉시 원복.
+- 원복 후 baseline 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+
+## 2026-04-20 재설계 5단계 (기각/원복)
+
+### 가설
+- `status0_tracked_target_split` 직전,
+  - `known-source && status=0 && activeTargets=1 && tracked>=4 && sourceTracked=1`
+  - `recentSource == recentExact == sourceTrackedAction`
+  인 경우에 한해 최근 source-target-action 증거가 있는 tracked subset으로 split 축소하면
+  heavy2의 단일타겟 전이 오염을 줄일 수 있다고 가정.
+
+### 관찰
+- assignment bucket 진단:
+  - heavy2 핵심 버킷
+    - `activeTargets=1|trackedTargets=4+|sourceTracked=1|sourceTrackedAction=64AC|recentSource=64AC|recentExact=64AC|foreignTracked=3|foreignActions=3|foreignActionSet=1D41,4094,409C`
+    - `amount 226,768 -> 78,469`로 감소 확인
+- selected fight:
+  - heavy2 fight2 `1D41`: `+1,027,920 -> +1,026,253` (미미 개선)
+  - heavy2 fight2 `64AC`: `-13,398 -> +14,197` (악화)
+  - heavy4 fight5 `64AC`: `+707,783 -> +730,093` (악화)
+
+### 회귀
+- rollup:
+  - `mape=0.011185229934315097` (기준선 `0.010996830747457277` 대비 악화)
+  - `p95=0.02658301799454033` (악화)
+  - `max=0.03537628179947446` (동일)
+  - gate는 `pass=true`
+
+### 결론
+- 문제 버킷 감소 자체는 확인됐지만,
+  selected/rollup 동시 개선을 만들지 못해 기각.
+- production 로직은 원복.
+- baseline 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+  - heavy4 fight5 `64AC=+707,783`
+  - lindwurm fight8 DRG surface `delta=20,776`
+
+## 2026-04-20 재설계 6단계 (기각/원복)
+
+### 가설
+- `single-target foreign-only split`에서 `recent_exact_present`로 막히는 경우라도,
+  같은 source가 직전에 foreign-only include를 이미 경험했으면(최근 15초)
+  전이 구간으로 보고 include를 허용하면 heavy2 오염을 줄일 수 있다고 가정.
+
+### 관찰
+- 분리축 자체는 의도대로 동작:
+  - heavy2 only에서 include 증가
+    - `includeHits 22 -> 27`
+    - `includeAmount 759,669 -> 934,635`
+  - heavy4/lind는 include 0 유지.
+- 하지만 selected fight residual은 역행:
+  - heavy2 fight2 `64AC`: `-13,398 -> -57,138` (절대 오차 악화)
+  - heavy2 fight2 `1D41`: `+1,027,920 -> +1,042,501` (악화)
+
+### 회귀
+- rollup은 소폭 개선됐지만(selected 목적과 충돌):
+  - `mape=0.01095206861005285`
+  - `p95=0.02555281693406692`
+  - gate `pass=true`
+
+### 결론
+- heavy2 핵심 residual을 줄이는 목적에 반해 selected가 악화되어 기각.
+- production 원복 완료.
+- 원복 후 기준선 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+
+## 2026-04-20 재설계 7단계 (기각/원복)
+
+### 가설
+- 문제 버킷(`activeTargets=1`, `tracked>=4`, `sourceTracked=1`, `recentSource==recentExact==sourceTrackedAction`)에서
+  기본 `status0_tracked_target_split`의 균등 분배를
+  `snapshot weighted` 분배로 치환하면 cross-shift를 줄일 수 있다고 가정.
+
+### 관찰
+- selected fight:
+  - heavy2 fight2 `64AC`: `-13,398 -> -46,713` (절대 오차 악화)
+  - heavy2 fight2 `1D41`: `+1,027,920 -> +1,107,576` (악화)
+  - heavy4 fight5 `64AC`: `+707,783 -> +686,131` (개선)
+- lindwurm DRG surface는 동일(`delta=20,776`).
+
+### 회귀
+- gate: `pass=true`
+- rollup:
+  - `mape=0.011175248787785539` (기준선 대비 악화)
+  - `p95=0.024743941860938923` (개선)
+  - `max=0.03537628179947446` (동일)
+
+### 결론
+- heavy2 핵심 residual과 rollup mape가 동시에 악화되어 기각.
+- production 원복 완료, 기준선 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+
+## 2026-04-20 재설계 8단계 (기각/원복)
+
+### 가설
+- `status0_fallback_tracked_target_split`에서
+  `known party source && unknownStatus && shouldAcceptDot=false && activeTargets>1`이면
+  비근거 fallback split으로 보고 suppress하면 heavy2 오염을 줄일 수 있다고 가정.
+
+### 관찰
+- heavy2 selected는 크게 개선:
+  - `1D41: +1,027,920 -> +699,098`
+  - `64AC: -13,398 -> -171,834`
+- 하지만 전역 회귀가 크게 악화.
+
+### 회귀
+- rollup:
+  - `mape=0.013699352394739761`
+  - `p95=0.03562296151972086`
+  - `max=0.0404580194569956`
+  - `gate pass=false`
+
+### 결론
+- 전역 gate 실패로 기각/원복.
+
+## 2026-04-20 재설계 9단계 (기각/원복)
+
+### 가설
+- 재설계 8의 suppress 범위를 `activeTargets>2`로 축소하면
+  heavy2 이득 일부 유지 + gate 보존이 가능하다고 가정.
+
+### 관찰
+- gate는 보존되었으나 heavy2 이득이 매우 작음:
+  - `1D41: +1,027,920 -> +1,010,424` (소폭 개선)
+  - `64AC: -13,398` (동일)
+- rollup `mape`는 기준선 대비 악화.
+
+### 회귀
+- rollup:
+  - `mape=0.011198005458555019` (기준선 `0.010996830747457277` 대비 악화)
+  - `p95=0.02561240833880624` (유사)
+  - `max=0.03537628179947446` (동일)
+  - gate `pass=true`
+
+### 결론
+- selected 개선 대비 전역 mape 악화로 기각/원복.
+- 원복 후 기준선 복귀 확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+
+## 2026-04-20 진단 업데이트 (유지)
+
+### 반영
+- `knownSourceTrackedTargetSplitAssignment` 계측 키에 `targetDeathAge` 추가.
+
+### 관찰
+- heavy2/heavy4/lind 상위 문제 버킷에서 `targetDeathAge=na`만 관측.
+- 해석: 현재 핵심 잔차는 target death 직후 ghost tick 축이 아님.
+
+## 2026-04-20 재설계 10단계 (기각/원복)
+
+### 가설
+- `status0_tracked_target_split`의 핵심 문제 버킷
+  (`activeTargets=1`, `tracked>=4`, `sourceTracked=1`, `recentSource==recentExact==sourceTrackedAction`)에서만,
+  foreign recipient를 최근 source-target-action 근거가 있는 항목으로 필터링하면
+  heavy2 오염을 줄이면서 전역 영향은 제한될 것이라고 가정.
+
+### 관찰
+- 문제 버킷 감소:
+  - `amount 226,768 -> 78,469` (heavy2 `foreignActionSet=1D41,4094,409C`)
+- selected/전역은 악화:
+  - heavy2 `1D41: +1,027,920 -> +1,026,250` (미미 개선)
+  - heavy2 `64AC: -13,398 -> +14,199` (악화)
+  - heavy4 fight5 `64AC: +707,783 -> +730,091` (악화)
+  - rollup `mape=0.011185221134198205`, `p95=0.026582960062029405` (기준선 대비 악화)
+  - gate는 `pass=true`
+
+### 결론
+- 버킷 자체는 줄였지만 selected/rollup 동시 개선 실패로 기각.
+- production 원복 완료, 기준선 복귀 재확인.
+
+## 2026-04-20 재설계 11단계 (기각/원복)
+
+### 가설
+- `status0_fallback_tracked_target_split`에서
+  `known-party && unknownStatus && shouldAcceptDot=false && multi-target` 조건일 때,
+  균등 분배 대신 `snapshot weighted` 분배를 우선 적용하면
+  fallback 오염을 줄이면서 gate를 보존할 수 있다고 가정.
+
+### 관찰
+- heavy2 잔차가 크게 악화:
+  - `1D41: +1,027,920 -> +1,144,850`
+  - `64AC: -13,398 -> -61,803`
+- heavy4/lind 표면은 대체로 동일.
+
+### 회귀
+- gate는 `pass=true` 유지.
+- rollup:
+  - `mape=0.011395559956833667` (기준선 대비 악화)
+  - `p95=0.02555281693406692` (소폭 개선)
+  - `max=0.03537628179947446` (동일)
+
+### 결론
+- heavy2 핵심 residual과 rollup mape 동시 악화로 기각.
+- production 원복 완료.
+- 원복 후 기준선 복귀 재확인:
+  - rollup `mape=0.010996830747457277`, `p95=0.025614369256908187`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,027,920`, `64AC=-13,398`
+
+## 2026-04-20 재설계 12단계 (기각/원복)
+
+### 가설
+- `status0_fallback_tracked_target_split`를 전면 치환하지 않고,
+  기존 균등분배와 snapshot weighted 분배를 `alpha=0.25`로 블렌드하면
+  heavy2 개선과 전역 안정성을 동시에 얻을 수 있다고 가정.
+
+### 관찰
+- heavy2 핵심 잔차는 악화:
+  - `1D41: +1,027,920 -> +1,057,160`
+  - `64AC: -13,398 -> -25,501`
+- gate는 유지됐지만 전역 mape 악화:
+  - `mape=0.011091592932796322` (기준선 대비 악화)
+  - `p95=0.02555281693406692` (소폭 개선)
+
+### 결론
+- selected/rollup 동시 개선 실패로 기각.
+- production 원복 완료 및 기준선 복귀 확인.
+
+## 2026-04-21 세션 체크포인트 (403 중단 대비)
+
+### 오늘 요약
+- 403으로 세션이 자주 끊겨도, 로컬 테스트/진단은 계속 수행.
+- 모든 실험은 "가설 1개 변경 -> gate/selected 재검증" 루프로 진행.
+- 채택 가능한 개선(heavy2 개선 + gate/mape 유지)은 아직 없음.
+
+### 기준선(최종 원복 상태)
+- rollup:
+  - `mape=0.010996830747457277`
+  - `p95=0.025614369256908187`
+  - `max=0.03537628179947446`
+  - `pass=true`
+- selected:
+  - heavy2 fight2 `1D41=+1,027,920`
+  - heavy2 fight2 `64AC=-13,398`
+  - heavy4 fight5 DRG `64AC=+707,783`
+  - lindwurm fight8 DRG surface `delta=20,776`
+
+### 오늘 실험 결과(핵심만)
+1. `status0_snapshot_redistribution defer` 계열
+- 결론: no-op (실발동 0)
+
+2. `single_source_binding` (tracked_target 경로)
+- 결론: no-op
+- 원인: 대상 케이스 대부분이 `accepted_by_source=true` 경로
+
+3. `fallback split` 차단 계열
+- `recent evidence missing` 축 차단:
+  - heavy2 개선 큼 (`1D41 +699,098`, `64AC -171,834`)
+  - 그러나 gate fail (`p95 0.03478+`) -> 기각/원복
+- `rawSourceMatches=0 && recent evidence 없음 && activeTargets>=2 && tracked>=3`:
+  - heavy2 개선 (`1D41 +792,119`, `64AC -138,618`)
+  - gate fail (`p95 0.030681...`) -> 기각
+- 동일 조건 `tracked>=4`로 축소:
+  - gate pass
+  - 하지만 `mape=0.011527994850365951`로 기준선 악화 -> 기각
+
+4. source 성격 확인
+- 문제 source `10128857`, `102BF7AE`는 heavy2 PartyList에 존재(실 party actor).
+- 즉 "non-party source" 축 가설은 핵심 원인이 아님.
+
+### 현재 해석
+- heavy2 잔차의 큰 축은 여전히 `status0_fallback_tracked_target_split`의 근거 약한 분배.
+- 다만 이 축을 전역적으로 막으면 gate/p95/mape가 쉽게 악화.
+- 다음 단계는 "차단"보다 "근거 기반 재귀속(단일 귀속/보류)" 방향이 필요.
+
+### 내일 시작 순서(고정)
+1. `tasks.md`/`docs/parity-patch-notes.md` 확인
+2. baseline 재확인:
+   - `ActIngestionServiceTest`
+   - `SubmissionParityRegressionGateTest`
+   - selected/rollup diagnostics
+3. fallback 경로에서 **차단 대신 재귀속** 가설 1개만 반영
+4. 즉시 gate/selected 재검증
+
+### 운영 메모(403)
+- 403은 웹 세션 문제이며 로컬 gradle/diagnostics와 무관.
+- 중단 시에도 로컬 결과는 `build/test-results/test/TEST-com.bohouse.pacemeter.application.SubmissionParityReportDiagnostics.xml`에서 복구 가능.

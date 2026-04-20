@@ -13011,6 +13011,82 @@ class SubmissionParityReportDiagnostics {
         );
     }
 
+    @Test
+    void debugKnownSourceTrackedTargetSplitAssignmentBuckets_forSelectedFights_printsTopBuckets() throws Exception {
+        printKnownSourceTrackedTargetSplitAssignmentBuckets(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "heavy2.fight2"
+        );
+        printKnownSourceTrackedTargetSplitAssignmentBuckets(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "heavy4.fight5"
+        );
+        printKnownSourceTrackedTargetSplitAssignmentBuckets(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "lindwurm.fight8"
+        );
+    }
+
+    @Test
+    void debugStatus0SnapshotRedistributionDeferProbeBuckets_forSelectedFights_printsTopReasons() throws Exception {
+        printStatus0SnapshotRedistributionDeferProbeBuckets(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "heavy2.fight2"
+        );
+        printStatus0SnapshotRedistributionDeferProbeBuckets(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "heavy4.fight5"
+        );
+        printStatus0SnapshotRedistributionDeferProbeBuckets(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "lindwurm.fight8"
+        );
+    }
+
+    @Test
+    void debugKnownSourceTrackedTargetSingleSourceBindingProbeBuckets_forSelectedFights_printsTopReasons() throws Exception {
+        printKnownSourceTrackedTargetSingleSourceBindingProbeBuckets(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "heavy2.fight2"
+        );
+        printKnownSourceTrackedTargetSingleSourceBindingProbeBuckets(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "heavy4.fight5"
+        );
+        printKnownSourceTrackedTargetSingleSourceBindingProbeBuckets(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "lindwurm.fight8"
+        );
+    }
+
+    @Test
+    void debugStatus0FallbackRecentExactSingleBindingProbeBuckets_forSelectedFights_printsTopReasons() throws Exception {
+        printStatus0FallbackRecentExactSingleBindingProbeBuckets(
+                "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+                2,
+                "heavy2.fight2"
+        );
+        printStatus0FallbackRecentExactSingleBindingProbeBuckets(
+                "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+                5,
+                "heavy4.fight5"
+        );
+        printStatus0FallbackRecentExactSingleBindingProbeBuckets(
+                "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+                8,
+                "lindwurm.fight8"
+        );
+    }
+
     private void printKnownSourceTrackedTargetSplitProbeBuckets(
             String submissionId,
             int fightId,
@@ -13215,6 +13291,368 @@ class SubmissionParityReportDiagnostics {
                 .filter(entry -> entry.getKey().contains("|included=true|"))
                 .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
                 .limit(12)
+                .forEach(entry -> System.out.printf(
+                        "  amount=%d hits=%d key=%s%n",
+                        entry.getValue(),
+                        counts.getOrDefault(entry.getKey(), 0L),
+                        entry.getKey()
+                ));
+    }
+
+    private void printKnownSourceTrackedTargetSplitAssignmentBuckets(
+            String submissionId,
+            int fightId,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Long> counts = ingestion.debugKnownSourceTrackedTargetSplitAssignmentCounts();
+        Map<String, Long> amounts = ingestion.debugKnownSourceTrackedTargetSplitAssignmentAmounts();
+        long totalHits = counts.values().stream().mapToLong(Long::longValue).sum();
+        long totalAmount = amounts.values().stream().mapToLong(Long::longValue).sum();
+
+        System.out.printf(
+                "%s knownSourceTrackedTargetSplitAssignment totals hits=%d amount=%d%n",
+                label,
+                totalHits,
+                totalAmount
+        );
+
+        System.out.printf("%s knownSourceTrackedTargetSplitAssignment topByAmount%n", label);
+        amounts.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(18)
+                .forEach(entry -> System.out.printf(
+                        "  amount=%d hits=%d key=%s%n",
+                        entry.getValue(),
+                        counts.getOrDefault(entry.getKey(), 0L),
+                        entry.getKey()
+                ));
+    }
+
+    private void printStatus0SnapshotRedistributionDeferProbeBuckets(
+            String submissionId,
+            int fightId,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Long> counts = ingestion.debugStatus0SnapshotRedistributionDeferProbeCounts();
+        Map<String, Long> amounts = ingestion.debugStatus0SnapshotRedistributionDeferProbeAmounts();
+        long totalHits = counts.values().stream().mapToLong(Long::longValue).sum();
+        long totalAmount = amounts.values().stream().mapToLong(Long::longValue).sum();
+        long deferredHits = counts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|deferred=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+        long deferredAmount = amounts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|deferred=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+
+        double deferredHitRatio = totalHits == 0L ? 0.0 : (deferredHits * 100.0) / totalHits;
+        double deferredAmountRatio = totalAmount == 0L ? 0.0 : (deferredAmount * 100.0) / totalAmount;
+        System.out.printf(
+                "%s status0SnapshotRedistributionDeferProbe totals hits=%d amount=%d deferredHits=%d(%.2f%%) deferredAmount=%d(%.2f%%)%n",
+                label,
+                totalHits,
+                totalAmount,
+                deferredHits,
+                deferredHitRatio,
+                deferredAmount,
+                deferredAmountRatio
+        );
+
+        System.out.printf("%s status0SnapshotRedistributionDeferProbe topByAmount%n", label);
+        amounts.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(15)
+                .forEach(entry -> System.out.printf(
+                        "  amount=%d hits=%d key=%s%n",
+                        entry.getValue(),
+                        counts.getOrDefault(entry.getKey(), 0L),
+                        entry.getKey()
+                ));
+    }
+
+    private void printKnownSourceTrackedTargetSingleSourceBindingProbeBuckets(
+            String submissionId,
+            int fightId,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Long> counts = ingestion.debugKnownSourceTrackedTargetSingleSourceBindingProbeCounts();
+        Map<String, Long> amounts = ingestion.debugKnownSourceTrackedTargetSingleSourceBindingProbeAmounts();
+        long totalHits = counts.values().stream().mapToLong(Long::longValue).sum();
+        long totalAmount = amounts.values().stream().mapToLong(Long::longValue).sum();
+        long appliedHits = counts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|applied=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+        long appliedAmount = amounts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|applied=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+
+        double appliedHitRatio = totalHits == 0L ? 0.0 : (appliedHits * 100.0) / totalHits;
+        double appliedAmountRatio = totalAmount == 0L ? 0.0 : (appliedAmount * 100.0) / totalAmount;
+        System.out.printf(
+                "%s knownSourceTrackedTargetSingleSourceBindingProbe totals hits=%d amount=%d appliedHits=%d(%.2f%%) appliedAmount=%d(%.2f%%)%n",
+                label,
+                totalHits,
+                totalAmount,
+                appliedHits,
+                appliedHitRatio,
+                appliedAmount,
+                appliedAmountRatio
+        );
+
+        System.out.printf("%s knownSourceTrackedTargetSingleSourceBindingProbe topByAmount%n", label);
+        amounts.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(18)
+                .forEach(entry -> System.out.printf(
+                        "  amount=%d hits=%d key=%s%n",
+                        entry.getValue(),
+                        counts.getOrDefault(entry.getKey(), 0L),
+                        entry.getKey()
+                ));
+    }
+
+    private void printStatus0FallbackRecentExactSingleBindingProbeBuckets(
+            String submissionId,
+            int fightId,
+            String label
+    ) throws Exception {
+        SubmissionParityReportService service = buildConfiguredHeavy4Service();
+        SubmissionParityReport report = service.buildReportForFight(submissionId, fightId);
+        assertEquals("ok", report.fflogs().status());
+        assertEquals(fightId, report.fflogs().selectedFightId());
+
+        Optional<?> replayWindow = deriveReplayWindow(service, report.fflogs());
+        Method shouldIncludeLine = openShouldIncludeLine();
+        ActLineParser parser = new ActLineParser();
+
+        com.bohouse.pacemeter.application.port.inbound.CombatEventPort capturePort =
+                new com.bohouse.pacemeter.application.port.inbound.CombatEventPort() {
+                    @Override
+                    public com.bohouse.pacemeter.core.engine.EngineResult onEvent(
+                            com.bohouse.pacemeter.core.event.CombatEvent event
+                    ) {
+                        return com.bohouse.pacemeter.core.engine.EngineResult.empty();
+                    }
+
+                    @Override
+                    public void setCurrentPlayerId(ActorId playerId) {
+                    }
+
+                    @Override
+                    public void setJobId(ActorId actorId, int jobId) {
+                    }
+                };
+        CombatService combatService = new CombatService(
+                new CombatEngine(),
+                snapshot -> {},
+                (name, zone) -> Optional.empty(),
+                territoryId -> Optional.empty()
+        );
+        ObjectMapper objectMapper = new ObjectMapper();
+        ActIngestionService ingestion = new ActIngestionService(
+                capturePort,
+                combatService,
+                new FflogsZoneLookup(objectMapper)
+        );
+
+        Path combatLog = Path.of("data", "submissions", submissionId, "combat.log");
+        for (String line : Files.readAllLines(combatLog, StandardCharsets.UTF_8)) {
+            boolean included = (boolean) shouldIncludeLine.invoke(service, line, replayWindow);
+            if (!included) {
+                continue;
+            }
+            ParsedLine parsed = parser.parse(line);
+            if (parsed != null) {
+                ingestion.onParsed(parsed);
+            }
+        }
+
+        Map<String, Long> counts = ingestion.debugStatus0FallbackRecentExactSingleBindingProbeCounts();
+        Map<String, Long> amounts = ingestion.debugStatus0FallbackRecentExactSingleBindingProbeAmounts();
+        long totalHits = counts.values().stream().mapToLong(Long::longValue).sum();
+        long totalAmount = amounts.values().stream().mapToLong(Long::longValue).sum();
+        long appliedHits = counts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|applied=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+        long appliedAmount = amounts.entrySet().stream()
+                .filter(entry -> entry.getKey().contains("|applied=true|"))
+                .mapToLong(Map.Entry::getValue)
+                .sum();
+
+        double appliedHitRatio = totalHits == 0L ? 0.0 : (appliedHits * 100.0) / totalHits;
+        double appliedAmountRatio = totalAmount == 0L ? 0.0 : (appliedAmount * 100.0) / totalAmount;
+        System.out.printf(
+                "%s status0FallbackRecentExactSingleBindingProbe totals hits=%d amount=%d appliedHits=%d(%.2f%%) appliedAmount=%d(%.2f%%)%n",
+                label,
+                totalHits,
+                totalAmount,
+                appliedHits,
+                appliedHitRatio,
+                appliedAmount,
+                appliedAmountRatio
+        );
+
+        System.out.printf("%s status0FallbackRecentExactSingleBindingProbe topByAmount%n", label);
+        amounts.entrySet().stream()
+                .sorted((left, right) -> Long.compare(right.getValue(), left.getValue()))
+                .limit(18)
                 .forEach(entry -> System.out.printf(
                         "  amount=%d hits=%d key=%s%n",
                         entry.getValue(),
