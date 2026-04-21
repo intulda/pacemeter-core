@@ -44,6 +44,9 @@ public final class ActIngestionService {
     private static final double KNOWN_SOURCE_FOREIGN_DOMINANCE_SCORE_THRESHOLD = 0.70;
     private static final double FOREIGN_DOMINANT_ACTION_REDUCTION_FACTOR = 0.00;
     private static final double KNOWN_SOURCE_TWO_TARGET_SAME_SOURCE_WEIGHT_FACTOR = 0.00;
+    private static final double KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR = 0.50;
+    private static final int CHAOTIC_SPRING_ACTION_ID = 0x64AC;
+    private static final int HIGANBANA_ACTION_ID = 0x1D41;
     private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);
     private static final Duration LIVE_DOT_APPLICATION_CLONE_WINDOW = Duration.ofSeconds(1);
     private static final Map<Integer, Integer> LIVE_DOT_APPLICATION_CLONE_STATUS_TO_ACTION = Map.of();
@@ -2911,6 +2914,29 @@ public final class ActIngestionService {
             return true;
         }
 
+        List<StatusZeroDotAllocationPlanner.Allocation> dampenedAllocations =
+                resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(
+                        dot,
+                        acceptedBySource,
+                        trackedDots,
+                        sourceTrackedDots
+                );
+        if (!dampenedAllocations.isEmpty()) {
+            for (StatusZeroDotAllocationPlanner.Allocation allocation : dampenedAllocations) {
+                emitDotDamageWithAttribution(
+                        "status0_tracked_target_split_dampened_foreign_recent_exact_action",
+                        dot.ts(),
+                        tsMs,
+                        new ActorId(allocation.sourceId()),
+                        actorNameById.getOrDefault(allocation.sourceId(), dot.sourceName()),
+                        new ActorId(dot.targetId()),
+                        allocation.actionId(),
+                        allocation.amount()
+                );
+            }
+            return true;
+        }
+
         long remaining = dot.damage();
         recordKnownSourceTrackedTargetSplitAssignmentBucket(dot, trackedDots, sourceTrackedDots);
         for (int i = 0; i < trackedDots.size(); i++) {
@@ -2929,6 +2955,72 @@ public final class ActIngestionService {
             );
         }
         return true;
+    }
+
+    private List<StatusZeroDotAllocationPlanner.Allocation> resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(
+            DotTickRaw dot,
+            boolean acceptedBySource,
+            List<TrackedDotState> trackedDots,
+            List<TrackedDotState> sourceTrackedDots
+    ) {
+        if (!acceptedBySource || dot.statusId() != 0) {
+            return List.of();
+        }
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return List.of();
+        }
+        if (Math.toIntExact(countTrackedTargetsWithActiveDots()) != 1
+                || trackedDots.size() < 4
+                || sourceTrackedDots.size() != 1) {
+            return List.of();
+        }
+
+        Integer recentSourceActionId = resolveRecentSourceUnknownStatusActionId(dot);
+        Integer recentExactActionId = resolveRecentExactUnknownStatusActionId(dot, KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS);
+        TrackedDotState sourceTrackedDot = sourceTrackedDots.get(0);
+        if (recentSourceActionId == null
+                || recentExactActionId == null
+                || !recentSourceActionId.equals(recentExactActionId)
+                || sourceTrackedDot.actionId() != recentExactActionId
+                || recentExactActionId != CHAOTIC_SPRING_ACTION_ID) {
+            return List.of();
+        }
+
+        long foreignSourceCount = trackedDots.stream()
+                .map(TrackedDotState::sourceId)
+                .filter(sourceId -> sourceId != dot.sourceId())
+                .distinct()
+                .count();
+        long foreignActionCount = trackedDots.stream()
+                .map(TrackedDotState::actionId)
+                .filter(actionId -> actionId != recentExactActionId)
+                .distinct()
+                .count();
+        if (foreignSourceCount < 3 || foreignActionCount < 3) {
+            return List.of();
+        }
+
+        boolean hasForeignHiganbana = trackedDots.stream()
+                .anyMatch(trackedDot -> trackedDot.sourceId() != dot.sourceId()
+                        && trackedDot.actionId() == HIGANBANA_ACTION_ID);
+        if (!hasForeignHiganbana) {
+            return List.of();
+        }
+        List<StatusZeroDotAllocationPlanner.Candidate> candidates = trackedDots.stream()
+                .map(trackedDot -> {
+                    boolean isForeign = trackedDot.sourceId() != dot.sourceId();
+                    double weight = 1.0;
+                    if (isForeign && trackedDot.actionId() == HIGANBANA_ACTION_ID) {
+                        weight = KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR;
+                    }
+                    return new StatusZeroDotAllocationPlanner.Candidate(
+                            trackedDot.sourceId(),
+                            trackedDot.actionId(),
+                            weight
+                    );
+                })
+                .toList();
+        return statusZeroDotAllocationPlanner.allocate(dot.damage(), candidates);
     }
 
     private TrackedDotState resolveKnownSourceTrackedTargetSingleSourceBinding(

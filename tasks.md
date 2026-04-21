@@ -2059,3 +2059,467 @@
 ### 운영 메모(403)
 - 403은 웹 세션 문제이며 로컬 gradle/diagnostics와 무관.
 - 중단 시에도 로컬 결과는 `build/test-results/test/TEST-com.bohouse.pacemeter.application.SubmissionParityReportDiagnostics.xml`에서 복구 가능.
+
+## 2026-04-21 추가 실험 13 (`64AC` recent-exact single-target에서 foreign `1D41` 감쇠, 채택)
+
+### 현재 관찰
+- heavy2 핵심 assignment 버킷:
+  - `activeTargets=1|trackedTargets=4+|sourceTracked=1|sourceTrackedAction=64AC|recentSource=64AC|recentExact=64AC|foreignActionSet=1D41,4094,409C`
+- 기존 "foreign `1D41` 완전 제외"는 selected 개선은 있었지만 rollup `mape` 악화로 기각된 이력이 있음.
+
+### 가설
+- 동일 버킷에서 foreign `1D41`를 완전 제거하지 않고 가중치만 감쇠(`0.5`)하면
+  heavy2 `1D41/64AC` 동시 개선을 유지하면서 전역 부작용을 줄일 수 있다고 가정.
+
+### 수정 범위
+- 파일: `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+- `tryEmitStatus0KnownSourceTrackedRouting`에 분기 추가:
+  - `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`
+  - mode: `status0_tracked_target_split_dampened_foreign_recent_exact_action`
+- 적용 조건(엄격 제한):
+  - `acceptedBySource && status=0`
+  - `activeTargets==1`
+  - `trackedDots>=4 && sourceTrackedDots==1`
+  - `recentSource==recentExact==sourceTrackedAction==64AC`
+  - `foreignSourceCount>=3 && foreignActionCount>=3`
+  - foreign tracked 후보에 `1D41` 존재
+- 동작:
+  - foreign `1D41` 후보만 weight `0.5`, 나머지는 `1.0`으로 planner 재분배.
+
+### 검증 결과
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- selected:
+  - heavy2 fight2 `1D41`: `+1,027,920 -> +1,003,624` (개선)
+  - heavy2 fight2 `64AC`: `-13,398 -> -5,298` (개선)
+  - heavy4 fight5 DRG `64AC`: `+707,783` (동일)
+  - lindwurm fight8 DRG surface: `delta=20,776` (동일)
+- rollup/gate:
+  - `mape=0.010972024677770337` (기준선 `0.010996830747457277` 대비 개선)
+  - `p95=0.025671398260816086` (기준선 대비 소폭 악화)
+  - `max=0.03537628179947446` (동일)
+  - `pass=true`
+
+### 남은 리스크
+- `p95`가 소폭 상승했으므로, 다음 턴에서는 신규 mode의 발동 분포(특히 heavy2 all-fights)를 확인해
+  국소 개선이 다른 fight에 누적 악화를 만드는지 추가 점검 필요.
+
+## 2026-04-21 추가 실험 14 (`foreign 1D41` 감쇠계수 `0.50 -> 0.65`, 기각/원복)
+
+### 현재 관찰
+- 실험 13(`0.50`) 적용 후 신규 mode 발동:
+  - `status0_tracked_target_split_dampened_foreign_recent_exact_action=28` (heavy2 selected fight2)
+- all-fights에서 fight2 p95가 상대적으로 높아(`0.031018`) 감쇠 강도를 약화해 p95를 더 줄일 수 있는지 확인 필요.
+
+### 가설
+- 감쇠계수를 `0.50 -> 0.65`로 완화하면
+  heavy2 개선을 일부 유지하면서 `p95` 악화를 줄일 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR: 0.50 -> 0.65`
+
+### 검증 결과
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- selected:
+  - heavy2 fight2 `1D41`: `+1,003,624 -> +1,011,610` (악화)
+  - heavy2 fight2 `64AC`: `-5,298 -> -7,960` (악화)
+  - heavy4/lind 표면은 실질 동일
+- rollup:
+  - `mape=0.010974776698926972` (`0.50` 대비 악화, baseline 대비는 여전히 개선)
+  - `p95=0.025652656136321898` (`0.50` 대비 소폭 개선)
+  - `max=0.03537628179947446`
+  - gate `pass=true`
+
+### 결론/조치
+- `p95` 소폭 개선 대가로 heavy2 핵심 residual + mape가 동시에 악화되어 기각.
+- 감쇠계수 `0.50`으로 즉시 원복.
+- 원복 후 최종 유지값(실험 13 상태) 재확인:
+  - rollup: `mape=0.010972024677770337`, `p95=0.025671398260816086`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2: `1D41=+1,003,624`, `64AC=-5,298`
+  - heavy4 fight5 DRG `64AC=+707,783`
+  - lindwurm fight8 DRG surface `delta=20,776`
+
+## 2026-04-21 추가 실험 15 (`foreign 1D41` 감쇠계수 `0.50 -> 0.40`, 기각/원복)
+
+### 현재 관찰
+- 실험 13(`0.50`) 상태에서 신규 mode 발동은 heavy2 selected fight2에 국한(`28 hits`)되어,
+  추가 감쇠가 heavy2 residual을 더 낮출 수 있는지 검증 가치가 있다고 판단.
+
+### 가설
+- 감쇠계수를 `0.40`으로 더 낮추면 heavy2 `1D41/64AC`를 추가 개선할 수 있고,
+  적용 범위가 좁아 전역 영향은 제한적일 것이라고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR: 0.50 -> 0.40`
+
+### 검증 결과
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- selected:
+  - heavy2 fight2 `1D41`: `+1,003,624 -> +997,903` (개선)
+  - heavy2 fight2 `64AC`: `-5,298 -> -3,391` (개선)
+- 전역/all-fights:
+  - rollup `mape=0.010988320220743043` (`0.50` 대비 악화)
+  - rollup `p95=0.025684824718896618` (`0.50` 대비 악화)
+  - heavy2 fight2(all-fights) `mape=0.013705`, `p95=0.031050` (`0.50` 대비 악화)
+  - gate `pass=true`
+
+### 결론/조치
+- selected 개선 대비 전역/일반화 지표 악화로 기각.
+- 감쇠계수 `0.50`으로 즉시 원복.
+- 원복 후 유지값 재확인:
+  - rollup `mape=0.010972024677770337`, `p95=0.025671398260816086`, `max=0.03537628179947446`, `pass=true`
+  - heavy2 fight2 `1D41=+1,003,624`, `64AC=-5,298`
+
+## 2026-04-21 추가 실험 16 (dampened split action-set 제한, no-op/원복)
+
+### 가설
+- dampened split을 heavy2에서 관측된 foreign action-set(`1D41,4094,409C`)에만 제한하면
+  p95 부작용을 줄일 수 있다고 가정.
+
+### 수정 범위
+- `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`에
+  foreign action set exact-match 조건 추가.
+
+### 검증 결과
+- baseline/gate pass.
+- selected/rollup/all-fights 수치 완전 동일:
+  - rollup `mape=0.010972024677770337`, `p95=0.025671398260816086`
+  - heavy2 fight2 `1D41=+1,003,624`, `64AC=-5,298`
+  - mode count 동일(`status0_tracked_target_split_dampened_foreign_recent_exact_action=28`)
+
+### 결론/조치
+- 실효 발동 집합이 기존과 동일해 no-op.
+- 복잡도 증가 방지를 위해 조건 추가는 즉시 원복.
+
+## 2026-04-21 추가 실험 17 (dampened split을 foreign `1D41` snapshot 우세 구간으로 제한, 기각/원복)
+
+### 가설
+- `1D41`가 foreign snapshot weight에서 우세할 때만 감쇠를 적용하면
+  불필요한 감쇠를 줄여 p95를 개선할 수 있다고 가정.
+
+### 수정 범위
+- `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`에
+  `isForeignHiganbanaSnapshotDominant(...)` 조건 추가.
+  - 기준: `foreignHiganbanaWeight / foreignTotalWeight >= 0.50`
+
+### 검증 결과
+- baseline/gate pass.
+- mode coverage:
+  - `status0_tracked_target_split_dampened_foreign_recent_exact_action: 28 -> 8`
+- selected:
+  - heavy2 fight2 `1D41: +1,003,624 -> +1,022,371` (악화)
+  - heavy2 fight2 `64AC: -5,298 -> -11,548` (악화)
+- 전역:
+  - rollup `mape=0.01098932611785624` (`0.50` 대비 악화)
+  - rollup `p95=0.025627394399776036` (`0.50` 대비 개선)
+  - heavy2 fight2(all-fights) `mape=0.013708` (`0.50` 대비 악화), `p95=0.030916` (`0.50` 대비 개선)
+  - gate `pass=true`
+
+### 결론/조치
+- p95 개선 대가로 heavy2 핵심 residual + mape가 동시에 악화되어 기각.
+- 조건 추가는 즉시 원복, `0.50` 기본 감쇠 로직 유지.
+
+## 2026-04-21 추가 실험 18 (dampened split source-preferential reweight, 기각/원복)
+
+### 가설
+- 동일 coverage에서 감쇠로 줄인 몫을 source(64AC) 쪽으로 더 주면
+  heavy2 개선을 유지하면서 p95를 안정화할 수 있다고 가정.
+
+### 수정 범위
+- `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`의 후보 가중치:
+  - source 후보: `1.25`
+  - foreign `1D41`: `0.50`
+  - 그 외: `1.0`
+
+### 검증 결과
+- baseline/gate pass.
+- selected:
+  - heavy2 fight2 `1D41`: `+1,003,624 -> +1,001,463` (소폭 개선)
+  - heavy2 fight2 `64AC`: `-5,298 -> +5,501` (절대오차 악화)
+- 전역:
+  - rollup `mape=0.010994894286671124` (`0.50` 대비 악화)
+  - rollup `p95=0.02574742989207551` (`0.50` 대비 악화)
+  - heavy2 all-fights fight2 `p95=0.031196` (`0.50` 대비 악화)
+  - gate `pass=true`
+
+### 결론/조치
+- `64AC` 절대오차와 rollup/p95가 동시에 악화되어 기각.
+- source-preferential reweight는 즉시 원복, `0.50` 기본 감쇠 로직 유지.
+
+## 2026-04-21 추가 실험 19 (`foreign 1D41` 감쇠계수 `0.50 -> 0.58`, 기각/원복)
+
+### 가설
+- 감쇠를 완화(`0.58`)하면 p95를 줄이면서도 heavy2 개선을 유지할 수 있다고 가정.
+
+### 수정 범위
+- `KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR: 0.50 -> 0.58`
+
+### 검증 결과
+- baseline/gate pass.
+- 전역/일반화:
+  - rollup `mape=0.010969849168810239` (`0.50` 대비 개선)
+  - rollup `p95=0.025661210486908077` (`0.50` 대비 개선)
+  - heavy2 all-fights fight2: `mape=0.013650`, `p95=0.030995` (`0.50` 대비 개선)
+- selected:
+  - heavy2 fight2 `1D41: +1,003,624 -> +1,007,965` (악화)
+  - heavy2 fight2 `64AC: -5,298 -> -6,745` (절대오차 악화)
+  - heavy4/lind surface는 실질 동일.
+
+### 결론/조치
+- heavy2 핵심 residual 2축 동시 악화로 기각.
+- 감쇠계수 `0.50`으로 즉시 원복.
+
+## 2026-04-21 추가 실험 20 (adaptive dampening by foreign `1D41` snapshot share, 기각/원복)
+
+### 가설
+- 고정 감쇠(0.50) 대신 foreign `1D41` share 기반 적응 감쇠를 쓰면
+  `1D41` 비중이 낮은 케이스의 과감쇠를 줄여 p95를 개선할 수 있다고 가정.
+
+### 수정 범위
+- `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`에서
+  foreign `1D41` weight를 share 기반 선형 보간으로 산출:
+  - share <= 0.34: weight 1.00
+  - share >= 0.67: weight 0.50
+  - 구간 내 선형 보간
+
+### 검증 결과
+- baseline/gate pass.
+- selected:
+  - heavy2 fight2 `1D41: +1,003,624 -> +1,024,567` (악화)
+  - heavy2 fight2 `64AC: -5,298 -> -12,279` (악화)
+- 전역:
+  - rollup `mape=0.010992292750428373` (`0.50` 대비 악화)
+  - rollup `p95=0.025622247708188797` (`0.50` 대비 개선)
+  - heavy2 all-fights fight2 `mape=0.013717` (`0.50` 대비 악화), `p95=0.030904` (`0.50` 대비 개선)
+  - gate `pass=true`
+
+### 결론/조치
+- p95 개선 대가로 heavy2 핵심 residual + mape가 동시에 악화되어 기각.
+- adaptive dampening 로직은 즉시 원복, 고정 감쇠 `0.50` 유지.
+
+## 2026-04-21 추가 실험 21 (dampened split foreign action cardinality를 `==3`으로 고정, 기각/원복)
+
+### 가설
+- dampened split 진입 조건을 `foreignActionCount>=3`에서 `foreignActionCount==3`으로 좁히면
+  heavy2 triad(`1D41,4094,409C`)만 남기고 비정형 케이스를 제외해 품질이 좋아질 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`
+  - 조건 변경: `foreignActionCount < 3` -> `foreignActionCount != 3`
+
+### 검증 결과
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- selected:
+  - heavy2 fight2 `1D41`: `+1,003,624 -> +1,027,920` (악화)
+  - heavy2 fight2 `64AC`: `-5,298 -> -13,398` (악화)
+  - heavy4 fight5 DRG `64AC` surface: `+707,783 -> -84,727` (악화)
+  - lindwurm fight8 DRG surface: `delta=20,776` (동일)
+- 전역:
+  - rollup `mape=0.010996830747457277` (`0.50` 기준선 대비 악화)
+  - rollup `p95=0.025614369256908187` (`0.50` 기준선 대비 개선)
+  - rollup `max=0.03537628179947446` (동일)
+  - gate `pass=true`
+
+### 결론/조치
+- p95 단일 개선 대비 heavy2 핵심 residual 2축과 heavy4 surface가 동시에 악화되어 기각.
+- 조건 변경은 즉시 원복(`foreignActionCount>=3` 복귀), 고정 감쇠 `0.50` 로직 유지.
+
+## 2026-04-21 추가 실험 22 (dampened split foreign source cardinality를 `==3`으로 고정, no-op/원복)
+
+### 가설
+- dampened split 진입 조건을 `foreignSourceCount>=3`에서 `foreignSourceCount==3`으로 좁히면
+  heavy2의 tri-source 케이스에만 작동해 전역 부작용을 줄일 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`
+  - 조건 변경: `foreignSourceCount < 3` -> `foreignSourceCount != 3`
+
+### 검증 결과
+- baseline/gate pass.
+- selected/전역/all-fights 수치가 유지값과 동일:
+  - heavy2 fight2 `1D41=+1,003,624`, `64AC=-5,298`
+  - rollup `mape=0.010972024677770337`, `p95=0.025671398260816086`, `max=0.03537628179947446`
+  - gate `pass=true`
+- mode breakdown에서도 dampened 모드가 기존과 동일하게 관측되어 실질 발동 집합 변화가 확인되지 않음.
+
+### 결론/조치
+- 효과 없는 조건 강화(no-op)로 판단.
+- 복잡도 증가 방지를 위해 즉시 원복(`foreignSourceCount>=3` 복귀), 고정 감쇠 `0.50` 로직 유지.
+
+## 2026-04-21 추가 실험 23 (`foreign 1D41` 감쇠계수 `0.50 -> 0.45`, 기각/원복)
+
+### 가설
+- `0.40`이 selected 개선/전역 악화를 보였고 `0.50`이 전역 안정점이라면,
+  중간값 `0.45`에서 heavy2 개선을 일부 유지하면서 전역 악화를 줄일 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR: 0.50 -> 0.45`
+
+### 검증 결과
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- selected:
+  - heavy2 fight2 `1D41: +1,003,624 -> +1,000,804` (개선)
+  - heavy2 fight2 `64AC: -5,298 -> -4,358` (개선)
+- 전역/all-fights:
+  - rollup `mape=0.010980057090142827` (`0.50` 대비 악화)
+  - rollup `p95=0.025678016441516502` (`0.50` 대비 악화)
+  - heavy2 all-fights fight2 `mape=0.013680`, `p95=0.031034` (`0.50` 대비 악화)
+  - gate `pass=true`
+- heavy4/lindwurm surface:
+  - heavy4 fight5 DRG `delta=-84,727` (동일)
+  - lindwurm fight8 DRG `delta=20,776` (동일)
+
+### 결론/조치
+- selected 개선 대비 rollup/all-fights 지표가 동시 악화되어 기각.
+- 감쇠계수 `0.50`으로 즉시 원복.
+
+## 2026-04-21 추가 실험 24 (dampened split에서 foreign non-`1D41` 약감쇠, 기각/원복)
+
+### 가설
+- 현재 dampened 모드는 heavy2 fight2에서만 발동하므로,
+  foreign `1D41` 감쇠로 빠진 몫이 `4094/409C`로 과재분배되는 것을 줄이면
+  heavy2 이득을 유지하면서 p95를 줄일 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`
+  - 후보 가중치 조정:
+    - foreign `1D41`: `0.50` (유지)
+    - foreign non-`1D41`(and non-source action): `0.90` 신규 약감쇠
+    - 그 외: `1.0`
+
+### 검증 결과
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- selected:
+  - heavy2 fight2 `1D41: +1,003,624 -> +1,005,586` (악화)
+  - heavy2 fight2 `64AC: -5,298 -> -1,370` (개선)
+- 전역/all-fights:
+  - rollup `mape=0.010974231797681417` (`0.50` 대비 악화)
+  - rollup `p95=0.02569905380740251` (`0.50` 대비 악화)
+  - heavy2 all-fights fight2 `mape=0.013663`, `p95=0.031083` (`0.50` 대비 악화)
+  - gate `pass=true`
+- heavy4/lindwurm surface:
+  - heavy4 fight5 DRG `delta=-84,727` (동일)
+  - lindwurm fight8 DRG `delta=20,776` (동일)
+
+### 결론/조치
+- `64AC` 단일 개선 대가로 `1D41` 및 rollup/all-fights 지표가 동시 악화되어 기각.
+- foreign non-`1D41` 약감쇠 로직은 즉시 원복, 고정 감쇠 `0.50` 유지.
+
+## 2026-04-22 추가 실험 25 (dampened 후보를 `source + foreign 1D41`로 제한, 기각/원복)
+
+### 현재 관찰
+- `status0_tracked_target_split_dampened_foreign_recent_exact_action`는 heavy2 fight2에서만 발동함을 확인.
+- 기존 감쇠는 foreign `1D41`만 줄이고 나머지 후보는 유지하므로, 감쇠 손실분이 `4094/409C`로 재분배될 수 있음.
+
+### 가설
+- dampened 후보를 `source(64AC) + foreign 1D41`로만 제한하면
+  `4094/409C` 교차 오염을 차단해 heavy2 핵심 residual과 전역 지표를 동시에 개선할 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`
+  - 후보 필터 추가:
+    - `trackedDot.sourceId() == dot.sourceId()` 또는 `trackedDot.actionId() == 1D41`만 allocation 후보로 유지.
+
+### 검증 결과
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- selected:
+  - heavy2 fight2 `1D41: +1,003,624 -> +1,046,815` (악화)
+  - heavy2 fight2 `64AC: -5,298 -> +81,091` (악화)
+- 전역/all-fights:
+  - rollup `mape=0.011637349635327691` (`0.50` 대비 크게 악화)
+  - rollup `p95=0.026856584538904167` (`0.50` 대비 크게 악화)
+  - heavy2 all-fights fight2 `mape=0.015652`, `p95=0.032438` (`0.50` 대비 크게 악화)
+  - gate `pass=true`
+- mode 신호:
+  - dampened amount 급증
+    - `1D41 amount=75,589`
+    - `64AC amount=151,179`
+  - 기존 대비 source 쏠림이 커지며 64AC 과대가 재발.
+
+### 결론/조치
+- heavy2 핵심 2축과 rollup/all-fights를 동시에 악화시키므로 기각.
+- 후보 제한 필터는 즉시 원복, 고정 감쇠 `0.50` 로직 유지.
+
+## 2026-04-22 추가 실험 26 (dampened 전용 recentExact window 축소 `15s -> 8s`, 기각/원복)
+
+### 가설
+- `dampened`는 recent-exact 근거에 의존하므로, 전용 exact window를 15초에서 8초로 줄이면
+  오래된 근거로 인한 오분배를 줄여 all-fights p95를 개선할 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `KNOWN_SOURCE_DAMPENED_EXACT_WINDOW_MS = 8_000L` 추가
+  - `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`에서
+    `resolveRecentExactUnknownStatusActionId(..., 8_000L)` 사용
+
+### 검증 결과
+- baseline:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- mode coverage:
+  - `status0_tracked_target_split_dampened_foreign_recent_exact_action` hits가 축소
+  - heavy2 `1D41 amount=16,531 hits=3`, `64AC amount=33,060 hits=3` (기존 hits=7 대비 감소)
+- selected:
+  - heavy2 fight2 `1D41: +1,003,624 -> +1,015,522` (악화)
+  - heavy2 fight2 `64AC: -5,298 -> -9,265` (악화)
+- 전역/all-fights:
+  - rollup `mape=0.01098006722793318` (`0.50` 대비 악화)
+  - rollup `p95=0.02564346813013674` (`0.50` 대비 개선)
+  - heavy2 all-fights fight2 `mape=0.013680` (`0.50` 대비 악화), `p95=0.030953` (`0.50` 대비 개선)
+  - gate `pass=true`
+- heavy4/lindwurm surface:
+  - heavy4 fight5 DRG `delta=-84,727` (동일)
+  - lindwurm fight8 DRG `delta=20,776` (동일)
+
+### 결론/조치
+- p95 단일 개선 대비 heavy2 핵심 residual 2축과 rollup mape가 동시 악화되어 기각.
+- dampened 전용 window 축소 변경은 즉시 원복, `15s` 기본 window 유지.
+
+## 2026-04-22 종료 핸드오프 (내일 이어서)
+
+### 오늘 종료 시점 고정 상태
+- production 유지:
+  - `KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR = 0.50`
+  - dampened recentExact window = `15s` (실험 26 원복 완료)
+- 최근 실험 상태:
+  - 21~26 모두 `기각/원복` 또는 `no-op`
+  - 공통 패턴: `p95` 개선 시 heavy2 핵심 residual(`1D41/64AC`) 또는 `mape` 악화
+
+### 내일 시작 즉시 확인
+1. `ActIngestionServiceTest`
+2. `SubmissionParityRegressionGateTest`
+3. selected 진단:
+   - heavy2 fight2 `1D41/64AC` target parity + mode breakdown
+   - heavy4/lindwurm surface
+   - heavy2 all-fights fight2 quality line
+
+### 내일 우선 가설 방향
+- `weight` 스윕보다 **발동 전 evidence gate 1개**를 추가하는 방향 유지.
+- 조건:
+  - heavy2에만 explainable하게 작동해야 함
+  - heavy4/lindwurm/gate 영향 최소여야 함
+  - 변경은 1개만 반영 후 즉시 회귀 검증
+
+### 운영 메모
+- Gradle는 병렬 실행 시 `build/test-results` 또는 `build/classes` 경합이 재발할 수 있으므로
+  중요한 검증은 단독 순차 실행 권장.
