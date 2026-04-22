@@ -2523,3 +2523,194 @@
 ### 운영 메모
 - Gradle는 병렬 실행 시 `build/test-results` 또는 `build/classes` 경합이 재발할 수 있으므로
   중요한 검증은 단독 순차 실행 권장.
+
+## 2026-04-22 추가 실험 27 (dampened foreign non-`1D41` no-evidence 약감쇠, no-op/원복)
+
+### 현재 관찰
+- `status0_tracked_target_split_dampened_foreign_recent_exact_action`은 heavy2 selected(fight2)에서만 발동.
+- heavy2 핵심 잔차는
+  - `1D41 delta=+1,003,624`
+  - `64AC delta=-5,298`
+  상태를 유지 중.
+
+### 가설
+- dampened 후보 중 foreign non-`1D41`(`4094/409C`)가 현재 target에 대한 source-evidence가 없을 때만
+  약감쇠(`0.85`)하면 교차 오염을 줄일 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - dampened 후보 가중치에 `same-target source evidence` 조건부 약감쇠 추가.
+
+### 검증 결과
+- baseline/gate pass.
+- selected/rollup/all-fights 수치 완전 동일(no-op):
+  - heavy2 fight2 `1D41=+1,003,624`, `64AC=-5,298`
+  - heavy2 all-fights fight2 `mape=0.013656`, `p95=0.031018`
+  - rollup `mape=0.010972024677770337`, `p95=0.025671398260816086`, `max=0.03537628179947446`, `pass=true`
+  - heavy4 fight5 DRG `64AC=+707,783`
+  - lindwurm fight8 DRG surface `delta=20,776`
+
+### 결론/조치
+- dampened 발동 케이스에서 해당 evidence 조건이 이미 충족되어 실질 변화가 없다고 판단.
+- 복잡도 증가 방지를 위해 즉시 원복.
+- 최종 워크트리 clean 상태 유지.
+
+### 운영 메모
+- 이번 턴에서도 병렬 테스트 실행 시 `build/classes` 경합으로 `NoSuchFileException`/대량 compile 오류가 재현됨.
+- 검증은 반드시 단독 순차 실행 유지.
+
+## 2026-04-22 추가 실험 28 (dampened recentExact를 corroborated-only로 제한, no-op/원복)
+
+### 현재 관찰
+- `dampened` 진입 근거는 `recentExact`가 action/status 단독 근거로도 성립할 수 있어,
+  근거 강도를 높이면 불필요 발동을 줄일 여지가 있다고 판단.
+
+### 가설
+- `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit`에서
+  `recentExact`를 `action+status corroborated` 근거로만 허용하면
+  heavy2 오염을 줄이면서 전역 영향은 제한될 수 있다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - dampened 진입 조건에 corroborated recentExact 일치 조건 1개 추가.
+
+### 검증 결과
+- baseline/gate pass.
+- selected/전역/all-fights 수치 완전 동일(no-op):
+  - heavy2 fight2 `1D41=+1,003,624`, `64AC=-5,298`
+  - heavy2 all-fights fight2 `mape=0.013656`, `p95=0.031018`
+  - rollup `mape=0.010972024677770337`, `p95=0.025671398260816086`, `max=0.03537628179947446`, `pass=true`
+  - heavy4 fight5 DRG `64AC=+707,783`
+  - lindwurm fight8 DRG surface `delta=20,776`
+
+### 결론/조치
+- 실효 발동 집합이 기존과 동일해 no-op로 판단.
+- 복잡도 증가 방지를 위해 즉시 원복.
+
+### 운영 메모
+- 병렬 테스트 재시도에서 `build/classes` 경합으로 동일 compile 오류 재발.
+- 이후 검증은 단독 순차 실행만 유지.
+
+## 2026-04-22 추가 실험 29 (dampened activeTargets 허용 범위 `==1 -> <=2`, 기각/원복)
+
+### 현재 관찰
+- heavy2 `knownSourceTrackedTargetSplitProbe`에서
+  `reason=recent_exact|activeTargets=2|sourceTracked=1` 버킷 비중이 큼.
+- heavy4/lindwurm는 주로 `ineligible|activeTargets=1|sourceTracked=0` 버킷이 지배적.
+
+### 가설
+- dampened 분기 조건의 `activeTargets==1`을 `activeTargets<=2`로 완화하면
+  heavy2의 `recent_exact + dual-target` 구간을 추가 흡수해
+  `1D41/64AC` 동시 개선이 가능하다고 가정.
+
+### 수정 범위
+- `src/main/java/com/bohouse/pacemeter/application/ActIngestionService.java`
+  - `resolveKnownSourceSingleTargetRecentExactForeignHiganbanaDampenedSplit(...)`
+  - active target 조건: `==1` -> `1..2`
+
+### 검증 결과
+- baseline/gate pass.
+- selected(heavy2 fight2):
+  - `1D41: +1,003,624 -> +996,914` (개선)
+  - `64AC: -5,298 -> -3,061` (개선)
+- 하지만 전역/all-fights 악화:
+  - rollup `mape=0.010991134103993142` (악화)
+  - rollup `p95=0.02568714812275954` (악화)
+  - heavy2 all-fights fight2 `mape=0.013714`, `p95=0.031055` (악화)
+  - gate `pass=true`
+- mode coverage 변화:
+  - dampened가 prison 외 `레드 핫/딥 블루`에도 추가 발동 (각 1 hit씩 증가)
+
+### 결론/조치
+- selected 개선 대비 전역/일반화 지표가 동시 악화되어 기각.
+- 조건 변경 즉시 원복 완료.
+- 원복 후 기준선 복귀 확인:
+  - heavy2 fight2 `1D41=+1,003,624`, `64AC=-5,298`
+  - heavy2 all-fights fight2 `mape=0.013656`, `p95=0.031018`
+  - rollup `mape=0.010972024677770337`, `p95=0.025671398260816086`, `max=0.03537628179947446`, `pass=true`
+
+### 운영 메모
+- 다중 테스트를 한 번에 묶어 실행할 때 `.gradle-home` 캐시 JAR 접근(`AccessDeniedException`)이 간헐 재발.
+- 검증은 baseline/gate/diagnostics를 분리한 순차 실행으로 고정.
+
+## 2026-04-22 추가 실험 30 (dual-target stale-evidence 한정 dampened 허용, no-op/원복)
+
+### 가설
+- `activeTargets=2`를 전면 허용하지 않고,
+  `same source/action`이 **다른 target에는 최근 존재**하지만 **현재 target에는 최근 근거가 없는**
+  stale dual-target 케이스로만 dampened를 확장하면 heavy2 오염을 줄일 수 있다고 가정.
+
+### 수정 범위
+- `ActIngestionService`
+  - dampened 조건을 `activeTargets<=2`로 확장
+  - 단, `activeTargets==2`일 때 stale dual-target evidence helper 조건 추가.
+
+### 검증 결과
+- baseline/gate pass.
+- selected/all-fights/rollup 수치 및 mode coverage가 baseline과 완전 동일(no-op).
+
+### 결론/조치
+- 실효 발동 케이스가 없어서 no-op로 판단.
+- 복잡도 증가 방지를 위해 즉시 원복.
+
+## 2026-04-22 추가 실험 31 (`recentSource only + dual-target` 전용 foreign 1D41 약감쇠, no-op/원복)
+
+### 현재 관찰
+- heavy2 probe에서 `recent_exact`/`stale_evidence`의 `activeTargets=2, sourceTracked=1` 버킷 비중이 큼.
+
+### 가설
+- `recentSource=64AC`, `recentExact=null`, `activeTargets=2` 케이스만 별도 분기로 분리해
+  foreign `1D41`을 보수 약감쇠(`0.80`)하면 heavy2 누수를 줄일 수 있다고 가정.
+
+### 수정 범위
+- `ActIngestionService`
+  - 신규 mode:
+    - `status0_tracked_target_split_dampened_foreign_recent_source_only_dual_target`
+  - 조건:
+    - `acceptedBySource && status=0`
+    - `activeTargets==2`, `trackedDots>=4`, `sourceTracked=1`
+    - `recentSource=64AC`, `recentExact=null`, foreign source/action cardinality `>=3`
+    - foreign `1D41` 존재
+
+### 검증 결과
+- baseline/gate pass.
+- 신규 mode hit 미발생(0 hit).
+- selected/all-fights/rollup 수치 완전 동일(no-op).
+
+### 결론/조치
+- 실효 커버리지 부재로 no-op 판단.
+- 신규 분기/상수 즉시 원복.
+
+## 2026-04-23 이어하기 핸드오프
+
+### 오늘 종료 시점 고정 상태
+- production 코드 변경 없음(실험 28~31 모두 기각/원복).
+- 기준선:
+  - heavy2 fight2 `1D41=+1,003,624`
+  - heavy2 fight2 `64AC=-5,298`
+  - heavy2 all-fights fight2 `mape=0.013656`, `p95=0.031018`
+  - rollup `mape=0.010972024677770337`, `p95=0.025671398260816086`, `max=0.03537628179947446`, `pass=true`
+- baseline 테스트:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+
+### 내일 시작 즉시 실행
+1. `ActIngestionServiceTest`
+2. `SubmissionParityRegressionGateTest`
+3. selected diagnostics:
+   - heavy2 fight2 `1D41/64AC` target parity + mode breakdown
+   - heavy4/lindwurm surface
+   - heavy2 all-fights fight2 quality line
+
+### 내일 가설 우선순위
+- `dampened` 확장/가중치 튜닝은 우선순위 하향(반복 no-op 또는 전역 악화 패턴).
+- 다음은 `status0_tracked_target_split`의 `stale_evidence + activeTargets=2 + sourceTracked=1` 버킷에 대해,
+  suppress가 아닌 **분배 경로 선택** 가설 1개만 적용.
+- 조건:
+  - heavy2 이득을 설명 가능해야 함
+  - heavy4/lindwurm/gate 영향 최소여야 함
+  - 변경 1개 적용 후 즉시 회귀 검증
+
+### 운영 메모
+- 병렬 실행 금지( `build/classes` 경합 재발 ).
+- `.gradle-home` 접근 오류(`AccessDeniedException`)가 간헐 발생하므로 테스트는 묶지 말고 단독 순차 실행.
