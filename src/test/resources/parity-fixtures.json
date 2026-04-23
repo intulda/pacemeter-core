@@ -1,0 +1,48 @@
+{
+  "globalGate": {
+    "maxP95Ape": 0.05,
+    "maxActorApe": 0.05,
+    "maxOutlierRatio": 0.0
+  },
+  "submissionGates": [
+    {
+      "submissionId": "2026-03-15-heavy4-vafpbaqjnhbk1mtw",
+      "contentGroup": "savage",
+      "minMatchedActors": 8,
+      "maxP95Ape": 0.03,
+      "maxActorApe": 0.04
+    },
+    {
+      "submissionId": "2026-03-16-lindwurm-f8-bT1pkq7x4dhV3QGz",
+      "contentGroup": "savage",
+      "minMatchedActors": 8,
+      "maxP95Ape": 0.02,
+      "maxActorApe": 0.02
+    }
+  ],
+  "allFightsGates": [
+    {
+      "submissionId": "2026-03-18-heavy2-f6-fM4NVcGvb7aRjzCt",
+      "contentGroup": "savage",
+      "minMatchedActors": 8,
+      "maxP95Ape": 0.055,
+      "maxActorApe": 0.06
+    }
+  ],
+  "contentGroupGates": [
+    {
+      "contentGroup": "savage",
+      "minEvaluatedSubmissions": 2,
+      "maxP95Ape": 0.03,
+      "maxActorApe": 0.04,
+      "optional": false
+    },
+    {
+      "contentGroup": "ultimate",
+      "minEvaluatedSubmissions": 1,
+      "maxP95Ape": 0.03,
+      "maxActorApe": 0.04,
+      "optional": true
+    }
+  ]
+}

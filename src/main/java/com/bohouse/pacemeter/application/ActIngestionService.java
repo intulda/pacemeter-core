@@ -45,6 +45,7 @@ public final class ActIngestionService {
     private static final double FOREIGN_DOMINANT_ACTION_REDUCTION_FACTOR = 0.00;
     private static final double KNOWN_SOURCE_TWO_TARGET_SAME_SOURCE_WEIGHT_FACTOR = 0.00;
     private static final double KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR = 0.50;
+    // TODO(content-parity): replace action-pair specialization with catalog-driven generic rule strategy.
     private static final int CHAOTIC_SPRING_ACTION_ID = 0x64AC;
     private static final int HIGANBANA_ACTION_ID = 0x1D41;
     private static final Set<Integer> INVALID_DOT_ACTION_IDS = Set.of(0x7, 0x17);

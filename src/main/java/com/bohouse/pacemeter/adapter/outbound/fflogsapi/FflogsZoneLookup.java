@@ -28,6 +28,7 @@ import java.util.*;
 public class FflogsZoneLookup {
 
     private static final Logger log = LoggerFactory.getLogger(FflogsZoneLookup.class);
+    // TODO(content-parity): expand territory coverage beyond savage to ultimate/other tiers.
     private static final String RESOURCE = "fflogs-zones.json";
 
     // actTerritoryId → ZoneLookupResult (precomputed at startup)

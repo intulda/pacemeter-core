@@ -2,6 +2,7 @@
   "_readme": "ACT territory ID(숫자) → FFLogs zone ID. Savage(영식)만 포함.",
   "_encounter_index": "같은 zone ID 내에서 territory ID를 오름차순 정렬한 순서가 encounter index(0부터). 코드에서 자동 계산.",
   "_how_to_add": "새 레이드 시즌: cactbot zone_id.ts에서 Savage territory ID 확인 후 추가.",
+  "_todo_all_content": "TODO(content-parity): include ultimate and other parity target tiers, not only savage.",
   "_cactbot_source": "https://github.com/OverlayPlugin/cactbot/blob/main/resources/zone_id.ts",
 
   "_comment_asphodelos": "Pandaemonium Asphodelos (6.05) P1S-P4S → FFLogs zone 44",
