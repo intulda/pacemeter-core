@@ -102,6 +102,8 @@ public final class ActIngestionService {
     private final Map<String, Long> knownSourceTrackedTargetSplitAssignmentAmountByKey = new HashMap<>();
     private final Map<String, Long> status0SnapshotRedistributionDeferProbeCountByKey = new HashMap<>();
     private final Map<String, Long> status0SnapshotRedistributionDeferProbeAmountByKey = new HashMap<>();
+    private final Map<String, Long> status0SnapshotRedistributionRecipientCountByKey = new HashMap<>();
+    private final Map<String, Long> status0SnapshotRedistributionRecipientAmountByKey = new HashMap<>();
     private final Map<String, Long> knownSourceTrackedTargetSingleSourceBindingProbeCountByKey = new HashMap<>();
     private final Map<String, Long> knownSourceTrackedTargetSingleSourceBindingProbeAmountByKey = new HashMap<>();
     private final Map<String, Long> status0FallbackRecentExactSingleBindingProbeCountByKey = new HashMap<>();
@@ -203,6 +205,8 @@ public final class ActIngestionService {
         knownSourceTrackedTargetSplitAssignmentAmountByKey.clear();
         status0SnapshotRedistributionDeferProbeCountByKey.clear();
         status0SnapshotRedistributionDeferProbeAmountByKey.clear();
+        status0SnapshotRedistributionRecipientCountByKey.clear();
+        status0SnapshotRedistributionRecipientAmountByKey.clear();
         knownSourceTrackedTargetSingleSourceBindingProbeCountByKey.clear();
         knownSourceTrackedTargetSingleSourceBindingProbeAmountByKey.clear();
         status0FallbackRecentExactSingleBindingProbeCountByKey.clear();
@@ -276,6 +280,8 @@ public final class ActIngestionService {
             knownSourceTrackedTargetSplitAssignmentAmountByKey.clear();
             status0SnapshotRedistributionDeferProbeCountByKey.clear();
             status0SnapshotRedistributionDeferProbeAmountByKey.clear();
+            status0SnapshotRedistributionRecipientCountByKey.clear();
+            status0SnapshotRedistributionRecipientAmountByKey.clear();
             knownSourceTrackedTargetSingleSourceBindingProbeCountByKey.clear();
             knownSourceTrackedTargetSingleSourceBindingProbeAmountByKey.clear();
             status0FallbackRecentExactSingleBindingProbeCountByKey.clear();
@@ -835,7 +841,8 @@ public final class ActIngestionService {
             return List.of();
         }
 
-        Map<TrackedDotKey, Double> redistributionWeights = selectSnapshotRedistributionWeights(dot, snapshot);
+        SnapshotRedistributionWeights selectedWeights = selectSnapshotRedistributionWeights(dot, snapshot);
+        Map<TrackedDotKey, Double> redistributionWeights = selectedWeights.weights();
         redistributionWeights = applySourceHintWeighting(dot, redistributionWeights);
         redistributionWeights = applyStatusSignalWeighting(dot, redistributionWeights);
         double denominator = redistributionWeights.values().stream()
@@ -854,6 +861,7 @@ public final class ActIngestionService {
                 .toList();
         return statusZeroDotAllocationPlanner.allocate(dot.damage(), candidates).stream()
                 .map(allocation -> new SnapshotRedistributedDot(
+                        selectedWeights.path(),
                         allocation.sourceId(),
                         allocation.actionId(),
                         allocation.amount()
@@ -861,7 +869,7 @@ public final class ActIngestionService {
                 .toList();
     }
 
-    private Map<TrackedDotKey, Double> selectSnapshotRedistributionWeights(DotTickRaw dot, StatusSnapshotState snapshot) {
+    private SnapshotRedistributionWeights selectSnapshotRedistributionWeights(DotTickRaw dot, StatusSnapshotState snapshot) {
         Map<TrackedDotKey, Double> fallbackWeights = new HashMap<>();
         for (Map.Entry<TrackedDotKey, Double> entry : snapshot.weights().entrySet()) {
             TrackedDotKey key = entry.getKey();
@@ -870,19 +878,19 @@ public final class ActIngestionService {
             }
         }
         if (fallbackWeights.isEmpty()) {
-            return Map.of();
+            return new SnapshotRedistributionWeights("empty", Map.of());
         }
 
         pruneExpiredTrackedDots(dot.ts());
         Map<TrackedDotKey, TrackedDotState> activeDots = activeTargetDots.get(dot.targetId());
         if (activeDots == null || activeDots.isEmpty()) {
-            return fallbackWeights;
+            return new SnapshotRedistributionWeights("fallback_no_active", fallbackWeights);
         }
         boolean suppressUnknownMultiTargetFallback = shouldSuppressUnknownMultiTargetFallback(dot);
 
         Map<TrackedDotKey, Double> sameSourceFallbackWeights = selectKnownSourceWeights(dot, fallbackWeights);
         if (!sameSourceFallbackWeights.isEmpty()) {
-            return sameSourceFallbackWeights;
+            return new SnapshotRedistributionWeights("same_source", sameSourceFallbackWeights);
         }
 
         Map<TrackedDotKey, Double> activeWeights = new HashMap<>();
@@ -892,15 +900,15 @@ public final class ActIngestionService {
             }
         }
         if (suppressUnknownMultiTargetFallback && !activeWeights.isEmpty()) {
-            return Map.of();
+            return new SnapshotRedistributionWeights("suppressed_unknown_multi_active", Map.of());
         }
         if (!activeWeights.isEmpty() && shouldPreferActiveTrackedDotSubset(activeWeights, fallbackWeights)) {
-            return activeWeights;
+            return new SnapshotRedistributionWeights("active_subset", activeWeights);
         }
         if (suppressUnknownMultiTargetFallback) {
-            return Map.of();
+            return new SnapshotRedistributionWeights("suppressed_unknown_multi", Map.of());
         }
-        return fallbackWeights;
+        return new SnapshotRedistributionWeights("fallback", fallbackWeights);
     }
 
     private List<StatusZeroDotAllocationPlanner.Allocation> resolveKnownSourceTwoTargetWeightedTrackedTargetSplit(
@@ -2004,6 +2012,14 @@ public final class ActIngestionService {
         return Map.copyOf(status0SnapshotRedistributionDeferProbeAmountByKey);
     }
 
+    Map<String, Long> debugStatus0SnapshotRedistributionRecipientCounts() {
+        return Map.copyOf(status0SnapshotRedistributionRecipientCountByKey);
+    }
+
+    Map<String, Long> debugStatus0SnapshotRedistributionRecipientAmounts() {
+        return Map.copyOf(status0SnapshotRedistributionRecipientAmountByKey);
+    }
+
     Map<String, Long> debugKnownSourceTrackedTargetSingleSourceBindingProbeCounts() {
         return Map.copyOf(knownSourceTrackedTargetSingleSourceBindingProbeCountByKey);
     }
@@ -2657,6 +2673,7 @@ public final class ActIngestionService {
                         ? remaining
                         : Math.min(remaining, redistributedDot.amount());
                 remaining -= allocated;
+                recordStatus0SnapshotRedistributionRecipient(dot, redistributedDot, allocated);
                 emitDotDamageWithAttribution(
                         "status0_snapshot_redistribution",
                         dot.ts(),
@@ -2759,6 +2776,39 @@ public final class ActIngestionService {
         if (dot.damage() > 0) {
             status0SnapshotRedistributionDeferProbeAmountByKey.merge(key, dot.damage(), Long::sum);
         }
+    }
+
+    private void recordStatus0SnapshotRedistributionRecipient(
+            DotTickRaw dot,
+            SnapshotRedistributedDot redistributedDot,
+            long amount
+    ) {
+        int activeTargets = Math.toIntExact(countTrackedTargetsWithActiveDots());
+        String sourceRelation = redistributedDot.sourceId() == dot.sourceId() ? "same" : "foreign";
+        String key = "path=" + redistributedDot.path()
+                + "|rawSourceClass=" + rawSourceClass(dot.sourceId())
+                + "|rawSource=" + sourceBucket(dot.sourceId())
+                + "|sourceRelation=" + sourceRelation
+                + "|activeTargets=" + cardinalityBucket(activeTargets, 4)
+                + "|assignedAction=" + actionBucket(redistributedDot.actionId())
+                + "|assignedSource=" + sourceBucket(redistributedDot.sourceId());
+        status0SnapshotRedistributionRecipientCountByKey.merge(key, 1L, Long::sum);
+        if (amount > 0) {
+            status0SnapshotRedistributionRecipientAmountByKey.merge(key, amount, Long::sum);
+        }
+    }
+
+    private String rawSourceClass(long sourceId) {
+        if (sourceId <= 0 || sourceId == UNKNOWN_ACTOR_ID) {
+            return "unknown";
+        }
+        if (isPartyMember(sourceId)) {
+            return "party";
+        }
+        if (isFriendlyTarget(sourceId)) {
+            return "friendly";
+        }
+        return "other";
     }
 
     private boolean tryEmitStatus0UnacceptedSourceTrackedSplit(
@@ -2938,6 +2988,29 @@ public final class ActIngestionService {
             return true;
         }
 
+        List<StatusZeroDotAllocationPlanner.Allocation> chaoticSameSourceDampenedAllocations =
+                resolveKnownSourceRecentExactChaoticSameSourceDampenedSplit(
+                        dot,
+                        acceptedBySource,
+                        trackedDots,
+                        sourceTrackedDots
+                );
+        if (!chaoticSameSourceDampenedAllocations.isEmpty()) {
+            for (StatusZeroDotAllocationPlanner.Allocation allocation : chaoticSameSourceDampenedAllocations) {
+                emitDotDamageWithAttribution(
+                        "status0_tracked_target_split_recent_exact_chaotic_same_source_dampened",
+                        dot.ts(),
+                        tsMs,
+                        new ActorId(allocation.sourceId()),
+                        actorNameById.getOrDefault(allocation.sourceId(), dot.sourceName()),
+                        new ActorId(dot.targetId()),
+                        allocation.actionId(),
+                        allocation.amount()
+                );
+            }
+            return true;
+        }
+
         long remaining = dot.damage();
         recordKnownSourceTrackedTargetSplitAssignmentBucket(dot, trackedDots, sourceTrackedDots);
         for (int i = 0; i < trackedDots.size(); i++) {
@@ -3014,6 +3087,55 @@ public final class ActIngestionService {
                     if (isForeign && trackedDot.actionId() == HIGANBANA_ACTION_ID) {
                         weight = KNOWN_SOURCE_FOREIGN_HIGANBANA_WEIGHT_FACTOR;
                     }
+                    return new StatusZeroDotAllocationPlanner.Candidate(
+                            trackedDot.sourceId(),
+                            trackedDot.actionId(),
+                            weight
+                    );
+                })
+                .toList();
+        return statusZeroDotAllocationPlanner.allocate(dot.damage(), candidates);
+    }
+
+    private List<StatusZeroDotAllocationPlanner.Allocation> resolveKnownSourceRecentExactChaoticSameSourceDampenedSplit(
+            DotTickRaw dot,
+            boolean acceptedBySource,
+            List<TrackedDotState> trackedDots,
+            List<TrackedDotState> sourceTrackedDots
+    ) {
+        if (!acceptedBySource || dot.statusId() != 0) {
+            return List.of();
+        }
+        if (dot.sourceId() == 0 || dot.sourceId() == UNKNOWN_ACTOR_ID || !isPartyMember(dot.sourceId())) {
+            return List.of();
+        }
+        if (trackedDots.size() < 3 || sourceTrackedDots.size() != 1) {
+            return List.of();
+        }
+
+        Integer recentSourceActionId = resolveRecentSourceUnknownStatusActionId(dot);
+        Integer recentExactActionId = resolveRecentExactUnknownStatusActionId(dot, KNOWN_SOURCE_MULTI_TARGET_EXACT_WINDOW_MS);
+        TrackedDotState sourceTrackedDot = sourceTrackedDots.get(0);
+        if (recentSourceActionId == null
+                || recentExactActionId == null
+                || !recentSourceActionId.equals(recentExactActionId)
+                || sourceTrackedDot.actionId() != recentExactActionId
+                || recentExactActionId != CHAOTIC_SPRING_ACTION_ID) {
+            return List.of();
+        }
+
+        long foreignActionCount = trackedDots.stream()
+                .filter(trackedDot -> trackedDot.sourceId() != dot.sourceId())
+                .map(TrackedDotState::actionId)
+                .distinct()
+                .count();
+        if (foreignActionCount < 2) {
+            return List.of();
+        }
+
+        List<StatusZeroDotAllocationPlanner.Candidate> candidates = trackedDots.stream()
+                .map(trackedDot -> {
+                    double weight = trackedDot.sourceId() == dot.sourceId() ? 0.125 : 1.0;
                     return new StatusZeroDotAllocationPlanner.Candidate(
                             trackedDot.sourceId(),
                             trackedDot.actionId(),
@@ -4005,7 +4127,8 @@ public final class ActIngestionService {
     }
     private record StatusSignalEvidence(Instant ts, long sourceId, int actionId) {}
     private record StatusSnapshotState(Instant ts, Map<TrackedDotKey, Double> weights) {}
-    private record SnapshotRedistributedDot(long sourceId, int actionId, long amount) {}
+    private record SnapshotRedistributionWeights(String path, Map<TrackedDotKey, Double> weights) {}
+    private record SnapshotRedistributedDot(String path, long sourceId, int actionId, long amount) {}
     private record DotAttributionAssignment(
             Instant ts,
             String mode,

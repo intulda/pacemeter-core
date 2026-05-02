@@ -2714,3 +2714,412 @@
 ### 운영 메모
 - 병렬 실행 금지( `build/classes` 경합 재발 ).
 - `.gradle-home` 접근 오류(`AccessDeniedException`)가 간헐 발생하므로 테스트는 묶지 말고 단독 순차 실행.
+
+## 2026-04-28 체크포인트 (`64AC recent-exact same-source dampening` 유지)
+
+### 현재 관찰
+- baseline:
+  - heavy2 fight2 `1D41=+1,003,624`
+  - heavy2 fight2 `64AC=-5,298` (target parity surface)
+  - heavy2 all-fights fight2 `mape=0.013656`, `p95=0.031018`
+  - rollup `mape=0.010972024677770337`, `p95=0.025671398260816086`, `max=0.03537628179947446`, `pass=true`
+- actor rDPS surface에서는 heavy2 DRG `64AC` actor skill total이 여전히 과집계 축으로 남아 있음.
+
+### 가설
+- known-source `status=0` tick에서 `recentSource == recentExact == sourceTrackedAction == 64AC`이고
+  같은 target에 foreign DoT action evidence가 2종 이상 공존하면, 같은 소스 DRG `64AC` 몫을 동등분배보다 낮추는 편이
+  shared GUID/overaggregation을 줄인다.
+- 전역 suppress가 아니라 accepted tick 내부의 weight 조정이므로, heavy4/lindwurm/all-fights gate를 덜 흔든다.
+
+### 수정 범위
+- `ActIngestionService`
+  - 신규 경로:
+    - `status0_tracked_target_split_recent_exact_chaotic_same_source_dampened`
+  - 조건:
+    - `acceptedBySource && status=0`
+    - source가 known party member
+    - `trackedDots.size() >= 3`
+    - `sourceTrackedDots.size() == 1`
+    - `recentSourceActionId == recentExactActionId == sourceTrackedActionId == 64AC`
+    - foreign distinct action count `>= 2`
+  - weight:
+    - same-source `64AC = 0.125`
+    - foreign candidates `= 1.0`
+
+### 검증 결과
+- `ActIngestionServiceTest` pass (단독 실행)
+- `SubmissionParityRegressionGateTest` pass (단독 실행)
+- rollup:
+  - `mape=0.009947746177787686`
+  - `p95=0.021784436570755752`
+  - `max=0.03537628179947446`
+  - `pass=true`
+- heavy2 all-fights fight2:
+  - `mape=0.013349355288288303`
+  - `p95=0.030010375805500228`
+- heavy4 selected:
+  - fight5 DRG `64AC` target parity `delta=+439,231`
+- lindwurm selected submission:
+  - `mape=0.0052672493669323394`
+  - `p95=0.012846064736486258`
+  - `max=0.016039626506684106`
+
+### 남은 리스크
+- heavy2 fight2 selected target parity surface는 악화:
+  - `1D41=+1,010,199`
+  - `64AC=-68,912`
+- 하지만 actor rDPS/gate 우선 기준에서는 개선폭이 더 크므로 이번 변경은 유지.
+- 추가 확인:
+  - tracked=2까지 조건을 넓히는 확장은 수치 변화가 없어 no-op로 판단하고 원복.
+  - same evidence 분기 안에서 same-source weight를 `0.50 -> 0.25 -> 0.00`으로 스윕.
+  - `0.00`은 gate 통과 및 p95 개선이 있으나 rollup `mape`가 `0.25` 대비 악화.
+  - `0.125`는 테스트한 값 중 rollup `mape`가 가장 낮고, `0.25` 대비 p95/heavy2 all-fights/heavy4/lindwurm도 개선되어 유지.
+- diagnostics와 unit test를 같은 Gradle invocation에 섞으면 `ActIngestionServiceTest`가 Preferences/global-state 영향으로 실패할 수 있음.
+  - baseline/gate는 단독 순차 실행으로 확인할 것.
+
+## 2026-04-29 내일 이어하기 핸드오프
+
+### 현재 작업 상태
+- production 변경 있음:
+  - `ActIngestionService`에 `status0_tracked_target_split_recent_exact_chaotic_same_source_dampened` 경로 추가
+  - same-source `64AC` weight는 `0.125`
+- 문서 변경 있음:
+  - 이 체크포인트와 2026-04-28 `0.125` 결과가 `tasks.md`에 기록됨
+- 아직 commit은 하지 않음.
+
+### 현재 기준선
+- `ActIngestionServiceTest`: pass
+- `SubmissionParityRegressionGateTest`: pass
+- rollup:
+  - `mape=0.009947746177787686`
+  - `p95=0.021784436570755752`
+  - `max=0.03537628179947446`
+  - `pass=true`
+- heavy2 all-fights fight2:
+  - `mape=0.013349355288288303`
+  - `p95=0.030010375805500228`
+- selected surface:
+  - heavy2 fight2 DRG `64AC=-68,912`
+  - heavy2 fight2 SAM `1D41=+1,010,199`
+  - heavy4 fight5 DRG `64AC=+439,231`
+  - lindwurm selected `mape=0.0052672493669323394`, `p95=0.012846064736486258`
+
+### 해석
+- 이번 변경은 selected heavy2 target parity를 더 나쁘게 만들지만, live rDPS 우선 지표인 rollup/heavy2 all-fights/heavy4/lindwurm를 동시에 개선한다.
+- 따라서 현재는 유지가 합리적이다.
+- 다음 작업은 selected target surface를 억지로 되돌리는 튜닝이 아니라, `64AC` actor over를 더 줄이면서 all-fights/gate를 유지하는 evidence 기반 분해여야 한다.
+
+### 내일 시작 순서
+1. `git status --short`로 변경 파일 확인
+2. `tasks.md`와 `docs/parity-patch-notes.md` 확인
+3. 테스트는 단독 순차 실행:
+   - `ActIngestionServiceTest`
+   - `SubmissionParityRegressionGateTest`
+4. diagnostics:
+   - heavy2 fight2 DRG `64AC` mode breakdown
+   - heavy2 fight2 DRG same-source/foreign tracked split mix
+   - heavy4 fight5 DRG `64AC` target parity
+   - lindwurm fight8 DRG `64AC` same-source mix
+   - rollup
+5. production 가설은 1개만 적용하고 즉시 gate/rollup 재검증
+
+### 다음 가설 후보
+- 후보 1:
+  - `recentExact=64AC` dampened 분기의 weight 추가 스윕은 잠정 중단.
+  - `0.00`은 p95는 좋지만 rollup `mape`가 악화되어 유지하지 않음.
+- 후보 2:
+  - 남은 큰 덩어리인 기존 `status0_tracked_target_split`/foreign-only 경로를 분해.
+  - 단, `recentExact=null` activeTargets=1 구간은 heavy4/lindwurm에도 큰 덩어리라 전역 변경 위험이 큼.
+- 후보 3:
+  - heavy2에서만 과집계로 보이는 `64AC` actor-skill total과 FFLogs event/window surface를 먼저 다시 비교.
+  - production 변경 전에는 왜 heavy4/lindwurm를 덜 건드리는지 설명 가능한 evidence 조건을 만들어야 함.
+
+### 주의
+- diagnostics와 unit test를 같은 Gradle invocation에 섞지 말 것.
+- selected fight target parity 개선만 보고 변경을 채택하지 말 것.
+- `status=0` fallback 순서를 감으로 뒤집지 말 것.
+
+## 2026-04-29 추가 실험 1 (`recentSource-only 64AC same-source dampening`, 기각/원복)
+
+### 관찰
+- 유지 중인 `recentExact=64AC` dampened 경로는 rollup/gate 기준으로 유효하지만, 남은 DRG `64AC` 과집계가 있음.
+- selected fights assignment bucket:
+  - heavy4 fight5: `activeTargets=1`, `sourceTrackedAction=64AC`, `recentSource=64AC`, `recentExact=na`, `foreignActions>=2`가 큰 덩어리
+  - lindwurm fight8: 같은 형태의 `64AC` bucket 존재
+  - heavy2 fight2의 유사 `64AC` bucket은 주로 `activeTargets=2`, `foreignActions=1`이라 구분 가능
+
+### 가설
+- `recentExact`는 없지만 `recentSource=sourceTrackedAction=64AC`이고 단일 active target에서 foreign DoT action이 2종 이상 공존하면,
+  same-source `64AC` weight를 `0.125`로 낮춰 heavy4/lindwurm DRG `64AC` over를 줄일 수 있다고 가정.
+
+### 수정 범위
+- `ActIngestionService`
+  - 임시 신규 경로:
+    - `status0_tracked_target_split_recent_source_only_chaotic_same_source_dampened`
+  - 조건:
+    - `acceptedBySource && status=0`
+    - source가 known party member
+    - `activeTargets == 1`
+    - `trackedDots.size() >= 3`
+    - `sourceTrackedDots.size() == 1`
+    - `recentSourceActionId == sourceTrackedActionId == 64AC`
+    - `recentExactActionId == null`
+    - foreign distinct action count `>= 2`
+  - weight:
+    - same-source `64AC = 0.125`
+    - foreign candidates `= 1.0`
+
+### 검증 결과
+- baseline/gate:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+- rollup은 gate 유지지만 악화:
+  - `mape=0.010261789553010697` (기준 `0.009947746177787686` 대비 악화)
+  - `p95=0.021984607680971886` (기준 `0.021784436570755752` 대비 악화)
+  - `max=0.03537628179947446`
+  - `pass=true`
+- 세부 영향:
+  - heavy4 DRG `64AC` actor skill delta는 개선
+    - `+354,504 -> +204,624`
+  - 하지만 heavy4 Sage/Scholar 및 lindwurm AST 등 foreign DoT 쪽으로 손실분이 이동하며 전역 `mape/p95`가 악화
+  - heavy2 selected도 소폭 악화
+    - heavy2 all-fights fight2 `mape=0.013349355288288303 -> 0.013367421587771808`
+    - `p95=0.030010375805500228 -> 0.029924292518942974`로 p95만 소폭 개선
+
+### 결론/조치
+- DRG `64AC` 단일 축은 개선됐지만 attribution 이동으로 전역 품질이 악화되어 기각.
+- production 코드 즉시 원복.
+- 원복 후 재확인:
+  - `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+  - rollup `mape=0.009947746177787686`, `p95=0.021784436570755752`, `max=0.03537628179947446`, `pass=true`
+
+### 다음 우선순위
+- `recentSource-only` 단일 active target 구간은 전역 dampening 대상이 아님.
+- 다음 가설은 same-source를 줄이는 방식보다, foreign recipient 중 이미 과대인 healer DoT로 재분배되는 부작용을 막는 evidence 조건을 먼저 찾아야 함.
+
+## 2026-04-29 추가 실험 2 (`snapshot same-source 64AC active-subset 우회`, no-op/원복)
+
+### 관찰
+- heavy4 fight5 DRG `64AC` mode breakdown에서 남은 큰 축은:
+  - `status0_snapshot_redistribution`: `843,748`
+  - `status0_tracked_target_split`: `408,226`
+  - 채택된 `recent_exact_chaotic_same_source_dampened`: `56,618`
+- 따라서 채택된 dampened 경로를 더 줄이는 것보다 snapshot 경로를 분해하는 편이 남은 `64AC` actor over에 더 직접적임.
+- source-class 진단:
+  - heavy4 fight5 snapshot:
+    - `party|path=active_subset hits=103 damage=3,493,247`
+    - `party|path=same_source hits=65 damage=2,186,328`
+    - `unknown|path=active_subset hits=6 damage=162,485`
+  - lindwurm fight8 snapshot:
+    - `party|path=same_source hits=77 damage=2,360,352`
+    - `party|path=active_subset hits=39 damage=976,659`
+    - `unknown|path=active_subset hits=6 damage=310,045`
+
+### 가설
+- status=0 snapshot에서 party raw source라는 이유만으로 same-source weights를 우선 선택하는 것이 DRG `64AC` over의 일부일 수 있다고 가정.
+- 단, 전역적으로 뒤집지 않고 `sameSourceWeights`에 `64AC`가 있고 active foreign action이 2종 이상인 경우만 active subset으로 우회해 본다.
+
+### 수정 범위
+- `ActIngestionService`
+  - `selectSnapshotRedistributionWeights(...)`에서 same-source 반환 전에 active subset을 계산
+  - 임시 helper:
+    - `shouldBypassKnownSourceSnapshotSameSourceWeights(...)`
+  - 1차 조건: `recentSource=64AC`까지 요구
+  - 2차 조건: `recentSource` 요구 제거, `sameSourceWeights`에 `64AC` + foreign actions `>=2`
+
+### 검증 결과
+- 1차/2차 모두 baseline/gate pass.
+- rollup 수치가 기준선과 완전히 동일:
+  - `mape=0.009947746177787686`
+  - `p95=0.021784436570755752`
+  - `max=0.03537628179947446`
+  - `pass=true`
+- actor surface도 동일:
+  - heavy4 DRG `64AC` actor skill delta `+354,504`
+  - heavy2 DRG `64AC` actor skill delta `+79,215`
+  - lindwurm DRG `64AC` actor skill delta `+141,527`
+
+### 결론/조치
+- 진단의 `party|same_source` 큰 버킷이 이번 우회 조건과 실효로 맞물리지 않아 no-op로 판단.
+- 복잡도 증가 방지를 위해 production 코드 원복.
+- 임시 heavy4 source-class diagnostic test도 제거.
+
+### 다음 우선순위
+- snapshot 경로를 더 건드리려면 먼저 `status0_snapshot_redistribution`의 실제 emitted recipient/action별 source-class를 계측해야 함.
+- 현재 source-class bucket만으로는 DRG `64AC` over에 직접 걸리는 조건을 만들기 부족함.
+
+## 2026-04-29 추가 진단 3 (`snapshot recipient/action emission 계측`)
+
+### 관찰
+- `status0_snapshot_redistribution`의 source-class/path bucket만으로는 실제 어느 action/source에 damage가 emitted 되는지 알 수 없어,
+  다음 production 가설을 만들기 전에 recipient/action 표면을 계측했다.
+- 새 진단은 attribution 상태를 바꾸지 않도록 recent-evidence resolver를 호출하지 않고,
+  `path`, raw source class, same/foreign relation, active target count, assigned action/source만 기록한다.
+
+### 진단 결과
+- heavy2 fight2:
+  - totals: `hits=51`, `amount=446,807`
+  - top buckets:
+    - `active_subset|party|foreign|activeTargets=1|1D41`: `147,432`
+    - `active_subset|party|foreign|activeTargets=1|409C`: `113,186`
+    - `active_subset|party|foreign|activeTargets=1|64AC`: `94,780`
+    - `active_subset|party|foreign|activeTargets=1|4094`: `89,921`
+- heavy4 fight5:
+  - totals: `hits=290`, `amount=3,385,838`
+  - top buckets:
+    - `active_subset|party|foreign|activeTargets=1|5EFA`: `1,170,994`
+    - `active_subset|party|foreign|activeTargets=1|409C`: `1,094,803`
+    - `active_subset|party|foreign|activeTargets=1|64AC`: `789,520`
+    - `active_subset|party|foreign|activeTargets=1|9094`: `168,036`
+- lindwurm fight8:
+  - totals: `hits=118`, `amount=1,180,127`
+  - top buckets:
+    - `active_subset|party|foreign|activeTargets=1|40AA`: `308,543`
+    - `active_subset|party|foreign|activeTargets=1|409C`: `282,225`
+    - `active_subset|party|foreign|activeTargets=1|64AC`: `256,700`
+    - `active_subset|unknown|foreign|activeTargets=1|409C`: `140,048`
+
+### 해석
+- selected fights의 snapshot 큰 덩어리는 모두 `active_subset + foreign + activeTargets=1`로 emitted 된다.
+- 이전 `party raw source라 same-source snapshot 우선이 64AC over 원인일 수 있다`는 가설은 실제 emission 표면과 맞지 않는다.
+- heavy4/lindwurm에서도 `64AC`는 이미 foreign recipient로 큰 비중을 받으므로,
+  snapshot을 전역 dampening하면 DRG만 줄이는 것이 아니라 SGE/SCH/AST 등 다른 foreign DoT attribution을 같이 흔들 가능성이 크다.
+
+### 검증 결과
+- `ActIngestionServiceTest` pass
+- `SubmissionParityRegressionGateTest` pass
+- `debugStatus0SnapshotRedistributionRecipientBuckets_forSelectedFights_printsTopRecipients` pass
+- rollup 변화 없음:
+  - `mape=0.009947746177787686`
+  - `p95=0.021784436570755752`
+  - `max=0.03537628179947446`
+  - `pass=true`
+
+### 다음 우선순위
+- 당장 production rule을 추가하지 않는다.
+- 다음 가설은 snapshot의 `active_subset + foreign + activeTargets=1` 내부에서,
+  특정 action을 줄이는 규칙이 아니라 recipient 후보군 중 이미 over/under가 어떻게 섞이는지 먼저 비교해야 한다.
+- 특히 heavy4/lindwurm의 `5EFA/409C/40AA/64AC`가 함께 움직이므로,
+  `64AC`만 줄이는 방식은 all-fights gate를 깨거나 다른 healer/caster DoT over를 만들 위험이 크다.
+
+## 2026-04-29 추가 진단/실험 4 (`snapshot active_subset foreign over/under 분해`, suppress 기각)
+
+### 관찰
+- `status0_snapshot_redistribution`의 top `active_subset + foreign + activeTargets=1` recipient에 대해
+  local skill total, FFLogs ability total, skill delta, actor rDPS delta를 함께 출력하는 진단을 추가했다.
+- 계측 키에는 `rawSource` id도 추가했다.
+
+### 진단 결과
+- heavy2 fight2:
+  - rawSource `10128857`가 대부분.
+  - `1D41`: snapshot `139,533`, skillDelta `+21,271`
+  - `64AC`: snapshot `88,568`, skillDelta `+79,215`
+  - `409C`: snapshot `106,142`, skillDelta `-124,256`
+  - `4094`: snapshot `83,457`, skillDelta `-271,294`
+- heavy4 fight5:
+  - rawSource `10128857`가 대부분.
+  - `5EFA`: snapshot `990,176`, skillDelta `+152,412`
+  - `409C`: snapshot `933,690`, skillDelta `+47,766`
+  - `64AC`: snapshot `654,353`, skillDelta `+354,504`
+  - `9094`: snapshot `164,347`, skillDelta `-216,108`
+- lindwurm fight8:
+  - rawSource `101E86E4`가 큰 축.
+  - `40AA`: snapshot `208,124`, skillDelta `+96,174`
+  - `409C`: snapshot `198,234`, skillDelta `+23,163`
+  - `64AC`: snapshot `164,339`, skillDelta `+141,527`
+  - `9094`: snapshot `29,086 + 22,614`, skillDelta `-196,243`
+
+### 가설
+- party raw source인데 same-source 후보가 없고, foreign active subset 후보가 3개 이상인 snapshot tick은
+  raw source와 직접 연결되지 않은 speculative attribution이므로 suppress하면 heavy4/lindwurm의 over를 줄일 수 있다고 가정.
+
+### 수정 범위
+- 임시 production 변경:
+  - `selectSnapshotRedistributionWeights(...)`
+  - 조건:
+    - raw source가 known party member
+    - activeWeights size `>=3`
+    - activeWeights에 raw source 후보 없음
+  - 결과:
+    - `suppressed_party_foreign_active_subset`으로 empty weights 반환
+
+### 검증 결과
+- `ActIngestionServiceTest`: pass
+- `SubmissionParityRegressionGateTest`: fail
+  - rollup max actor APE `0.06657452677209132`로 gate 실패
+  - heavy2 all-fights fight8 p95 `0.07191636895033413`로 gate 실패
+- 조치:
+  - production suppress 즉시 원복
+  - 원복 후:
+    - `ActIngestionServiceTest` pass
+    - `SubmissionParityRegressionGateTest` pass
+    - rollup `mape=0.009947746177787686`, `p95=0.021784436570755752`, `max=0.03537628179947446`, `pass=true`
+
+### 결론
+- `active_subset + foreign + activeTargets=1` 전체 suppress는 과도하다.
+- heavy4/lindwurm의 over bucket은 줄일 수 있어 보이지만, heavy2 all-fights에서 크게 깨진다.
+- 이 경로는 under recipient(`9094`, heavy2 healer DoT)와 over recipient가 섞여 있어 전역 drop/dampen 후보가 아니다.
+
+### 다음 우선순위
+- snapshot active subset을 전역 suppress하지 않는다.
+- 다음 가설은 rawSource 단위 suppress가 아니라, candidate set 안의 over/under 혼합을 설명할 수 있는 live evidence를 먼저 찾아야 한다.
+- 특히 `rawSource=10128857`처럼 여러 fights에서 반복되는 party source가 왜 foreign DoT active subset으로 들어가는지,
+  해당 raw source의 status payload/action evidence와 active target lifecycle을 추가 분해해야 한다.
+
+## 2026-04-30 추가 진단/실험 5 (`rawSource status evidence`, PLD `0xF8 -> 0x17` 기각)
+
+### 관찰
+- `rawSource=10128857` 타임라인 진단을 추가했다.
+- heavy2/heavy4에서 `status=0 DoT` tick 직전에 같은 raw source가 target에 `status=0xF8`를 적용하는 장면이 확인됐다.
+  - 예: heavy2 fight2 `재의(10128857)`가 `레드 핫`에 `파멸의 진(0xF8)` 적용 후 같은 sourceName으로 `status=0` DoT tick 발생.
+- 따라서 이 일부 snapshot 오염은 단순한 party raw source 잡음이 아니라,
+  PLD Circle of Scorn 계열 status/action 매핑 누락으로 raw-source DoT가 active foreign subset으로 밀리는 현상으로 보인다.
+
+### 가설
+- PLD `status 0xF8 -> action 0x17`을 catalog에 복원하면,
+  raw-source PLD DoT가 foreign active subset으로 분배되지 않아 `64AC/5EFA/409C` over가 줄어들 수 있다고 가정.
+
+### 수정 범위
+- 임시 변경:
+  - `dot-attribution-catalog.json`의 job `19`에 `0xF8 -> 0x17` 추가
+  - `DotAttributionCatalog.INVALID_DOT_ACTION_IDS`에서 `0x17` 제외
+  - catalog test 갱신
+
+### 검증 결과
+- `DotAttributionCatalogTest`: pass
+- `ActIngestionServiceTest`: pass
+- `SubmissionParityRegressionGateTest`: pass
+- 그러나 rollup diagnostic gate는 실패:
+  - `mape=0.012261307980852718` (기준 `0.009947746177787686` 대비 악화)
+  - `p95=0.034458393187682054` (gate 기준 `0.03` 초과)
+  - `max=0.03812875792913093`
+  - `pass=false`
+- 세부 영향:
+  - heavy2 DRG `64AC`는 개선: `+79,215 -> -24,801`
+  - heavy4 DRG `64AC`도 개선: `+354,504 -> +255,637`
+  - 하지만 heavy2 WHM/SCH/SAM DoT가 크게 under로 이동:
+    - WHM `4094`: `-271,294 -> -603,662`
+    - SCH `409C`: `-124,256 -> -390,536`
+    - SAM `1D41`: `+21,271 -> -250,148`
+
+### 결론/조치
+- PLD raw-source evidence 자체는 실제로 존재하지만, `0xF8 -> 0x17` 전역 복원은 FFLogs live rDPS parity 기준에서 과도하다.
+- selected DRG `64AC`만 보고 채택하면 heavy2 all-fights/rollup을 깨는 변경이다.
+- production 변경은 즉시 원복.
+- 원복 후 재검증:
+  - `DotAttributionCatalogTest` + `ActIngestionServiceTest` pass
+  - `SubmissionParityRegressionGateTest` pass
+  - rollup `mape=0.009947746177787686`, `p95=0.021784436570755752`, `max=0.03537628179947446`, `pass=true`
+
+### 다음 우선순위
+- PLD `0xF8 -> 0x17` 같은 전역 catalog 복원은 현재 채택하지 않는다.
+- 다음은 raw-source status evidence가 있어도 FFLogs companion live surface가 이를 어떻게 다르게 취급하는지,
+  target lifecycle 또는 status snapshot candidate set의 over/under 보정 없이 설명 가능한 조건을 더 찾아야 한다.
+
+### 다음 턴 시작점
+1. `tasks.md` / `docs/parity-patch-notes.md` 확인 후 baseline 재확인.
+2. `debugStatus0RawSourceTimeline_forSnapshotHotSources_printsNearbyEvidence`로 `rawSource=10128857`, `rawSource=101E86E4` 주변 evidence를 다시 본다.
+3. production 변경 전에는 `0xF8 -> 0x17` 전역 복원은 기각 상태임을 전제로 둔다.
+4. 다음 가설은 catalog 복원이 아니라, raw-source DoT evidence가 있어도 active foreign candidate set으로 남겨야 하는 조건을 찾아야 한다.
+5. 변경을 한다면 1개만 적용하고 즉시 `ActIngestionServiceTest`, `SubmissionParityRegressionGateTest`, rollup을 순차 확인한다.
